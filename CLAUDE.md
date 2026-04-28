@@ -105,7 +105,8 @@ All reads are centralized in `packages/server/src/config.ts`. Never read
 |---|---|---|
 | `PORT` | `3000` | Fastify listen port |
 | `WORKSPACE_PATH` | `/workspace` | Mounted workspace root |
-| `PI_CONFIG_DIR` | `/root/.pi/agent` | Pi config directory |
+| `PI_CONFIG_DIR` | `~/.pi/agent` | Pi SDK config dir (auth/models/settings — owned by the SDK). Docker image points this at `/home/pi/.pi/agent`. |
+| `WORKBENCH_DATA_DIR` | `~/.pi-workbench` | Workbench-owned state (projects.json). Separated from `PI_CONFIG_DIR` so we don't write our state into the SDK's directory. Docker image points this at `/home/pi/.pi-workbench`. |
 | `SESSION_DIR` | `${WORKSPACE_PATH}/.pi/sessions` | JSONL session storage |
 | `UI_PASSWORD` | (unset) | If set, enables browser JWT auth |
 | `API_KEY` | (unset) | If set, enables static bearer token for programmatic access |
@@ -362,20 +363,38 @@ These are facts about the pi SDK that are easy to get wrong:
 
 ---
 
-## Pi Config Files
+## Config Files
 
-All managed by `config-manager.ts`. Never write these files directly from routes.
+The SDK and pi-workbench own DIFFERENT directories. Never put workbench
+state into `PI_CONFIG_DIR` or vice versa.
+
+**`PI_CONFIG_DIR` — pi SDK territory.** Managed by `config-manager.ts`.
+Never write directly from routes.
 
 | File | Purpose |
 |---|---|
 | `PI_CONFIG_DIR/models.json` | Custom providers: vLLM, LiteLLM, Ollama, any OpenAI-compatible endpoint |
 | `PI_CONFIG_DIR/auth.json` | API keys and OAuth tokens for built-in providers |
 | `PI_CONFIG_DIR/settings.json` | Default model, thinking level, steering/followUp mode |
-| `PI_CONFIG_DIR/projects.json` | pi-webui project registry — written by this app |
 
-`PI_CONFIG_DIR` defaults to `/root/.pi/agent` in the container. In the Docker
-compose setup, `~/.pi/agent` from the host is mounted here, so the container shares
-the host's provider config and API keys automatically.
+**`WORKBENCH_DATA_DIR` — pi-workbench territory.** Managed by `project-manager.ts`.
+
+| File | Purpose |
+|---|---|
+| `WORKBENCH_DATA_DIR/projects.json` | pi-workbench project registry (id/name/path/createdAt) |
+
+`PI_CONFIG_DIR` defaults to `~/.pi/agent`; `WORKBENCH_DATA_DIR` defaults
+to `~/.pi-workbench`. The Docker compose setup mounts the host's
+`~/.pi/agent` into `/home/pi/.pi/agent` so the container inherits the
+host's provider config and API keys, and binds a SEPARATE host path
+into `/home/pi/.pi-workbench` so the container has its own project
+list (host vs container projects don't bleed unless you point both
+mounts at the same host path on purpose).
+
+**Legacy migration:** earlier versions stored `projects.json` inside
+`PI_CONFIG_DIR`. `project-manager.ts` runs a one-time `rename()` on
+first read to move it into `WORKBENCH_DATA_DIR` if the new location
+is empty.
 
 ---
 
@@ -390,7 +409,7 @@ interface Project {
 }
 ```
 
-Projects are stored in `PI_CONFIG_DIR/projects.json` as a JSON array.
+Projects are stored in `WORKBENCH_DATA_DIR/projects.json` as a JSON array.
 A session belongs to a project when its `cwd` matches the project's `path`.
 `WORKSPACE_PATH` is the root that the folder picker defaults to and the boundary
 that all project paths must be inside. Reject any project path outside

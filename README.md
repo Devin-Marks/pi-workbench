@@ -37,7 +37,10 @@ The Vite dev server proxies `/api/*` to the Fastify server, so the client can ca
 | `HOST` | `0.0.0.0` | Bind address. |
 | `LOG_LEVEL` | `info` | Pino log level. |
 | `WORKSPACE_PATH` | `/workspace` | Mounted workspace root. |
-| `PI_CONFIG_DIR` | `/root/.pi/agent` | Pi config + projects.json directory. |
+| `PI_CONFIG_DIR` | `~/.pi/agent` | Pi SDK config dir (auth.json, models.json, settings.json — owned by the SDK). The Docker image overrides this to `/home/pi/.pi/agent` (mounted from the host's `~/.pi/agent`). |
+| `WORKBENCH_DATA_DIR` | `~/.pi-workbench` | Workbench-owned state (projects.json). Kept separate from `PI_CONFIG_DIR` so we don't mix our state into the pi SDK's directory. The Docker image points this at `/home/pi/.pi-workbench` (mounted from the host's `~/.pi-workbench-docker` by default — container has its own project list). |
+| `CLIENT_DIST_PATH` | `<server-dist>/../../client/dist` | Built Vite output served by Fastify in production. |
+| `SERVE_CLIENT` | `true` | Set to `false` to skip static-serving (useful when running the dev Vite server in front of the API). |
 | `SESSION_DIR` | `${WORKSPACE_PATH}/.pi/sessions` | JSONL session storage (Phase 4+). |
 | `UI_PASSWORD` | (unset) | If set, enables browser JWT auth. Requires `JWT_SECRET`. |
 | `JWT_SECRET` | (unset) | HS256 signing key. Generate with `openssl rand -hex 32`. Rotating immediately invalidates all sessions. |
@@ -47,6 +50,59 @@ The Vite dev server proxies `/api/*` to the Fastify server, so the client can ca
 | `RATE_LIMIT_LOGIN_WINDOW_MS` | `60000` | Login rate-limit window (ms). |
 | `CORS_ORIGIN` | (reflect request origin) | Pin to a specific origin in production. |
 | `TRUST_PROXY` | `false` | Set to `true` when running behind a reverse proxy (nginx, Caddy, Traefik) so `req.ip` reflects the real client IP — required for the login rate limit to work per-user. |
+
+## Run in Docker
+
+```bash
+cp docker/.env.example docker/.env
+# edit docker/.env — set UI_PASSWORD + JWT_SECRET, or API_KEY, or leave both blank for no auth
+cd docker && docker compose up -d --build
+```
+
+`docker/.env` is gitignored — never commit real secrets. The compose file
+reads every variable from there: ports, host paths for the workspace and pi
+config bind-mounts, auth, log level, reverse-proxy hint, CORS pin. The
+defaults work for a same-host browser session with auth disabled.
+
+The compose file mounts `../workspace` into the container (project code
+lives there) and bind-mounts the host's `~/.pi/agent` into
+`/home/pi/.pi/agent` so the container inherits provider auth and
+`models.json` automatically. Override `WORKSPACE_HOST_PATH` /
+`PI_CONFIG_HOST_PATH` in `.env` to point elsewhere.
+
+```bash
+# tail logs
+docker compose -f docker/docker-compose.yml logs -f
+# stop
+docker compose -f docker/docker-compose.yml down
+```
+
+The container speaks plain HTTP. **Never expose port 3000 directly to the
+internet** when `UI_PASSWORD` is set — the password would travel in cleartext.
+Terminate TLS at a reverse proxy. Minimal Caddy example (`Caddyfile`):
+
+```caddy
+pi.example.com {
+    reverse_proxy localhost:3000 {
+        # SSE needs flush + a generous read timeout
+        flush_interval -1
+        transport http {
+            read_timeout 30m
+        }
+    }
+}
+```
+
+If running behind any reverse proxy, set `TRUST_PROXY=true` so the login
+rate-limit applies per real client IP rather than per proxy hop.
+
+## PWA
+
+The built UI is a Progressive Web App: install it from the browser address
+bar (Chrome/Edge desktop, Android Chrome) or "Add to Home Screen" on iOS
+Safari. The service worker caches the shell + hashed assets and updates
+silently on the next reload. `/api/v1/*` is always network-only — there's
+no offline mode for live agent runs.
 
 ## Phase 1 smoke test
 

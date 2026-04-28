@@ -1,0 +1,62 @@
+# Single-tenant pi-workbench. Run from the repo root:
+#
+#   cp docker/.env.example docker/.env   # first time only — edit secrets
+#   docker compose -f docker/docker-compose.yml --env-file docker/.env up -d --build
+#
+# Or `cd docker && docker compose up -d --build` — Compose auto-loads the
+# .env file sitting next to the compose file.
+#
+# The build context is the repo root (..) so the Dockerfile sees the
+# whole monorepo. .dockerignore at the root keeps node_modules / .git /
+# dist out of the build context.
+
+services:
+  pi-workbench:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: pi-workbench:latest
+    container_name: ${CONTAINER_NAME:-pi-workbench}
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    volumes:
+      # User code lives here. Projects are subfolders. Keep this on a
+      # disk you back up.
+      - ${WORKSPACE_HOST_PATH:-../workspace}:/workspace
+      # Share the host's pi config so the container inherits provider
+      # auth and models.json without duplication. Inside the container
+      # this resolves to /home/pi/.pi/agent (matching PI_CONFIG_DIR).
+      - ${PI_CONFIG_HOST_PATH:-~/.pi/agent}:/home/pi/.pi/agent
+      # Workbench-owned state (projects.json). Kept in its own dir so
+      # we don't mix our state into the pi SDK's config layout. Default
+      # gives the container its OWN project list — host vs container
+      # are isolated. Point both at the same host path if you want the
+      # registry shared.
+      - ${WORKBENCH_DATA_HOST_PATH:-~/.pi-workbench-docker}:/home/pi/.pi-workbench
+    environment:
+      # Container-internal paths — fixed.
+      - WORKSPACE_PATH=/workspace
+      - PI_CONFIG_DIR=/home/pi/.pi/agent
+      - WORKBENCH_DATA_DIR=/home/pi/.pi-workbench
+      - PORT=3000
+      # Auth — read from .env. Empty values keep auth disabled.
+      - UI_PASSWORD=${UI_PASSWORD:-}
+      - JWT_SECRET=${JWT_SECRET:-}
+      - API_KEY=${API_KEY:-}
+      # Logging + reverse-proxy hint.
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TRUST_PROXY=${TRUST_PROXY:-false}
+      - CORS_ORIGIN=${CORS_ORIGIN:-}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

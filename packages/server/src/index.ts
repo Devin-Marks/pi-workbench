@@ -1,7 +1,10 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
+import fastifyStatic from "@fastify/static";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import { config, authEnabled } from "./config.js";
@@ -13,6 +16,7 @@ import { sessionRoutes } from "./routes/sessions.js";
 import { streamRoutes } from "./routes/stream.js";
 import { promptRoutes } from "./routes/prompt.js";
 import { controlRoutes } from "./routes/control.js";
+import { configRoutes } from "./routes/config.js";
 import { disposeAllSessions } from "./session-registry.js";
 
 /**
@@ -121,9 +125,68 @@ export async function buildServer(): Promise<FastifyInstance> {
       await api.register(streamRoutes);
       await api.register(promptRoutes);
       await api.register(controlRoutes);
+      await api.register(configRoutes);
     },
     { prefix: "/api/v1" },
   );
+
+  // ---- static client (production) ----
+  // In Docker / `npm run build && node dist/index.js`, Fastify serves the
+  // Vite build directly so the whole app runs on a single port. In dev,
+  // Vite owns :5173 and proxies to us, so we skip this when the dist
+  // directory doesn't exist (or `SERVE_CLIENT=false`).
+  //
+  // SPA fallback: any non-/api/* GET that didn't match a static asset
+  // returns `index.html` so the React Router-less hash-free URLs (e.g.
+  // bookmarked deep links) hydrate the SPA instead of 404ing.
+  if (config.serveClient && existsSync(config.clientDistPath)) {
+    // onSend hook tags the right Cache-Control by request path. Doing it
+    // here (rather than @fastify/static's `setHeaders`) is reliable because
+    // it runs after the static plugin sets its default `max-age=0`, so we
+    // overwrite cleanly. /assets/ paths are content-addressed by Vite, so
+    // they're year-long immutable; index.html (which is what / and any
+    // SPA-fallback path returns) must always revalidate so a fresh deploy
+    // lands on the next reload.
+    fastify.addHook("onSend", async (req, reply) => {
+      const path = req.url.split("?")[0] ?? req.url;
+      if (path.startsWith("/assets/")) {
+        reply.header("Cache-Control", "public, max-age=31536000, immutable");
+      } else if (reply.getHeader("content-type")?.toString().startsWith("text/html") === true) {
+        reply.header("Cache-Control", "no-cache");
+      }
+    });
+
+    await fastify.register(fastifyStatic, {
+      root: config.clientDistPath,
+      index: "index.html",
+    });
+
+    fastify.setNotFoundHandler((req, reply) => {
+      const path = req.url.split("?")[0] ?? req.url;
+      // The API surface explicitly 404s — never fall through to the SPA.
+      if (path.startsWith("/api/")) {
+        return reply.code(404).send({ error: "not_found" });
+      }
+      // SPA fallback: bare GETs without a file extension are deep links
+      // (/projects/abc, /sessions/xyz). Anything with an extension that
+      // got here is a missing static asset and should 404 honestly so
+      // the browser surfaces it instead of silently rendering the shell.
+      const lastSegment = path.split("/").pop() ?? "";
+      const looksLikeAsset = lastSegment.includes(".");
+      if (req.method !== "GET" || looksLikeAsset) {
+        return reply.code(404).send({ error: "not_found" });
+      }
+      return reply.code(200).type("text/html").sendFile("index.html");
+    });
+
+    fastify.log.info({ root: config.clientDistPath }, "serving client from disk");
+  } else {
+    fastify.log.info(
+      { dist: config.clientDistPath, exists: existsSync(config.clientDistPath) },
+      "client dist not served (dev mode or SERVE_CLIENT=false)",
+    );
+    void join; // keep the import live so future build-step changes don't trip ESLint
+  }
 
   // Clean teardown on fastify.close() (called by both graceful shutdown and
   // tests via `await fastify.close()`). Disposes every live session, which

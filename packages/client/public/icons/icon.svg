@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="pi web ui">
+  <rect width="512" height="512" rx="96" fill="#0a0a0a" />
+  <text
+    x="50%"
+    y="56%"
+    text-anchor="middle"
+    dominant-baseline="middle"
+    font-family="ui-sans-serif, system-ui, sans-serif"
+    font-weight="700"
+    font-size="320"
+    fill="#fafafa"
+  >π</text>
+</svg>

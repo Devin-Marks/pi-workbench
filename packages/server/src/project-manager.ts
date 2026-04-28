@@ -3,6 +3,31 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 
+/**
+ * One-time migration of the legacy `projects.json` location. Up through the
+ * Phase-9 wrap-up, pi-workbench wrote its project registry into
+ * `${PI_CONFIG_DIR}/projects.json` (mixing our state into the pi SDK's
+ * config dir). We now own a dedicated dir; if a user is upgrading and
+ * already has the legacy file, move it on first read so they don't lose
+ * their projects. Idempotent: only fires when the new path is missing
+ * AND the legacy path exists.
+ */
+let legacyMigrationDone = false;
+async function migrateLegacyProjectsFile(): Promise<void> {
+  if (legacyMigrationDone) return;
+  legacyMigrationDone = true;
+  if (config.workbenchDataDir === config.piConfigDir) return;
+  const legacy = join(config.piConfigDir, "projects.json");
+  const target = join(config.workbenchDataDir, "projects.json");
+  const [legacyStat, targetStat] = await Promise.all([
+    stat(legacy).catch(() => undefined),
+    stat(target).catch(() => undefined),
+  ]);
+  if (legacyStat === undefined || targetStat !== undefined) return;
+  await mkdir(config.workbenchDataDir, { recursive: true });
+  await rename(legacy, target);
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -52,7 +77,7 @@ export class DuplicatePathError extends Error {
   }
 }
 
-const PROJECTS_FILE = (): string => join(config.piConfigDir, "projects.json");
+const PROJECTS_FILE = (): string => join(config.workbenchDataDir, "projects.json");
 
 /** True iff `target` is the same path as `root` or strictly inside it. */
 export function isInsideWorkspace(target: string, root: string = config.workspacePath): boolean {
@@ -64,7 +89,8 @@ export function isInsideWorkspace(target: string, root: string = config.workspac
 }
 
 async function ensureConfigDir(): Promise<void> {
-  await mkdir(config.piConfigDir, { recursive: true });
+  await migrateLegacyProjectsFile();
+  await mkdir(config.workbenchDataDir, { recursive: true });
 }
 
 /**

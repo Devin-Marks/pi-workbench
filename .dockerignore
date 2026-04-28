@@ -1,0 +1,29 @@
+node_modules
+**/node_modules
+.git
+.gitignore
+.github
+
+# Build outputs — rebuilt inside the container.
+**/dist
+packages/*/dist
+
+# Editor & OS noise
+.idea
+.vscode
+.DS_Store
+*.log
+
+# Runtime data that shouldn't bake into the image.
+workspace
+workbench
+*.jsonl
+**/.pi/sessions
+
+# Test artifacts and notes (gitignored anyway, defense in depth).
+notes
+tests/scratch
+
+# Existing image layers / docker noise
+docker/*.tar
+.docker
