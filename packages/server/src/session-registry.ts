@@ -8,6 +8,7 @@ import {
   type SessionInfo,
 } from "@mariozechner/pi-coding-agent";
 import { config } from "./config.js";
+import { readProjects } from "./project-manager.js";
 
 /**
  * Minimal SSE client contract used by the registry to fan out events.
@@ -372,6 +373,92 @@ export async function listSessionsForProject(
   return Array.from(liveById.values()).sort(
     (a, b) => b.lastActivityAt.getTime() - a.lastActivityAt.getTime(),
   );
+}
+
+/**
+ * Resolve a sessionId to its (projectId, workspacePath) pair without resuming.
+ * Walks every registered project's session dir and matches by id. Returns
+ * undefined if the session is not on disk.
+ *
+ * Used by routes that need to attach to a session known only by id (e.g. the
+ * SSE stream route auto-resume path). Single-tenant + small project counts
+ * means this is fast in practice; if the project count ever explodes we'd
+ * cache a sessionId → location index, but not today.
+ */
+export async function findSessionLocation(
+  sessionId: string,
+): Promise<{ projectId: string; workspacePath: string } | undefined> {
+  const live = registry.get(sessionId);
+  if (live !== undefined) {
+    return { projectId: live.projectId, workspacePath: live.workspacePath };
+  }
+  const projects = await readProjects();
+  for (const project of projects) {
+    const dir = sessionDirFor(project.id);
+    let infos: SessionInfo[];
+    try {
+      infos = await SessionManager.list(project.path, dir);
+    } catch {
+      continue;
+    }
+    if (infos.some((s) => s.id === sessionId)) {
+      return { projectId: project.id, workspacePath: project.path };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resume a session by id alone — looks up its project via findSessionLocation,
+ * then delegates to resumeSession. Convenience wrapper for routes that don't
+ * receive projectId in the URL (the stream route specifically).
+ */
+export async function resumeSessionById(sessionId: string): Promise<LiveSession> {
+  const existing = registry.get(sessionId);
+  if (existing) return existing;
+  const loc = await findSessionLocation(sessionId);
+  if (loc === undefined) throw new SessionNotFoundError(sessionId);
+  return resumeSession(sessionId, loc.projectId, loc.workspacePath);
+}
+
+/**
+ * Fork a live session from an entry. Calls
+ * `sessionManager.createBranchedSession(entryId)` which produces a new
+ * .jsonl on disk containing the path-to-leaf, then loads that new file as
+ * a fresh LiveSession in the same project.
+ *
+ * Returns the newly-registered live session. Throws SessionNotFoundError if
+ * the source session isn't live, or `Error("fork_failed")` if the SDK
+ * returns no path (sessions without persistence cannot be forked).
+ */
+export async function forkSession(sessionId: string, entryId: string): Promise<LiveSession> {
+  const source = registry.get(sessionId);
+  if (source === undefined) throw new SessionNotFoundError(sessionId);
+  const newPath = source.session.sessionManager.createBranchedSession(entryId);
+  if (newPath === undefined) throw new Error("fork_failed");
+
+  const dir = sessionDirFor(source.projectId);
+  const sessionManager = SessionManager.open(newPath, dir, source.workspacePath);
+  const { session } = await createAgentSession({
+    cwd: source.workspacePath,
+    sessionManager,
+    agentDir: config.piConfigDir,
+  });
+
+  const now = new Date();
+  const live: LiveSession = {
+    session,
+    sessionId: session.sessionId,
+    projectId: source.projectId,
+    workspacePath: source.workspacePath,
+    clients: new Set(),
+    createdAt: now,
+    lastActivityAt: now,
+    unsubscribe: () => undefined,
+  };
+  live.unsubscribe = makeSubscribeHandler(live);
+  registry.set(live.sessionId, live);
+  return live;
 }
 
 /** Number of currently-live sessions across all projects. Used by /health. */

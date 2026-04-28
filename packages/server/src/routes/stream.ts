@@ -1,11 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
-import { getSession } from "../session-registry.js";
+import { resumeSessionById, SessionNotFoundError } from "../session-registry.js";
 import { createSSEClient } from "../sse-bridge.js";
 
 /**
- * Phase 5 minimal stream route. Phase 6 expands the surface (resume from
- * disk, auto-create, project lookup); for now this only attaches to a
- * session that's already live in the registry, returning 404 otherwise.
+ * SSE stream for a session. If the session is in the live registry, attach
+ * directly; otherwise auto-resume from disk via resumeSessionById (which
+ * walks projects to find the .jsonl and rehydrates an AgentSession). 404
+ * only when no project on disk owns the id.
  */
 export const streamRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get<{ Params: { id: string } }>(
@@ -13,25 +14,20 @@ export const streamRoutes: FastifyPluginAsync = async (fastify) => {
     {
       schema: {
         description:
-          "Open a Server-Sent Events stream for a live session. Sends a " +
-          "`snapshot` event on connect to hydrate state, then forwards " +
-          "filtered AgentSessionEvents until the client disconnects. " +
-          "The session must already be in the in-memory registry; " +
-          "auto-resume from disk lands in Phase 6.",
+          "Open an SSE stream for a session. Sends a `snapshot` event on " +
+          "connect, then forwards filtered AgentSessionEvents until the " +
+          "client disconnects. Auto-resumes the session from disk if it's " +
+          "not already live.",
         tags: ["sessions"],
         params: {
           type: "object",
           required: ["id"],
           properties: { id: { type: "string" } },
         },
-        // SSE responses cannot be JSON-schema-described meaningfully —
-        // they're a stream of `data: <json>\n\n` frames over text/event-stream,
-        // not a single typed body. The route hijacks the reply, so Fastify's
-        // serializer never runs against any 200 schema. We omit the 200
-        // response from the schema entirely (Fastify's
-        // FST_ERR_SCH_CONTENT_MISSING_SCHEMA forbids an empty `content` block,
-        // and `type: string` would lie about the shape). The event catalogue
-        // lives in docs/sse-events.md (Phase 17).
+        // SSE responses don't fit Fastify's response-schema model — see the
+        // Phase-5 review notes in REVIEW_FIXES.md. Only the 404 shape is
+        // declared; the catalog of SSE event types lives in
+        // docs/sse-events.md (Phase 17).
         response: {
           404: {
             type: "object",
@@ -41,13 +37,16 @@ export const streamRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     async (req, reply) => {
-      const live = getSession(req.params.id);
-      if (live === undefined) {
-        return reply.code(404).send({ error: "session_not_found" });
+      let live;
+      try {
+        live = await resumeSessionById(req.params.id);
+      } catch (err) {
+        if (err instanceof SessionNotFoundError) {
+          return reply.code(404).send({ error: "session_not_found" });
+        }
+        throw err;
       }
       createSSEClient(reply, live);
-      // hijack() means we own the reply; returning anything would error.
-      // The connection stays open until the client disconnects.
       return reply;
     },
   );
