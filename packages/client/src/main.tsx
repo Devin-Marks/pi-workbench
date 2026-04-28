@@ -22,9 +22,11 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
   }
 
   override componentDidCatch(error: Error, info: ErrorInfo): void {
-    // Send to console AND POST to server so it lands in the dev-mode log.
+    // Console-only. We previously fired a "log breadcrumb" `GET
+    // /api/v1/health`, which surfaced nothing useful server-side and
+    // was confusing in dev tools. Real client-error reporting is a
+    // Phase 18 polish item.
     console.error("[pi-workbench] root render error", error, info);
-    void fetch("/api/v1/health", { method: "GET" }).catch(() => undefined);
   }
 
   override render(): ReactNode {

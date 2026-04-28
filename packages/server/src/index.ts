@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { mkdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
@@ -17,6 +17,7 @@ import { streamRoutes } from "./routes/stream.js";
 import { promptRoutes } from "./routes/prompt.js";
 import { controlRoutes } from "./routes/control.js";
 import { configRoutes } from "./routes/config.js";
+import { fileRoutes } from "./routes/files.js";
 import { disposeAllSessions } from "./session-registry.js";
 
 /**
@@ -126,6 +127,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       await api.register(promptRoutes);
       await api.register(controlRoutes);
       await api.register(configRoutes);
+      await api.register(fileRoutes);
     },
     { prefix: "/api/v1" },
   );
@@ -185,7 +187,6 @@ export async function buildServer(): Promise<FastifyInstance> {
       { dist: config.clientDistPath, exists: existsSync(config.clientDistPath) },
       "client dist not served (dev mode or SERVE_CLIENT=false)",
     );
-    void join; // keep the import live so future build-step changes don't trip ESLint
   }
 
   // Clean teardown on fastify.close() (called by both graceful shutdown and
@@ -199,6 +200,25 @@ export async function buildServer(): Promise<FastifyInstance> {
 }
 
 async function start(): Promise<void> {
+  // Ensure the workspace + workbench data dirs exist before anything
+  // tries to write under them. mkdir(recursive:true) is a no-op on an
+  // existing dir, so this is safe to run on every boot. We do NOT
+  // create PI_CONFIG_DIR — that's the SDK's territory and the SDK
+  // creates it itself on first auth/models read.
+  for (const dir of [config.workspacePath, config.workbenchDataDir]) {
+    try {
+      await mkdir(dir, { recursive: true });
+    } catch (err) {
+      // EACCES on `/workspace` (the legacy default) was the most common
+      // dev startup failure. Surface a clear hint instead of letting
+      // Fastify start in a broken state.
+      console.error(`[pi-workbench] failed to create directory ${dir}:`, (err as Error).message);
+      console.error(
+        `[pi-workbench] hint: set WORKSPACE_PATH/WORKBENCH_DATA_DIR to a writable location`,
+      );
+      process.exit(1);
+    }
+  }
   const fastify = await buildServer();
   try {
     await fastify.listen({ port: config.port, host: config.host });

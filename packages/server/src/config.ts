@@ -25,7 +25,22 @@ function readBool(key: string, fallback: boolean): boolean {
   throw new Error(`config: ${key} must be a boolean-ish value (got ${v})`);
 }
 
-const WORKSPACE_PATH = resolve(readEnv("WORKSPACE_PATH") ?? "/workspace");
+/**
+ * Workbench-owned root. `~/.pi-workbench` is the single dotdir we own.
+ * By default it holds both the project registry and the workspace where
+ * user code lives:
+ *
+ *   ~/.pi-workbench/
+ *     ├── projects.json   ← WORKBENCH_DATA_DIR by default
+ *     └── workspace/      ← WORKSPACE_PATH by default
+ *
+ * Either path can be relocated independently via its env var (e.g. point
+ * `WORKSPACE_PATH` at an existing `~/Code` dir to use code you already
+ * have on disk). Docker compose sets both explicitly so the container
+ * layout is unchanged.
+ */
+const WORKBENCH_HOME = join(homedir(), ".pi-workbench");
+const WORKSPACE_PATH = resolve(readEnv("WORKSPACE_PATH") ?? join(WORKBENCH_HOME, "workspace"));
 // Default to the current user's home so local dev on macOS/Linux just works.
 // In the documented Docker setup this still resolves to `/root/.pi/agent`
 // (root's homedir IS `/root` inside the container), so the production target
@@ -35,15 +50,13 @@ const SESSION_DIR = resolve(readEnv("SESSION_DIR") ?? `${WORKSPACE_PATH}/.pi/ses
 /**
  * Workbench-owned data dir. Holds `projects.json` (the project registry
  * pi-workbench layers on top of pi) and any other state that's ours, not
- * pi's. Kept separate from `PI_CONFIG_DIR` on purpose: the pi config dir
- * is the SDK's territory (auth.json, models.json, settings.json), and
- * dropping our `projects.json` into it would couple our state to pi's
- * directory layout. Default `~/.pi-workbench`; override with
- * `WORKBENCH_DATA_DIR`.
+ * pi's. Defaults to `WORKBENCH_HOME` (~/.pi-workbench) so projects.json
+ * sits next to the workspace folder. Kept SEPARATE from `PI_CONFIG_DIR`
+ * (~/.pi/agent), which is owned by the pi SDK — auth.json, models.json,
+ * settings.json. Dropping our state into the SDK's dir was the original
+ * design and got refactored out.
  */
-const WORKBENCH_DATA_DIR = resolve(
-  readEnv("WORKBENCH_DATA_DIR") ?? join(homedir(), ".pi-workbench"),
-);
+const WORKBENCH_DATA_DIR = resolve(readEnv("WORKBENCH_DATA_DIR") ?? WORKBENCH_HOME);
 
 /**
  * Path to the built client (Vite output). In production we serve this via

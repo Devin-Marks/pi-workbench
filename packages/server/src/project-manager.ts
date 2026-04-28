@@ -15,17 +15,28 @@ import { config } from "./config.js";
 let legacyMigrationDone = false;
 async function migrateLegacyProjectsFile(): Promise<void> {
   if (legacyMigrationDone) return;
-  legacyMigrationDone = true;
-  if (config.workbenchDataDir === config.piConfigDir) return;
+  if (config.workbenchDataDir === config.piConfigDir) {
+    legacyMigrationDone = true;
+    return;
+  }
   const legacy = join(config.piConfigDir, "projects.json");
   const target = join(config.workbenchDataDir, "projects.json");
   const [legacyStat, targetStat] = await Promise.all([
     stat(legacy).catch(() => undefined),
     stat(target).catch(() => undefined),
   ]);
-  if (legacyStat === undefined || targetStat !== undefined) return;
+  if (legacyStat === undefined || targetStat !== undefined) {
+    // Either no legacy file to migrate, or the new path already has
+    // one. Mark done so subsequent reads skip the stat pair.
+    legacyMigrationDone = true;
+    return;
+  }
+  // Only mark done once the rename actually succeeds — if mkdir or
+  // rename throws (cross-filesystem move, permissions), the next
+  // readProjects() will retry rather than silently giving up.
   await mkdir(config.workbenchDataDir, { recursive: true });
   await rename(legacy, target);
+  legacyMigrationDone = true;
 }
 
 export interface Project {
