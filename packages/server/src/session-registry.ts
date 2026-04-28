@@ -308,9 +308,19 @@ export async function discoverSessionsOnDisk(
 
 /**
  * Unified, recency-sorted view of sessions for a project: merges live
- * registry entries with on-disk discovery, dedupes by sessionId so a session
- * that is currently live doesn't also appear from disk. Live sessions take
- * precedence (carry the freshest `lastActivityAt`).
+ * registry entries with on-disk discovery, dedupes by sessionId.
+ *
+ * Field precedence when a session appears in both live and disk:
+ *   - `lastActivityAt`, `createdAt`, `name`, `isLive` — LIVE wins (freshest).
+ *   - `messageCount`, `firstMessage` — DISK wins. The SDK's
+ *     `SessionInfo.messageCount` counts user-visible messages; the live
+ *     session's `messages.length` includes BashExecutionMessage and other
+ *     internal types, so the two would disagree. Disk values are the ones
+ *     the sidebar should display.
+ *
+ * For a live-only session that hasn't flushed to disk yet (no assistant
+ * message), `firstMessage` is `""` and `messageCount` falls back to
+ * `session.messages.length`.
  *
  * This is the canonical surface for the Phase 6 sidebar list — call sites
  * should not implement their own merge.
@@ -339,11 +349,12 @@ export async function listSessionsForProject(
 
   const disk = await discoverSessionsOnDisk(projectId, workspacePath);
   for (const d of disk) {
-    if (liveById.has(d.sessionId)) {
-      // Backfill firstMessage from disk on a live entry (live AgentSession
-      // doesn't expose a cheap firstMessage preview).
-      const merged = liveById.get(d.sessionId);
-      if (merged !== undefined) merged.firstMessage = d.firstMessage;
+    const merged = liveById.get(d.sessionId);
+    if (merged !== undefined) {
+      // Disk wins for messageCount and firstMessage (see precedence in
+      // function doc); everything else stays as the live value.
+      merged.messageCount = d.messageCount;
+      merged.firstMessage = d.firstMessage;
       continue;
     }
     liveById.set(d.sessionId, {

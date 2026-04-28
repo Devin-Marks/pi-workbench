@@ -160,14 +160,22 @@ function vBrowse(value: unknown, status: number): BrowseResponse {
   if (
     !isObject(value) ||
     typeof value.path !== "string" ||
-    !(value.parentPath === null || typeof value.parentPath === "string") ||
+    !(
+      value.parentPath === null ||
+      value.parentPath === undefined ||
+      typeof value.parentPath === "string"
+    ) ||
     !Array.isArray(value.entries)
   ) {
     fail(status, "expected BrowseResponse");
   }
+  // Normalize undefined → null so consumers see a single absent shape.
+  // The server route already sends `null` (routes/projects.ts), but a
+  // future refactor that drops the `?? null` would otherwise produce a
+  // confusing "expected BrowseResponse" instead of a useful surface.
   return {
     path: value.path,
-    parentPath: value.parentPath as string | null,
+    parentPath: typeof value.parentPath === "string" ? value.parentPath : null,
     entries: value.entries.map((e) => vBrowseEntry(e, status)),
   };
 }

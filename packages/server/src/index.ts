@@ -9,6 +9,7 @@ import { extractBearer, verifyApiKey, verifyToken } from "./auth.js";
 import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
 import { projectRoutes } from "./routes/projects.js";
+import { disposeAllSessions } from "./session-registry.js";
 
 /**
  * Per-route auth metadata. Routes that should skip the auth preHandler set
@@ -115,6 +116,13 @@ export async function buildServer(): Promise<FastifyInstance> {
     },
     { prefix: "/api/v1" },
   );
+
+  // Clean teardown on fastify.close() (called by both graceful shutdown and
+  // tests via `await fastify.close()`). Disposes every live session, which
+  // will also become load-bearing in Phase 5 to flush SSE clients.
+  fastify.addHook("onClose", async () => {
+    disposeAllSessions();
+  });
 
   return fastify;
 }

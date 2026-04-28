@@ -69,8 +69,11 @@ async function ensureConfigDir(): Promise<void> {
 
 /**
  * Run `fn` over each item with at most `limit` in flight at once. Order of
- * results matches the input order. Used to cap fan-out over filesystem
- * operations so we don't blow the FD ceiling on large directories.
+ * results matches the input order, including `undefined` inputs (the fn is
+ * still invoked — the helper does not silently skip holes).
+ *
+ * Errors propagate via `Promise.all`: the first rejecting worker fails the
+ * whole call. Wrap `fn` in your own try/catch if you need partial results.
  */
 async function mapBounded<T, U>(
   items: readonly T[],
@@ -79,16 +82,14 @@ async function mapBounded<T, U>(
 ): Promise<U[]> {
   const results: U[] = new Array(items.length);
   let next = 0;
-  const workers: Promise<void>[] = [];
   const worker = async (): Promise<void> => {
     while (true) {
       const i = next++;
       if (i >= items.length) return;
-      const item = items[i];
-      if (item === undefined) continue;
-      results[i] = await fn(item, i);
+      results[i] = await fn(items[i] as T, i);
     }
   };
+  const workers: Promise<void>[] = [];
   for (let w = 0; w < Math.min(limit, items.length); w++) workers.push(worker());
   await Promise.all(workers);
   return results;
