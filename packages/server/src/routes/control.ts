@@ -40,6 +40,12 @@ function mapSdkError(reply: FastifyReply, err: unknown): FastifyReply {
   if (/no api key found/i.test(m)) {
     return reply.code(400).send({ error: "no_api_key" });
   }
+  if (/compaction cancelled/i.test(m)) {
+    // User-driven abort during compact — not an internal error. The route
+    // itself returned 200/202 successfully; this catch path is for the
+    // cancellation propagating up from session.compact().
+    return reply.code(409).send({ error: "compaction_cancelled" });
+  }
   reply.log.error({ err: m }, "unmapped SDK error");
   return reply.code(500).send({ error: "internal_error" });
 }

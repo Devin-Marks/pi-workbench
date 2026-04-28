@@ -293,16 +293,23 @@ async function main(): Promise<void> {
       const noText = await jsend("POST", `${base}/api/v1/sessions/${sessionId}/prompt`, {}, auth);
       assert("POST /prompt without text → 400", noText.status === 400);
 
-      const accepted = await jsend(
+      // No model + no auth in this test fixture, so the route's pre-flight
+      // check (added in Phase 8) returns 400 with `no_api_key` rather than
+      // letting `session.prompt()` fail silently. The 202 path requires a
+      // configured provider key, which we don't set up here — covered by
+      // the live-prompt path in test-sse.ts under PI_TEST_LIVE_PROMPT=1.
+      const rejected = await jsend(
         "POST",
         `${base}/api/v1/sessions/${sessionId}/prompt`,
-        { text: "noop — no model configured, prompt() rejects async, route still 202s" },
+        { text: "no model configured — pre-flight rejects with 400" },
         auth,
       );
-      assert("POST /prompt with text → 202", accepted.status === 202);
+      assert("POST /prompt with no auth configured → 400", rejected.status === 400);
       assert(
-        "POST /prompt body { accepted: true }",
-        (accepted.body as { accepted: boolean }).accepted === true,
+        "POST /prompt error code is `no_api_key` or `no_model_configured`",
+        (rejected.body as { error: string }).error === "no_api_key" ||
+          (rejected.body as { error: string }).error === "no_model_configured",
+        JSON.stringify(rejected.body),
       );
     }
 

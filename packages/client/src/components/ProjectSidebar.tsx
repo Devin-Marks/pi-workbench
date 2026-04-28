@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useProjectStore } from "../store/project-store";
+import { useSessionStore } from "../store/session-store";
 import { ProjectPicker } from "./ProjectPicker";
+import { SessionList } from "./SessionList";
 
 export function ProjectSidebar() {
   const projects = useProjectStore((s) => s.projects);
@@ -10,9 +12,31 @@ export function ProjectSidebar() {
   const toggleCollapsed = useProjectStore((s) => s.toggleCollapsed);
   const remove = useProjectStore((s) => s.remove);
   const rename = useProjectStore((s) => s.rename);
+  const sessionsByProject = useSessionStore((s) => s.byProject);
   const [showPicker, setShowPicker] = useState(false);
   const [renamingId, setRenamingId] = useState<string | undefined>();
   const [renameValue, setRenameValue] = useState("");
+
+  /**
+   * Two-stage delete confirm: if the project has live sessions, demand the
+   * user dispose them first (otherwise the on-disk JSONLs become orphaned
+   * — see DEFERRED.md "known holes" entry for project-delete).
+   */
+  const handleDelete = (id: string, name: string): void => {
+    const list = sessionsByProject[id] ?? [];
+    const liveCount = list.filter((s) => s.isLive).length;
+    if (liveCount > 0) {
+      alert(
+        `Cannot delete "${name}" — it has ${liveCount} live session${liveCount === 1 ? "" : "s"}. ` +
+          `Dispose ${liveCount === 1 ? "it" : "them"} first (× next to each session in the sidebar), then try again.`,
+      );
+      return;
+    }
+    const ok = confirm(
+      `Remove project "${name}" from the workbench?\n\nOn-disk session files (under the project's .pi/sessions/ dir) are NOT deleted — they become orphaned and can be recovered manually.`,
+    );
+    if (ok) void remove(id);
+  };
 
   const submitRename = async (id: string): Promise<void> => {
     const v = renameValue.trim();
@@ -91,23 +115,14 @@ export function ProjectSidebar() {
                   </button>
                 )}
                 <button
-                  onClick={() => {
-                    const ok = confirm(
-                      `Remove project "${p.name}" from the workbench?\n\nThe folder on disk is left intact.`,
-                    );
-                    if (ok) void remove(p.id);
-                  }}
+                  onClick={() => handleDelete(p.id, p.name)}
                   className="hidden text-xs text-neutral-500 hover:text-red-400 group-hover:inline"
-                  title="Delete project (folder is left intact)"
+                  title="Delete project (blocked while live sessions exist)"
                 >
                   ×
                 </button>
               </div>
-              {!isCollapsed && (
-                <div className="ml-6 px-2 py-1 text-xs italic text-neutral-600">
-                  No sessions yet (Phase 4).
-                </div>
-              )}
+              {!isCollapsed && <SessionList projectId={p.id} />}
             </div>
           );
         })}

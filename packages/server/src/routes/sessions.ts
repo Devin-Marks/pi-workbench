@@ -93,11 +93,24 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
         return { sessions: sessions.map(unifiedFromUnified) };
       }
       // Cross-project: fan out in parallel — each project's listing is
-      // independent disk I/O. Sequential awaits would compound on every
-      // sidebar reload during Phase 9.
+      // independent disk I/O. Use Promise.allSettled so one corrupt
+      // project's session dir doesn't take down the whole sidebar; the
+      // failure is logged and that project's sessions are skipped.
       const projects = await readProjects();
-      const lists = await Promise.all(projects.map((p) => listSessionsForProject(p.id, p.path)));
-      const all: UnifiedSession[] = lists.flat();
+      const settled = await Promise.all(
+        projects.map(async (p) => {
+          try {
+            return await listSessionsForProject(p.id, p.path);
+          } catch (err) {
+            req.log.warn(
+              { err: err instanceof Error ? err.message : String(err), projectId: p.id },
+              "listSessionsForProject failed; skipping project in cross-project listing",
+            );
+            return [] as UnifiedSession[];
+          }
+        }),
+      );
+      const all: UnifiedSession[] = settled.flat();
       all.sort((a, b) => b.lastActivityAt.getTime() - a.lastActivityAt.getTime());
       return { sessions: all.map(unifiedFromUnified) };
     },
@@ -191,6 +204,87 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
         messageCount: match.messageCount,
         isStreaming: false,
         isLive: false,
+      });
+    },
+  );
+
+  fastify.get<{ Params: { id: string } }>(
+    "/sessions/:id/messages",
+    {
+      schema: {
+        description:
+          "Return the live session's full messages array — the same shape " +
+          "the SSE stream sends in its `snapshot` event. Used by the chat " +
+          "view to refresh after `agent_end` without reconnecting the SSE. " +
+          "404 if the session isn't currently live in the registry.",
+        tags: ["sessions"],
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string" } },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["messages"],
+            properties: {
+              messages: {
+                type: "array",
+                items: { type: "object", additionalProperties: true },
+              },
+            },
+          },
+          404: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const live = getSession(req.params.id);
+      if (live === undefined) return notFound(reply);
+      return { messages: live.session.messages };
+    },
+  );
+
+  fastify.post<{ Params: { id: string }; Body: { name: string } }>(
+    "/sessions/:id/name",
+    {
+      schema: {
+        description:
+          "Rename the session. Calls the SDK's `setSessionName` which appends " +
+          "a `session_info` entry to the JSONL. The new name is the user-visible " +
+          "title in the sidebar; the empty string clears any prior name. Session " +
+          "must be live; open the SSE stream first to auto-resume from disk.",
+        tags: ["sessions"],
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string" } },
+        },
+        body: {
+          type: "object",
+          required: ["name"],
+          additionalProperties: false,
+          properties: { name: { type: "string", maxLength: 200 } },
+        },
+        response: {
+          200: liveSummarySchema,
+          404: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const live = getSession(req.params.id);
+      if (live === undefined) return notFound(reply);
+      live.session.setSessionName(req.body.name);
+      return liveSummaryBody({
+        sessionId: live.sessionId,
+        projectId: live.projectId,
+        workspacePath: live.workspacePath,
+        createdAt: live.createdAt,
+        lastActivityAt: live.lastActivityAt,
+        name: live.session.sessionName,
+        messageCount: live.session.messages.length,
+        isStreaming: live.session.isStreaming,
       });
     },
   );

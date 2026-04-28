@@ -44,6 +44,7 @@ export const promptRoutes: FastifyPluginAsync = async (fastify) => {
             required: ["accepted"],
             properties: { accepted: { type: "boolean", const: true } },
           },
+          400: errorSchema,
           404: errorSchema,
         },
       },
@@ -53,14 +54,30 @@ export const promptRoutes: FastifyPluginAsync = async (fastify) => {
       if (live === undefined) {
         return reply.code(404).send({ error: "session_not_found" });
       }
+
+      // Pre-flight: check model + auth BEFORE fire-and-forget. The SDK's
+      // session.prompt() rejects async on these conditions which the route's
+      // 202-fire-and-forget contract can't surface to the client — the user
+      // would see a silent no-op. Cheap to validate here so we can return a
+      // typed 400 the UI renders inline.
+      const model = live.session.model;
+      if (model === undefined) {
+        return reply.code(400).send({ error: "no_model_configured" });
+      }
+      if (!live.session.modelRegistry.hasConfiguredAuth(model)) {
+        return reply.code(400).send({
+          error: "no_api_key",
+          message: `No API key configured for provider "${model.provider}". Add one via PUT /api/v1/config/auth/${model.provider}.`,
+        });
+      }
+
       const opts: Parameters<typeof live.session.prompt>[1] = {};
       if (req.body.streamingBehavior !== undefined) {
         opts.streamingBehavior = req.body.streamingBehavior;
       }
-      // Fire-and-forget. session.prompt() is async, so all current validation
-      // throws are async; .catch traps them. The outer try/catch is defensive
-      // against a future SDK rev that moves any check to a synchronous
-      // wrapper — without it a sync throw would 500 the request.
+      // Fire-and-forget. Pre-flight already covered the common synchronous
+      // failure modes; remaining rejections are LLM/network errors that
+      // surface to the client as agent_end with errorMessage over SSE.
       try {
         live.session.prompt(req.body.text, opts).catch((err: unknown) => {
           fastify.log.warn(

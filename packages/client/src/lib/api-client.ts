@@ -52,6 +52,57 @@ export interface HealthResponse {
   activePtys: number;
 }
 
+export interface UnifiedSession {
+  sessionId: string;
+  projectId: string;
+  isLive: boolean;
+  name?: string;
+  workspacePath: string;
+  lastActivityAt: string;
+  createdAt: string;
+  messageCount: number;
+  firstMessage: string;
+}
+
+export interface SessionSummary {
+  sessionId: string;
+  projectId: string;
+  workspacePath: string;
+  createdAt: string;
+  lastActivityAt: string;
+  isLive: boolean;
+  name?: string;
+  messageCount: number;
+  isStreaming: boolean;
+}
+
+export interface SkillSummary {
+  name: string;
+  description: string;
+  source: "global" | "project";
+  filePath: string;
+  enabled: boolean;
+  disableModelInvocation: boolean;
+}
+
+export interface ProviderModelEntry {
+  id: string;
+  name: string;
+  contextWindow: number;
+  maxTokens: number;
+  reasoning: boolean;
+  input: Array<"text" | "image">;
+  hasAuth: boolean;
+}
+
+export interface ProvidersListing {
+  providers: Array<{ provider: string; models: ProviderModelEntry[] }>;
+}
+
+export interface AuthSummary {
+  providers: Record<string, { configured: boolean; source?: string; label?: string }>;
+}
+
 export function onUnauthorized(handler: () => void): () => void {
   const fn = (): void => handler();
   window.addEventListener(UNAUTHORIZED_EVENT, fn);
@@ -193,6 +244,129 @@ function vMkdir(value: unknown, status: number): { path: string } {
   return { path: value.path };
 }
 
+function vUnifiedSession(value: unknown, status: number): UnifiedSession {
+  if (
+    !isObject(value) ||
+    typeof value.sessionId !== "string" ||
+    typeof value.projectId !== "string" ||
+    typeof value.isLive !== "boolean" ||
+    typeof value.workspacePath !== "string" ||
+    typeof value.lastActivityAt !== "string" ||
+    typeof value.createdAt !== "string" ||
+    typeof value.messageCount !== "number" ||
+    typeof value.firstMessage !== "string"
+  ) {
+    fail(status, "expected UnifiedSession");
+  }
+  const out: UnifiedSession = {
+    sessionId: value.sessionId,
+    projectId: value.projectId,
+    isLive: value.isLive,
+    workspacePath: value.workspacePath,
+    lastActivityAt: value.lastActivityAt,
+    createdAt: value.createdAt,
+    messageCount: value.messageCount,
+    firstMessage: value.firstMessage,
+  };
+  if (typeof value.name === "string") out.name = value.name;
+  return out;
+}
+
+function vUnifiedSessionList(value: unknown, status: number): { sessions: UnifiedSession[] } {
+  if (!isObject(value) || !Array.isArray(value.sessions)) {
+    fail(status, "expected { sessions: UnifiedSession[] }");
+  }
+  return { sessions: value.sessions.map((s) => vUnifiedSession(s, status)) };
+}
+
+function vSessionSummary(value: unknown, status: number): SessionSummary {
+  if (
+    !isObject(value) ||
+    typeof value.sessionId !== "string" ||
+    typeof value.projectId !== "string" ||
+    typeof value.workspacePath !== "string" ||
+    typeof value.createdAt !== "string" ||
+    typeof value.lastActivityAt !== "string" ||
+    typeof value.isLive !== "boolean" ||
+    typeof value.messageCount !== "number" ||
+    typeof value.isStreaming !== "boolean"
+  ) {
+    fail(status, "expected SessionSummary");
+  }
+  const out: SessionSummary = {
+    sessionId: value.sessionId,
+    projectId: value.projectId,
+    workspacePath: value.workspacePath,
+    createdAt: value.createdAt,
+    lastActivityAt: value.lastActivityAt,
+    isLive: value.isLive,
+    messageCount: value.messageCount,
+    isStreaming: value.isStreaming,
+  };
+  if (typeof value.name === "string") out.name = value.name;
+  return out;
+}
+
+function vAccepted(value: unknown, status: number): { accepted: true } {
+  if (!isObject(value) || value.accepted !== true) fail(status, "expected { accepted: true }");
+  return { accepted: true };
+}
+
+function vSkillsList(value: unknown, status: number): { skills: SkillSummary[] } {
+  if (!isObject(value) || !Array.isArray(value.skills)) {
+    fail(status, "expected { skills: SkillSummary[] }");
+  }
+  return {
+    skills: value.skills.map((s): SkillSummary => {
+      if (
+        !isObject(s) ||
+        typeof s.name !== "string" ||
+        typeof s.description !== "string" ||
+        (s.source !== "global" && s.source !== "project") ||
+        typeof s.filePath !== "string" ||
+        typeof s.enabled !== "boolean" ||
+        typeof s.disableModelInvocation !== "boolean"
+      ) {
+        fail(status, "expected SkillSummary");
+      }
+      return {
+        name: s.name,
+        description: s.description,
+        source: s.source,
+        filePath: s.filePath,
+        enabled: s.enabled,
+        disableModelInvocation: s.disableModelInvocation,
+      };
+    }),
+  };
+}
+
+function vProvidersListing(value: unknown, status: number): ProvidersListing {
+  if (!isObject(value) || !Array.isArray(value.providers)) {
+    fail(status, "expected { providers: [...] }");
+  }
+  return { providers: value.providers as ProvidersListing["providers"] };
+}
+
+function vAuthSummary(value: unknown, status: number): AuthSummary {
+  if (!isObject(value) || !isObject(value.providers)) {
+    fail(status, "expected { providers: { ... } }");
+  }
+  return value as unknown as AuthSummary;
+}
+
+function vSettings(value: unknown, status: number): Record<string, unknown> {
+  if (!isObject(value)) fail(status, "expected settings object");
+  return value;
+}
+
+function vModelsJson(value: unknown, status: number): { providers: Record<string, unknown> } {
+  if (!isObject(value) || !isObject(value.providers)) {
+    fail(status, "expected { providers: {...} }");
+  }
+  return value as { providers: Record<string, unknown> };
+}
+
 function safeParseJson(text: string): { ok: true; value: unknown } | { ok: false } {
   if (text === "") return { ok: true, value: undefined };
   try {
@@ -279,6 +453,97 @@ export const api = {
       method: "POST",
       body: { parentPath, name },
     }),
+
+  // ---------------- sessions ----------------
+  listSessions: (projectId?: string) => {
+    const qs = projectId !== undefined ? `?projectId=${encodeURIComponent(projectId)}` : "";
+    return request(`/api/v1/sessions${qs}`, vUnifiedSessionList);
+  },
+  createSession: (projectId: string) =>
+    request("/api/v1/sessions", vSessionSummary, {
+      method: "POST",
+      body: { projectId },
+    }),
+  getSession: (id: string) =>
+    request(`/api/v1/sessions/${encodeURIComponent(id)}`, vSessionSummary),
+  getMessages: (id: string) =>
+    request(`/api/v1/sessions/${encodeURIComponent(id)}/messages`, (v, s) => {
+      if (!isObject(v) || !Array.isArray(v.messages)) {
+        fail(s, "expected { messages: [...] }");
+      }
+      return { messages: v.messages as Array<Record<string, unknown>> };
+    }),
+  disposeSession: (id: string) =>
+    request(`/api/v1/sessions/${encodeURIComponent(id)}`, vVoid, { method: "DELETE" }),
+  renameSession: (id: string, name: string) =>
+    request(`/api/v1/sessions/${encodeURIComponent(id)}/name`, vSessionSummary, {
+      method: "POST",
+      body: { name },
+    }),
+
+  // ---------------- prompt + control ----------------
+  prompt: (id: string, text: string, streamingBehavior?: "steer" | "followUp") => {
+    const body: Record<string, unknown> = { text };
+    if (streamingBehavior !== undefined) body.streamingBehavior = streamingBehavior;
+    return request(`/api/v1/sessions/${encodeURIComponent(id)}/prompt`, vAccepted, {
+      method: "POST",
+      body,
+    });
+  },
+  steer: (id: string, text: string, mode?: "steer" | "followUp") => {
+    const body: Record<string, unknown> = { text };
+    if (mode !== undefined) body.mode = mode;
+    return request(`/api/v1/sessions/${encodeURIComponent(id)}/steer`, vAccepted, {
+      method: "POST",
+      body,
+    });
+  },
+  abort: (id: string) =>
+    request(`/api/v1/sessions/${encodeURIComponent(id)}/abort`, vVoid, { method: "POST" }),
+  setModel: (id: string, provider: string, modelId: string) =>
+    request(
+      `/api/v1/sessions/${encodeURIComponent(id)}/model`,
+      (v, s) => {
+        if (!isObject(v) || typeof v.provider !== "string" || typeof v.modelId !== "string") {
+          fail(s, "expected { provider, modelId }");
+        }
+        return { provider: v.provider, modelId: v.modelId };
+      },
+      { method: "POST", body: { provider, modelId } },
+    ),
+
+  // ---------------- config ----------------
+  getModelsJson: () => request("/api/v1/config/models", vModelsJson),
+  setModelsJson: (data: { providers: Record<string, unknown> }) =>
+    request("/api/v1/config/models", vModelsJson, { method: "PUT", body: data }),
+  getProviders: () => request("/api/v1/config/providers", vProvidersListing),
+  getSettings: () => request("/api/v1/config/settings", vSettings),
+  updateSettings: (patch: Record<string, unknown>) =>
+    request("/api/v1/config/settings", vSettings, { method: "PUT", body: patch }),
+  getAuthSummary: () => request("/api/v1/config/auth", vAuthSummary),
+  setApiKey: (provider: string, apiKey: string) =>
+    request(
+      `/api/v1/config/auth/${encodeURIComponent(provider)}`,
+      (v, s) => {
+        if (!isObject(v) || typeof v.provider !== "string" || v.configured !== true) {
+          fail(s, "expected { provider, configured: true }");
+        }
+        return { provider: v.provider as string, configured: true as const };
+      },
+      { method: "PUT", body: { apiKey } },
+    ),
+  removeApiKey: (provider: string) =>
+    request(`/api/v1/config/auth/${encodeURIComponent(provider)}`, vVoid, {
+      method: "DELETE",
+    }),
+  listSkills: (projectId: string) =>
+    request(`/api/v1/config/skills?projectId=${encodeURIComponent(projectId)}`, vSkillsList),
+  setSkillEnabled: (projectId: string, name: string, enabled: boolean) =>
+    request(
+      `/api/v1/config/skills/${encodeURIComponent(name)}/enabled?projectId=${encodeURIComponent(projectId)}`,
+      vSkillsList,
+      { method: "PUT", body: { enabled } },
+    ),
 };
 
 // Export string validator for routes that return a bare string in future phases.

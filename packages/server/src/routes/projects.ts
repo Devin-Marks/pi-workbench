@@ -14,6 +14,7 @@ import {
   readProjects,
   renameProject,
 } from "../project-manager.js";
+import { errorSchema } from "./_schemas.js";
 
 const projectSchema = {
   type: "object",
@@ -93,9 +94,9 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
         },
         response: {
           201: projectSchema,
-          400: { type: "object", properties: { error: { type: "string" } } },
-          403: { type: "object", properties: { error: { type: "string" } } },
-          409: { type: "object", properties: { error: { type: "string" } } },
+          400: errorSchema,
+          403: errorSchema,
+          409: errorSchema,
         },
       },
     },
@@ -128,8 +129,8 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
         },
         response: {
           200: projectSchema,
-          400: { type: "object", properties: { error: { type: "string" } } },
-          404: { type: "object", properties: { error: { type: "string" } } },
+          400: errorSchema,
+          404: errorSchema,
         },
       },
     },
@@ -155,7 +156,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
         },
         response: {
           204: { type: "null" },
-          404: { type: "object", properties: { error: { type: "string" } } },
+          404: errorSchema,
         },
       },
     },
@@ -182,7 +183,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
         },
         response: {
           200: projectSchema,
-          404: { type: "object", properties: { error: { type: "string" } } },
+          404: errorSchema,
         },
       },
     },
@@ -227,8 +228,8 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
               },
             },
           },
-          400: { type: "object", properties: { error: { type: "string" } } },
-          403: { type: "object", properties: { error: { type: "string" } } },
+          400: errorSchema,
+          403: errorSchema,
         },
       },
     },
@@ -269,9 +270,9 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
             required: ["path"],
             properties: { path: { type: "string" } },
           },
-          400: { type: "object", properties: { error: { type: "string" } } },
-          403: { type: "object", properties: { error: { type: "string" } } },
-          409: { type: "object", properties: { error: { type: "string" } } },
+          400: errorSchema,
+          403: errorSchema,
+          409: errorSchema,
         },
       },
     },

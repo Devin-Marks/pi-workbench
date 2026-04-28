@@ -1,0 +1,638 @@
+import { create } from "zustand";
+import { api, ApiError, type SessionSummary, type UnifiedSession } from "../lib/api-client";
+import { streamSSE } from "../lib/sse-client";
+
+const ACTIVE_SESSION_KEY = "pi-workbench/active-session-id";
+
+/**
+ * Stable empty constants for Zustand selectors. React 18's useSyncExternalStore
+ * (which Zustand uses) treats every new reference as "state changed" — so a
+ * selector like `(s) => s.byProject[id] ?? []` returns a fresh `[]` each call
+ * and the equality check fails on every render, triggering an infinite
+ * re-render loop ("Maximum update depth exceeded"). The fix is to default to
+ * the SAME reference on every miss. Selectors should hand callers these.
+ */
+export const EMPTY_SESSIONS: UnifiedSession[] = [];
+export const EMPTY_MESSAGES: AgentMessageLike[] = [];
+export const EMPTY_STRING = "";
+
+/**
+ * Per-session pending streaming-text delta buffer + RAF id. We accumulate
+ * `message_update` text deltas here and flush at most once per animation
+ * frame. Without this, fast-token providers (200+ tokens/sec) trigger a
+ * Zustand `set` per token → React re-render storm → visible UI jank.
+ *
+ * Module-scoped (not in store state) on purpose — this is render-rate
+ * machinery, not user-facing data, and shouldn't trigger Zustand
+ * subscribers.
+ */
+const pendingDeltas = new Map<string, string>();
+const pendingRaf = new Map<string, number>();
+
+/**
+ * Inflight messages-refetch state per session. We refetch on intra-turn
+ * milestones (message_end, tool_execution_end, tool_result) so toolCall
+ * blocks and tool results materialize WHILE the agent is running, not
+ * only at agent_end. Without these refetches, a long bash followed by a
+ * read followed by a write would all appear in one batch when the turn
+ * ends — the user has no idea what's happening in the meantime.
+ *
+ * Coalescing rules:
+ *   - inflight = true while a fetch is in flight; concurrent triggers
+ *     just set queued = true so we run exactly one more pass after.
+ *   - the fetch itself uses the same merge as agent_end: replace the
+ *     authoritative messages array. Streaming text/active-tool are
+ *     untouched here.
+ */
+interface RefetchState {
+  inflight: boolean;
+  queued: boolean;
+}
+const refetchState = new Map<string, RefetchState>();
+
+/**
+ * Phase 8 keeps the message type loose — pi's AgentMessage union is rich
+ * (UserMessage, AssistantMessage with content blocks, ToolResultMessage,
+ * BashExecutionMessage, etc.) and the chat view rendering matches on
+ * `role`/`type` shapes at runtime. A typed import from
+ * `@mariozechner/pi-agent-core` would couple the client bundle to the SDK
+ * version and bloat it; the runtime check at the renderer boundary is
+ * cheaper.
+ */
+export type AgentMessageLike = { role?: string; type?: string; [k: string]: unknown };
+
+/**
+ * Compact summary of the tool currently running on the agent. We pull a
+ * one-line summary out of the SDK's `tool_execution_start` event so the
+ * chat view can render "running `bash`: `ls`" instead of "Thinking…".
+ */
+export interface ActiveTool {
+  name: string;
+  /** Optional one-line context (filename, command, etc.) — best-effort. */
+  summary?: string;
+}
+
+/**
+ * Wire-shape of an SSE event from the bridge. `snapshot` carries the full
+ * messages array on connect; everything else is an AgentSessionEvent
+ * variant whose `type` discriminates how the store handles it.
+ */
+export interface IncomingEvent {
+  type: string;
+  sessionId?: string;
+  projectId?: string;
+  messages?: AgentMessageLike[];
+  isStreaming?: boolean;
+  // assistant-message events carry incremental updates the renderer
+  // hydrates by replaying snapshot's `messages` array.
+  [k: string]: unknown;
+}
+
+interface SessionState {
+  /** Sessions per project, deduped + recency-sorted (matches GET /sessions). */
+  byProject: Record<string, UnifiedSession[]>;
+  /** Active session id (persisted across reload). */
+  activeSessionId: string | undefined;
+  /** Per-session SSE-fed message arrays, keyed by sessionId. */
+  messagesBySession: Record<string, AgentMessageLike[]>;
+  /** Per-session streaming state from snapshot/agent_start/agent_end. */
+  streamingBySession: Record<string, boolean>;
+  /** Per-session last-known toolEvent + retry banners (lightly modelled). */
+  bannerBySession: Record<string, string | undefined>;
+  /**
+   * Live assistant text being streamed in by message_update events. Reset on
+   * agent_start, accumulates deltas, cleared on agent_end (the authoritative
+   * messages array refetched by `getMessages` then carries the final text).
+   */
+  streamingTextBySession: Record<string, string>;
+  /**
+   * Per-session "agent is currently running tool X" indicator. Set on
+   * tool_execution_start, cleared on tool_execution_end. The chat view
+   * surfaces this in place of the generic "Thinking…" placeholder so the
+   * user sees what the agent is actually doing (running bash, reading a
+   * file, etc.) instead of an opaque spinner.
+   */
+  activeToolBySession: Record<string, ActiveTool | undefined>;
+  /** Per-session abort controller for the open SSE stream, if any. */
+  controllers: Map<string, AbortController>;
+  /** Errors surfaced from API calls (sticky until next successful op). */
+  error: string | undefined;
+  loadingList: boolean;
+
+  loadSessionsForProject: (projectId: string) => Promise<void>;
+  createSession: (projectId: string) => Promise<SessionSummary>;
+  renameSession: (sessionId: string, name: string) => Promise<void>;
+  setActiveSession: (sessionId: string | undefined) => void;
+  openStream: (sessionId: string) => void;
+  closeStream: (sessionId: string) => void;
+  sendPrompt: (sessionId: string, text: string) => Promise<void>;
+  sendSteer: (sessionId: string, text: string, mode?: "steer" | "followUp") => Promise<void>;
+  abortSession: (sessionId: string) => Promise<void>;
+  disposeSession: (sessionId: string) => Promise<void>;
+}
+
+export const useSessionStore = create<SessionState>((set, get) => ({
+  byProject: {},
+  activeSessionId: localStorage.getItem(ACTIVE_SESSION_KEY) ?? undefined,
+  messagesBySession: {},
+  streamingBySession: {},
+  bannerBySession: {},
+  streamingTextBySession: {},
+  activeToolBySession: {},
+  controllers: new Map(),
+  error: undefined,
+  loadingList: false,
+
+  loadSessionsForProject: async (projectId) => {
+    set({ loadingList: true, error: undefined });
+    try {
+      const { sessions } = await api.listSessions(projectId);
+      set((s) => ({
+        byProject: { ...s.byProject, [projectId]: sessions },
+        loadingList: false,
+      }));
+    } catch (err) {
+      set({
+        loadingList: false,
+        error: err instanceof ApiError ? err.code : (err as Error).message,
+      });
+    }
+  },
+
+  createSession: async (projectId) => {
+    set({ error: undefined });
+    try {
+      const summary = await api.createSession(projectId);
+      // Optimistic insert into the project's session list so the sidebar
+      // updates immediately without a refetch.
+      const unified: UnifiedSession = {
+        sessionId: summary.sessionId,
+        projectId: summary.projectId,
+        isLive: true,
+        workspacePath: summary.workspacePath,
+        lastActivityAt: summary.lastActivityAt,
+        createdAt: summary.createdAt,
+        messageCount: summary.messageCount,
+        firstMessage: "",
+      };
+      if (summary.name !== undefined) unified.name = summary.name;
+      set((s) => {
+        const existing = s.byProject[projectId] ?? [];
+        return {
+          byProject: { ...s.byProject, [projectId]: [unified, ...existing] },
+          activeSessionId: summary.sessionId,
+        };
+      });
+      localStorage.setItem(ACTIVE_SESSION_KEY, summary.sessionId);
+      return summary;
+    } catch (err) {
+      set({ error: err instanceof ApiError ? err.code : (err as Error).message });
+      throw err;
+    }
+  },
+
+  renameSession: async (sessionId, name) => {
+    set({ error: undefined });
+    try {
+      const summary = await api.renameSession(sessionId, name);
+      // Propagate the new name into every project's session list so the
+      // sidebar updates without a refetch. The summary's `name` is
+      // undefined when cleared — mirror that into the unified shape.
+      set((s) => {
+        const byProject: Record<string, UnifiedSession[]> = {};
+        for (const [pid, list] of Object.entries(s.byProject)) {
+          byProject[pid] = list.map((u) => {
+            if (u.sessionId !== sessionId) return u;
+            const next: UnifiedSession = { ...u };
+            if (summary.name !== undefined) next.name = summary.name;
+            else delete next.name;
+            return next;
+          });
+        }
+        return { byProject };
+      });
+    } catch (err) {
+      set({ error: err instanceof ApiError ? err.code : (err as Error).message });
+      throw err;
+    }
+  },
+
+  setActiveSession: (sessionId) => {
+    if (sessionId !== undefined) localStorage.setItem(ACTIVE_SESSION_KEY, sessionId);
+    else localStorage.removeItem(ACTIVE_SESSION_KEY);
+    set({ activeSessionId: sessionId });
+  },
+
+  openStream: (sessionId) => {
+    const existing = get().controllers.get(sessionId);
+    if (existing !== undefined) return; // already open
+    const ctrl = new AbortController();
+    get().controllers.set(sessionId, ctrl);
+
+    void streamSSE<IncomingEvent>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/stream`, {
+      signal: ctrl.signal,
+      onEvent: (event) => applyEvent(set, get, sessionId, event),
+      onClose: () => {
+        get().controllers.delete(sessionId);
+      },
+      onReconnect: ({ attempt, delayMs, reason }) => {
+        set((s) => ({
+          bannerBySession: {
+            ...s.bannerBySession,
+            [sessionId]: `Reconnecting (attempt ${attempt}, ${Math.round(delayMs / 1000)}s) — ${reason}`,
+          },
+        }));
+      },
+    }).catch((err: unknown) => {
+      // streamSSE returns AbortError as a normal resolution; only real
+      // errors reach here. Surface as a banner; the user can re-select.
+      const code = err instanceof ApiError ? err.code : (err as Error).message;
+      set((s) => ({
+        bannerBySession: { ...s.bannerBySession, [sessionId]: `stream error: ${code}` },
+      }));
+      get().controllers.delete(sessionId);
+    });
+  },
+
+  closeStream: (sessionId) => {
+    const ctrl = get().controllers.get(sessionId);
+    if (ctrl !== undefined) {
+      ctrl.abort();
+      get().controllers.delete(sessionId);
+    }
+  },
+
+  sendPrompt: async (sessionId, text) => {
+    set({ error: undefined });
+    // Optimistically append the user message so the chat reflects the input
+    // immediately. If the server rejects (no API key, no model, etc.) the
+    // catch below rolls it back. If it accepts, the eventual messages
+    // refetch on agent_end will replace this with the canonical entry.
+    const optimistic: AgentMessageLike = {
+      role: "user",
+      content: text,
+      timestamp: Date.now(),
+    };
+    set((s) => ({
+      messagesBySession: {
+        ...s.messagesBySession,
+        [sessionId]: [...(s.messagesBySession[sessionId] ?? []), optimistic],
+      },
+    }));
+    try {
+      await api.prompt(sessionId, text);
+    } catch (err) {
+      // Roll back the optimistic append on failure.
+      set((s) => {
+        const cur = s.messagesBySession[sessionId] ?? [];
+        return {
+          messagesBySession: {
+            ...s.messagesBySession,
+            [sessionId]: cur.filter((m) => m !== optimistic),
+          },
+          error: err instanceof ApiError ? err.code : (err as Error).message,
+          bannerBySession: {
+            ...s.bannerBySession,
+            [sessionId]:
+              err instanceof ApiError
+                ? `prompt rejected: ${err.code}${err.message !== `${err.status} ${err.code}` ? ` — ${err.message}` : ""}`
+                : `prompt rejected: ${(err as Error).message}`,
+          },
+        };
+      });
+      throw err;
+    }
+  },
+
+  sendSteer: async (sessionId, text, mode) => {
+    set({ error: undefined });
+    try {
+      await api.steer(sessionId, text, mode);
+    } catch (err) {
+      set({ error: err instanceof ApiError ? err.code : (err as Error).message });
+      throw err;
+    }
+  },
+
+  abortSession: async (sessionId) => {
+    set({ error: undefined });
+    try {
+      await api.abort(sessionId);
+    } catch (err) {
+      set({ error: err instanceof ApiError ? err.code : (err as Error).message });
+    }
+  },
+
+  disposeSession: async (sessionId) => {
+    set({ error: undefined });
+    try {
+      get().closeStream(sessionId);
+      await api.disposeSession(sessionId);
+      set((s) => {
+        const nextMessages = { ...s.messagesBySession };
+        delete nextMessages[sessionId];
+        const nextStreaming = { ...s.streamingBySession };
+        delete nextStreaming[sessionId];
+        const nextBanner = { ...s.bannerBySession };
+        delete nextBanner[sessionId];
+        const nextStreamingText = { ...s.streamingTextBySession };
+        delete nextStreamingText[sessionId];
+        const nextActiveTool = { ...s.activeToolBySession };
+        delete nextActiveTool[sessionId];
+        // Drop the session from any project's list it may live in.
+        const byProject: Record<string, UnifiedSession[]> = {};
+        for (const [pid, list] of Object.entries(s.byProject)) {
+          byProject[pid] = list.filter((u) => u.sessionId !== sessionId);
+        }
+        return {
+          messagesBySession: nextMessages,
+          streamingBySession: nextStreaming,
+          bannerBySession: nextBanner,
+          streamingTextBySession: nextStreamingText,
+          activeToolBySession: nextActiveTool,
+          byProject,
+          activeSessionId: s.activeSessionId === sessionId ? undefined : s.activeSessionId,
+        };
+      });
+      if (get().activeSessionId === undefined) {
+        localStorage.removeItem(ACTIVE_SESSION_KEY);
+      }
+    } catch (err) {
+      set({ error: err instanceof ApiError ? err.code : (err as Error).message });
+    }
+  },
+}));
+
+/**
+ * Single dispatch point for SSE events. The bridge sends a `snapshot` first;
+ * subsequent events are AgentSessionEvent variants. We coarsely re-fetch the
+ * session's messages array on terminal events (agent_end, tool_result, etc.)
+ * to stay correct without modelling every incremental delta — the bandwidth
+ * is fine for chat-tier traffic and avoids drift between SDK message shapes.
+ */
+function applyEvent(
+  set: (update: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
+  get: () => SessionState,
+  sessionId: string,
+  event: IncomingEvent,
+): void {
+  if (event.type === "snapshot") {
+    // Clear any "Reconnecting…" banner — snapshot arriving means we're
+    // back online with fresh server state. Active-tool also resets:
+    // tool execution events fire fresh after a reconnect; an old badge
+    // would otherwise stick around indefinitely.
+    set((s) => ({
+      messagesBySession: {
+        ...s.messagesBySession,
+        [sessionId]: event.messages ?? [],
+      },
+      streamingBySession: {
+        ...s.streamingBySession,
+        [sessionId]: event.isStreaming ?? false,
+      },
+      bannerBySession: { ...s.bannerBySession, [sessionId]: undefined },
+      activeToolBySession: { ...s.activeToolBySession, [sessionId]: undefined },
+    }));
+    return;
+  }
+
+  if (event.type === "agent_start") {
+    // Drop any RAF + buffered deltas left over from a prior turn so they
+    // don't bleed into the new bubble.
+    const stale = pendingRaf.get(sessionId);
+    if (stale !== undefined) cancelAnimationFrame(stale);
+    pendingRaf.delete(sessionId);
+    pendingDeltas.delete(sessionId);
+    set((s) => ({
+      streamingBySession: { ...s.streamingBySession, [sessionId]: true },
+      streamingTextBySession: { ...s.streamingTextBySession, [sessionId]: "" },
+      bannerBySession: { ...s.bannerBySession, [sessionId]: undefined },
+    }));
+    return;
+  }
+
+  if (event.type === "agent_end") {
+    // Cancel the pending RAF — the post-end refetch supersedes any
+    // unflushed deltas.
+    const raf = pendingRaf.get(sessionId);
+    if (raf !== undefined) cancelAnimationFrame(raf);
+    pendingRaf.delete(sessionId);
+    pendingDeltas.delete(sessionId);
+    // Refetch authoritative messages, then clear streaming state. Order
+    // matters — the messages array must be in place before the renderer
+    // drops the streamingText bubble or we'd see a momentary gap.
+    void api
+      .getMessages(sessionId)
+      .then(({ messages }) => {
+        set((s) => ({
+          messagesBySession: { ...s.messagesBySession, [sessionId]: messages },
+          streamingBySession: { ...s.streamingBySession, [sessionId]: false },
+          streamingTextBySession: { ...s.streamingTextBySession, [sessionId]: "" },
+          activeToolBySession: { ...s.activeToolBySession, [sessionId]: undefined },
+        }));
+      })
+      .catch(() => {
+        // If the refetch fails, at least flip streaming off so the
+        // input re-enables. The chat view stays out-of-date until
+        // the next interaction.
+        set((s) => ({
+          streamingBySession: { ...s.streamingBySession, [sessionId]: false },
+          activeToolBySession: { ...s.activeToolBySession, [sessionId]: undefined },
+        }));
+      });
+    return;
+  }
+
+  if (event.type === "tool_execution_start") {
+    // The SDK's tool_execution_start carries `toolName` and an `input`
+    // object whose shape varies per tool. Pull a one-line summary out
+    // best-effort: filename for read/write/edit, command for bash,
+    // first arg/key otherwise. The renderer falls back to bare
+    // `running <name>` when summary is undefined.
+    const name = typeof event.toolName === "string" ? event.toolName : "tool";
+    const input = (event.input ?? {}) as Record<string, unknown>;
+    const summary = summarizeToolInput(name, input);
+    const tool: ActiveTool = summary !== undefined ? { name, summary } : { name };
+    set((s) => ({
+      activeToolBySession: { ...s.activeToolBySession, [sessionId]: tool },
+    }));
+    // Refetch so the assistant message containing the toolCall block
+    // becomes visible immediately (the SDK finalizes the assistant
+    // message right before it kicks off tool execution).
+    scheduleMessagesRefetch(set, sessionId);
+    return;
+  }
+
+  if (event.type === "tool_execution_end") {
+    set((s) => ({
+      activeToolBySession: { ...s.activeToolBySession, [sessionId]: undefined },
+    }));
+    // Refetch so the toolResult message (and any updated assistant
+    // bubble) shows up before the next tool fires. Without this the
+    // user sees a stretch of "running …" badges with no output.
+    scheduleMessagesRefetch(set, sessionId);
+    return;
+  }
+
+  if (event.type === "message_end" || event.type === "tool_result") {
+    // Fallbacks for SDK variants that don't emit tool_execution_end (or
+    // that finalize an assistant message containing a toolCall before
+    // any execution event fires).
+    scheduleMessagesRefetch(set, sessionId);
+    return;
+  }
+
+  if (event.type === "message_update") {
+    // Accumulate text deltas into the streaming bubble. The pi SDK's
+    // message_update wraps an `assistantMessageEvent` with `type: "text_delta"`
+    // and a `delta` string for incremental tokens. Other delta types
+    // (thinking, tool_call) we ignore here — they show up in the
+    // refetched messages array on agent_end.
+    const inner = event.assistantMessageEvent;
+    if (
+      typeof inner === "object" &&
+      inner !== null &&
+      (inner as { type?: string }).type === "text_delta" &&
+      typeof (inner as { delta?: unknown }).delta === "string"
+    ) {
+      const delta = (inner as { delta: string }).delta;
+      // RAF-coalesce: accumulate the delta in a module-scope buffer; flush
+      // once per frame (~16ms) instead of once per token. Cuts re-render
+      // pressure under fast-token providers without changing the final
+      // displayed text.
+      pendingDeltas.set(sessionId, (pendingDeltas.get(sessionId) ?? "") + delta);
+      if (!pendingRaf.has(sessionId)) {
+        const raf = requestAnimationFrame(() => {
+          pendingRaf.delete(sessionId);
+          const buffered = pendingDeltas.get(sessionId) ?? "";
+          if (buffered.length === 0) return;
+          pendingDeltas.delete(sessionId);
+          set((s) => ({
+            streamingTextBySession: {
+              ...s.streamingTextBySession,
+              [sessionId]: (s.streamingTextBySession[sessionId] ?? "") + buffered,
+            },
+          }));
+        });
+        pendingRaf.set(sessionId, raf);
+      }
+    }
+    return;
+  }
+
+  if (event.type === "compaction_start") {
+    set((s) => ({
+      bannerBySession: { ...s.bannerBySession, [sessionId]: "Compacting context…" },
+    }));
+    return;
+  }
+  if (event.type === "compaction_end") {
+    set((s) => ({
+      bannerBySession: { ...s.bannerBySession, [sessionId]: undefined },
+    }));
+    return;
+  }
+  if (event.type === "auto_retry_start") {
+    const attempt = typeof event.attempt === "number" ? event.attempt : "?";
+    const max = typeof event.maxAttempts === "number" ? event.maxAttempts : "?";
+    set((s) => ({
+      bannerBySession: {
+        ...s.bannerBySession,
+        [sessionId]: `Retrying (${attempt}/${max})…`,
+      },
+    }));
+    return;
+  }
+  if (event.type === "auto_retry_end") {
+    set((s) => ({
+      bannerBySession: { ...s.bannerBySession, [sessionId]: undefined },
+    }));
+    return;
+  }
+
+  // For message_*/tool_*/turn_* events the chat surface in Phase 8 displays
+  // the latest authoritative state by re-fetching on agent_end (above).
+  // Phase 9+ can add finer-grained delta application if streaming feels
+  // janky on slow connections.
+  void event;
+  void get;
+}
+
+/**
+ * Coalesced messages refetch. Fires getMessages and writes the result
+ * into messagesBySession. While a fetch is inflight, additional triggers
+ * mark `queued` and the same fetcher runs once more after the in-flight
+ * one resolves — so a burst of tool_execution_end events collapses into
+ * at most two fetches instead of N.
+ */
+function scheduleMessagesRefetch(
+  set: (update: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
+  sessionId: string,
+): void {
+  const st = refetchState.get(sessionId) ?? { inflight: false, queued: false };
+  if (st.inflight) {
+    st.queued = true;
+    refetchState.set(sessionId, st);
+    return;
+  }
+  st.inflight = true;
+  refetchState.set(sessionId, st);
+
+  const run = (): Promise<void> =>
+    api
+      .getMessages(sessionId)
+      .then(({ messages }) => {
+        set((s) => ({
+          messagesBySession: { ...s.messagesBySession, [sessionId]: messages },
+        }));
+      })
+      .catch(() => {
+        // Refetch failures are non-fatal — the next event (or
+        // agent_end) will resync. The chat just stays a beat stale.
+      });
+
+  void run().finally(() => {
+    const cur = refetchState.get(sessionId);
+    if (cur === undefined) return;
+    if (cur.queued) {
+      cur.queued = false;
+      cur.inflight = false;
+      refetchState.set(sessionId, cur);
+      scheduleMessagesRefetch(set, sessionId);
+    } else {
+      refetchState.delete(sessionId);
+    }
+  });
+}
+
+/**
+ * Best-effort one-line context for the active-tool badge. Pi's tool
+ * input shapes are tool-specific; we try the common fields and fall
+ * back to undefined (the badge then renders the tool name only).
+ */
+function summarizeToolInput(name: string, input: Record<string, unknown>): string | undefined {
+  const get = (k: string): string | undefined => {
+    const v = input[k];
+    return typeof v === "string" && v.length > 0 ? v : undefined;
+  };
+  switch (name) {
+    case "bash":
+      return get("command");
+    case "read":
+    case "write":
+    case "edit":
+      return get("filePath") ?? get("path") ?? get("file");
+    case "grep":
+      return get("pattern");
+    case "glob":
+      return get("pattern") ?? get("path");
+    default: {
+      // Generic fallback: first string-valued field that looks human-friendly.
+      for (const key of ["path", "file", "filePath", "command", "pattern", "query", "url"]) {
+        const v = get(key);
+        if (v !== undefined) return v;
+      }
+      return undefined;
+    }
+  }
+}
