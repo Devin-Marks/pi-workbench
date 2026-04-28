@@ -14,9 +14,11 @@ import { FileBrowserPanel } from "./components/FileBrowserPanel";
 import { EditorPanel } from "./components/EditorPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { TurnDiffPanel } from "./components/TurnDiffPanel";
+import { GitPanel } from "./components/GitPanel";
 import { ResizableDivider } from "./components/ResizableDivider";
+import { useGitStatus } from "./hooks/useGitStatus";
 
-type RightPaneTab = "files" | "changes";
+type RightPaneTab = "files" | "changes" | "git";
 
 /* Persisted pane widths. Stored in localStorage so the user-tuned
    layout survives reloads. Defaults err on the side of "the chat is the
@@ -138,6 +140,12 @@ export function App() {
 
   const openFilesCount = useFileStore((s) => s.openFiles.length);
   const editorVisible = filesOpen && openFilesCount > 0;
+
+  // Drives the modified-file count badge on the Git tab. Polls every
+  // 5s via the hook regardless of which tab is currently visible —
+  // we want the badge to update even when the user is on Files.
+  const gitStatus = useGitStatus(active?.id);
+  const gitChangedCount = gitStatus.status?.files.length ?? 0;
 
   // Refresh the file tree on every agent_end the active project hears,
   // since the agent commonly writes/edits files mid-turn. We listen on
@@ -375,22 +383,33 @@ export function App() {
                       "Changes" view. Both share width + position so
                       they don't compete for screen real estate. */}
                   <div className="flex border-b border-neutral-800 bg-neutral-900/40">
-                    {(["files", "changes"] as const).map((t) => (
+                    {(["files", "changes", "git"] as const).map((t) => (
                       <button
                         key={t}
                         onClick={() => setRightTabPersisted(t)}
-                        className={`px-3 py-1.5 text-[11px] uppercase tracking-wider ${
+                        className={`flex items-center gap-1 px-3 py-1.5 text-[11px] uppercase tracking-wider ${
                           rightTab === t
                             ? "border-b border-neutral-100 text-neutral-100"
                             : "text-neutral-500 hover:text-neutral-300"
                         }`}
                       >
-                        {t === "files" ? "Files" : "Changes"}
+                        {t === "files" ? "Files" : t === "changes" ? "Changes" : "Git"}
+                        {t === "git" && gitChangedCount > 0 && (
+                          <span className="rounded bg-amber-900/40 px-1 py-0.5 text-[9px] text-amber-300">
+                            {gitChangedCount}
+                          </span>
+                        )}
                       </button>
                     ))}
                   </div>
                   <div className="flex-1 overflow-hidden">
-                    {rightTab === "files" ? <FileBrowserPanel /> : <TurnDiffPanel />}
+                    {rightTab === "files" ? (
+                      <FileBrowserPanel />
+                    ) : rightTab === "changes" ? (
+                      <TurnDiffPanel />
+                    ) : (
+                      <GitPanel />
+                    )}
                   </div>
                 </div>
               </>

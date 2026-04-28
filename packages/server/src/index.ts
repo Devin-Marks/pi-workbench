@@ -19,6 +19,7 @@ import { promptRoutes } from "./routes/prompt.js";
 import { controlRoutes } from "./routes/control.js";
 import { configRoutes } from "./routes/config.js";
 import { fileRoutes } from "./routes/files.js";
+import { gitRoutes } from "./routes/git.js";
 import { terminalRoutes } from "./routes/terminal.js";
 import { disposeAllSessions } from "./session-registry.js";
 import { disposeAllPtys } from "./pty-manager.js";
@@ -136,6 +137,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       await api.register(controlRoutes);
       await api.register(configRoutes);
       await api.register(fileRoutes);
+      await api.register(gitRoutes);
       await api.register(terminalRoutes);
     },
     { prefix: "/api/v1" },

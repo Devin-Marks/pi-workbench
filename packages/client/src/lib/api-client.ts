@@ -128,6 +128,61 @@ export interface TurnDiffEntry {
   isPureAddition: boolean;
 }
 
+export type GitFileStatusKind =
+  | "modified"
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "untracked"
+  | "ignored"
+  | "conflicted"
+  | "unknown";
+
+export interface GitFileStatus {
+  path: string;
+  staged: boolean;
+  unstaged: boolean;
+  kind: GitFileStatusKind;
+  code: string;
+  originalPath?: string;
+}
+
+export interface GitStatus {
+  isGitRepo: boolean;
+  branch?: string;
+  files: GitFileStatus[];
+}
+
+export interface GitDiffResponse {
+  isGitRepo: boolean;
+  diff: string;
+}
+
+export interface GitLogEntry {
+  hash: string;
+  message: string;
+  author: string;
+  date: string;
+}
+
+export interface GitLogResponse {
+  isGitRepo: boolean;
+  commits: GitLogEntry[];
+}
+
+export interface GitBranch {
+  name: string;
+  current: boolean;
+  remote: boolean;
+}
+
+export interface GitBranchesResponse {
+  isGitRepo: boolean;
+  current?: string;
+  branches: GitBranch[];
+}
+
 export function onUnauthorized(handler: () => void): () => void {
   const fn = (): void => handler();
   window.addEventListener(UNAUTHORIZED_EVENT, fn);
@@ -459,6 +514,88 @@ function vTurnDiff(value: unknown, status: number): { entries: TurnDiffEntry[] }
   };
 }
 
+function vGitStatus(value: unknown, status: number): GitStatus {
+  if (!isObject(value) || typeof value.isGitRepo !== "boolean" || !Array.isArray(value.files)) {
+    fail(status, "expected GitStatus");
+  }
+  const out: GitStatus = {
+    isGitRepo: value.isGitRepo,
+    files: value.files.map((f): GitFileStatus => {
+      if (
+        !isObject(f) ||
+        typeof f.path !== "string" ||
+        typeof f.staged !== "boolean" ||
+        typeof f.unstaged !== "boolean" ||
+        typeof f.kind !== "string" ||
+        typeof f.code !== "string"
+      ) {
+        fail(status, "expected GitFileStatus");
+      }
+      const entry: GitFileStatus = {
+        path: f.path,
+        staged: f.staged,
+        unstaged: f.unstaged,
+        kind: f.kind as GitFileStatusKind,
+        code: f.code,
+      };
+      if (typeof f.originalPath === "string") entry.originalPath = f.originalPath;
+      return entry;
+    }),
+  };
+  if (typeof value.branch === "string") out.branch = value.branch;
+  return out;
+}
+
+function vGitDiff(value: unknown, status: number): GitDiffResponse {
+  if (!isObject(value) || typeof value.isGitRepo !== "boolean" || typeof value.diff !== "string") {
+    fail(status, "expected GitDiffResponse");
+  }
+  return { isGitRepo: value.isGitRepo, diff: value.diff };
+}
+
+function vGitLog(value: unknown, status: number): GitLogResponse {
+  if (!isObject(value) || typeof value.isGitRepo !== "boolean" || !Array.isArray(value.commits)) {
+    fail(status, "expected GitLogResponse");
+  }
+  return {
+    isGitRepo: value.isGitRepo,
+    commits: value.commits.map((c): GitLogEntry => {
+      if (
+        !isObject(c) ||
+        typeof c.hash !== "string" ||
+        typeof c.message !== "string" ||
+        typeof c.author !== "string" ||
+        typeof c.date !== "string"
+      ) {
+        fail(status, "expected GitLogEntry");
+      }
+      return { hash: c.hash, message: c.message, author: c.author, date: c.date };
+    }),
+  };
+}
+
+function vGitBranches(value: unknown, status: number): GitBranchesResponse {
+  if (!isObject(value) || typeof value.isGitRepo !== "boolean" || !Array.isArray(value.branches)) {
+    fail(status, "expected GitBranchesResponse");
+  }
+  const out: GitBranchesResponse = {
+    isGitRepo: value.isGitRepo,
+    branches: value.branches.map((b): GitBranch => {
+      if (
+        !isObject(b) ||
+        typeof b.name !== "string" ||
+        typeof b.current !== "boolean" ||
+        typeof b.remote !== "boolean"
+      ) {
+        fail(status, "expected GitBranch");
+      }
+      return { name: b.name, current: b.current, remote: b.remote };
+    }),
+  };
+  if (typeof value.current === "string") out.current = value.current;
+  return out;
+}
+
 function vPathOnly(value: unknown, status: number): { path: string } {
   if (!isObject(value) || typeof value.path !== "string") {
     fail(status, "expected { path: string }");
@@ -679,6 +816,66 @@ export const api = {
   filesDelete: (projectId: string, path: string) => {
     const qs = new URLSearchParams({ projectId, path });
     return request(`/api/v1/files/delete?${qs.toString()}`, vVoid, { method: "DELETE" });
+  },
+
+  // ---------------- git ----------------
+  gitStatus: (projectId: string) =>
+    request(`/api/v1/git/status?projectId=${encodeURIComponent(projectId)}`, vGitStatus),
+  gitDiff: (projectId: string) =>
+    request(`/api/v1/git/diff?projectId=${encodeURIComponent(projectId)}`, vGitDiff),
+  gitDiffStaged: (projectId: string) =>
+    request(`/api/v1/git/diff/staged?projectId=${encodeURIComponent(projectId)}`, vGitDiff),
+  gitDiffFile: (projectId: string, path: string, staged: boolean) => {
+    const qs = new URLSearchParams({ projectId, path });
+    if (staged) qs.set("staged", "1");
+    return request(`/api/v1/git/diff/file?${qs.toString()}`, vGitDiff);
+  },
+  gitLog: (projectId: string, limit?: number) => {
+    const qs = new URLSearchParams({ projectId });
+    if (limit !== undefined) qs.set("limit", String(limit));
+    return request(`/api/v1/git/log?${qs.toString()}`, vGitLog);
+  },
+  gitBranches: (projectId: string) =>
+    request(`/api/v1/git/branches?projectId=${encodeURIComponent(projectId)}`, vGitBranches),
+  gitStage: (projectId: string, paths: string[]) =>
+    request(
+      "/api/v1/git/stage",
+      (v, s) => {
+        if (!isObject(v) || v.ok !== true) fail(s, "expected { ok: true }");
+        return { ok: true as const };
+      },
+      { method: "POST", body: { projectId, paths } },
+    ),
+  gitUnstage: (projectId: string, paths: string[]) =>
+    request(
+      "/api/v1/git/unstage",
+      (v, s) => {
+        if (!isObject(v) || v.ok !== true) fail(s, "expected { ok: true }");
+        return { ok: true as const };
+      },
+      { method: "POST", body: { projectId, paths } },
+    ),
+  gitCommit: (projectId: string, message: string) =>
+    request(
+      "/api/v1/git/commit",
+      (v, s) => {
+        if (!isObject(v) || typeof v.hash !== "string") fail(s, "expected { hash }");
+        return { hash: v.hash };
+      },
+      { method: "POST", body: { projectId, message } },
+    ),
+  gitPush: (projectId: string, opts?: { remote?: string; branch?: string }) => {
+    const body: Record<string, unknown> = { projectId };
+    if (opts?.remote !== undefined) body.remote = opts.remote;
+    if (opts?.branch !== undefined) body.branch = opts.branch;
+    return request(
+      "/api/v1/git/push",
+      (v, s) => {
+        if (!isObject(v) || typeof v.output !== "string") fail(s, "expected { output }");
+        return { output: v.output };
+      },
+      { method: "POST", body },
+    );
   },
 };
 
