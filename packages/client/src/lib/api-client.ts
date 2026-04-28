@@ -103,6 +103,22 @@ export interface AuthSummary {
   providers: Record<string, { configured: boolean; source?: string; label?: string }>;
 }
 
+export interface FileTreeNode {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  children?: FileTreeNode[];
+  truncated?: boolean;
+}
+
+export interface FileReadResponse {
+  path: string;
+  content: string;
+  size: number;
+  language: string;
+  binary: boolean;
+}
+
 export function onUnauthorized(handler: () => void): () => void {
   const fn = (): void => handler();
   window.addEventListener(UNAUTHORIZED_EVENT, fn);
@@ -367,6 +383,51 @@ function vModelsJson(value: unknown, status: number): { providers: Record<string
   return value as { providers: Record<string, unknown> };
 }
 
+function vFileTreeNode(value: unknown, status: number): FileTreeNode {
+  if (!isObject(value)) fail(status, "expected FileTreeNode");
+  const type = value.type;
+  if (
+    typeof value.name !== "string" ||
+    typeof value.path !== "string" ||
+    (type !== "file" && type !== "directory")
+  ) {
+    fail(status, "expected FileTreeNode");
+  }
+  const out: FileTreeNode = { name: value.name, path: value.path, type };
+  if (Array.isArray(value.children)) {
+    out.children = value.children.map((c) => vFileTreeNode(c, status));
+  }
+  if (typeof value.truncated === "boolean") out.truncated = value.truncated;
+  return out;
+}
+
+function vFileRead(value: unknown, status: number): FileReadResponse {
+  if (
+    !isObject(value) ||
+    typeof value.path !== "string" ||
+    typeof value.content !== "string" ||
+    typeof value.size !== "number" ||
+    typeof value.language !== "string" ||
+    typeof value.binary !== "boolean"
+  ) {
+    fail(status, "expected FileReadResponse");
+  }
+  return {
+    path: value.path,
+    content: value.content,
+    size: value.size,
+    language: value.language,
+    binary: value.binary,
+  };
+}
+
+function vPathOnly(value: unknown, status: number): { path: string } {
+  if (!isObject(value) || typeof value.path !== "string") {
+    fail(status, "expected { path: string }");
+  }
+  return { path: value.path };
+}
+
 function safeParseJson(text: string): { ok: true; value: unknown } | { ok: false } {
   if (text === "") return { ok: true, value: undefined };
   try {
@@ -544,6 +605,41 @@ export const api = {
       vSkillsList,
       { method: "PUT", body: { enabled } },
     ),
+
+  // ---------------- files ----------------
+  filesTree: (projectId: string, maxDepth?: number) => {
+    const qs = new URLSearchParams({ projectId });
+    if (maxDepth !== undefined) qs.set("maxDepth", String(maxDepth));
+    return request(`/api/v1/files/tree?${qs.toString()}`, vFileTreeNode);
+  },
+  filesRead: (projectId: string, path: string) => {
+    const qs = new URLSearchParams({ projectId, path });
+    return request(`/api/v1/files/read?${qs.toString()}`, vFileRead);
+  },
+  filesWrite: (projectId: string, path: string, content: string) =>
+    request("/api/v1/files/write", vPathOnly, {
+      method: "PUT",
+      body: { projectId, path, content },
+    }),
+  filesMkdir: (projectId: string, parentPath: string, name: string) =>
+    request("/api/v1/files/mkdir", vPathOnly, {
+      method: "POST",
+      body: { projectId, parentPath, name },
+    }),
+  filesRename: (projectId: string, path: string, name: string) =>
+    request("/api/v1/files/rename", vPathOnly, {
+      method: "POST",
+      body: { projectId, path, name },
+    }),
+  filesMove: (projectId: string, src: string, dest: string) =>
+    request("/api/v1/files/move", vPathOnly, {
+      method: "POST",
+      body: { projectId, src, dest },
+    }),
+  filesDelete: (projectId: string, path: string) => {
+    const qs = new URLSearchParams({ projectId, path });
+    return request(`/api/v1/files/delete?${qs.toString()}`, vVoid, { method: "DELETE" });
+  },
 };
 
 // Export string validator for routes that return a bare string in future phases.

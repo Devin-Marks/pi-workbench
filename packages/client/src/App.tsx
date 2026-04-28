@@ -1,13 +1,59 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { FolderTree } from "lucide-react";
 import { useAuthStore } from "./store/auth-store";
 import { useActiveProject, useProjectStore } from "./store/project-store";
 import { useSessionStore } from "./store/session-store";
+import { useFileStore } from "./store/file-store";
 import { LoginScreen } from "./components/LoginScreen";
 import { ProjectSidebar } from "./components/ProjectSidebar";
 import { ProjectPicker } from "./components/ProjectPicker";
 import { ChatView } from "./components/ChatView";
 import { ChatInput } from "./components/ChatInput";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { FileBrowserPanel } from "./components/FileBrowserPanel";
+import { EditorPanel } from "./components/EditorPanel";
+import { ResizableDivider } from "./components/ResizableDivider";
+
+/* Persisted pane widths. Stored in localStorage so the user-tuned
+   layout survives reloads. Defaults err on the side of "the chat is the
+   primary surface" — files is narrow, editor is medium. */
+const FILES_WIDTH_KEY = "pi-workbench/files-width";
+const EDITOR_WIDTH_KEY = "pi-workbench/editor-width";
+const DEFAULT_FILES_WIDTH = 280;
+const DEFAULT_EDITOR_WIDTH = 480;
+const MIN_FILES_WIDTH = 200;
+const MIN_EDITOR_WIDTH = 320;
+const MIN_CHAT_WIDTH = 320;
+
+function readPersistedWidth(key: string, fallback: number): number {
+  const raw = localStorage.getItem(key);
+  if (raw === null) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
+ * Best-effort extraction of the affected file path from a write/edit
+ * tool_result message. The SDK's exact field name varies across
+ * versions and tool flavours; we try the common ones (same heuristic
+ * the chat renderer uses for the tool-call summary).
+ */
+function extractToolFilePath(message: Record<string, unknown>): string | undefined {
+  const details = message.details as
+    | { path?: unknown; filePath?: unknown; file?: unknown; file_path?: unknown }
+    | undefined;
+  const input = message.input as
+    | { path?: unknown; filePath?: unknown; file?: unknown; file_path?: unknown }
+    | undefined;
+  for (const src of [details, input]) {
+    if (src === undefined) continue;
+    if (typeof src.path === "string") return src.path;
+    if (typeof src.filePath === "string") return src.filePath;
+    if (typeof src.file === "string") return src.file;
+    if (typeof src.file_path === "string") return src.file_path;
+  }
+  return undefined;
+}
 
 const noop = (): void => undefined;
 
@@ -27,6 +73,106 @@ export function App() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Files pane visibility persists across reloads — opening it once is
+  // a strong signal the user wants it. localStorage > a session-scoped
+  // boolean so a refresh doesn't snap back to "hidden".
+  const [filesOpen, setFilesOpen] = useState<boolean>(
+    () => localStorage.getItem("pi-workbench/files-open") === "true",
+  );
+  const setFilesOpenPersisted = (v: boolean): void => {
+    setFilesOpen(v);
+    localStorage.setItem("pi-workbench/files-open", v ? "true" : "false");
+  };
+
+  // Pane widths (px). Persisted on every drag-end via the ref; we keep
+  // the live value in state so drags re-render the layout, and mirror
+  // it through the ref so the divider can read the start width without
+  // a stale-closure bug across drags.
+  const [filesWidth, setFilesWidth] = useState<number>(() =>
+    readPersistedWidth(FILES_WIDTH_KEY, DEFAULT_FILES_WIDTH),
+  );
+  const [editorWidth, setEditorWidth] = useState<number>(() =>
+    readPersistedWidth(EDITOR_WIDTH_KEY, DEFAULT_EDITOR_WIDTH),
+  );
+  const filesWidthRef = useRef(filesWidth);
+  const editorWidthRef = useRef(editorWidth);
+  useEffect(() => {
+    filesWidthRef.current = filesWidth;
+    localStorage.setItem(FILES_WIDTH_KEY, String(filesWidth));
+  }, [filesWidth]);
+  useEffect(() => {
+    editorWidthRef.current = editorWidth;
+    localStorage.setItem(EDITOR_WIDTH_KEY, String(editorWidth));
+  }, [editorWidth]);
+
+  const openFilesCount = useFileStore((s) => s.openFiles.length);
+  const editorVisible = filesOpen && openFilesCount > 0;
+
+  // Refresh the file tree on every agent_end the active project hears,
+  // since the agent commonly writes/edits files mid-turn. We listen on
+  // the session store's messagesBySession length as a cheap proxy: a
+  // refetched messages array always lands on agent_end and changes
+  // length when a new tool result is appended.
+  const activeMessagesLength = useSessionStore((s) =>
+    activeSessionId !== undefined ? (s.messagesBySession[activeSessionId]?.length ?? 0) : 0,
+  );
+  const isStreaming = useSessionStore((s) =>
+    activeSessionId !== undefined ? (s.streamingBySession[activeSessionId] ?? false) : false,
+  );
+  const loadFileTree = useFileStore((s) => s.loadTree);
+  useEffect(() => {
+    if (active === undefined || isStreaming) return;
+    void loadFileTree(active.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, isStreaming, activeMessagesLength]);
+
+  // Agent file-change awareness for open editor tabs. Walks NEW
+  // tool_result messages since we last looked, finds write/edit
+  // results, and either silently reloads the file (clean tab) or
+  // surfaces an "external change" banner (dirty tab). The
+  // last-processed pointer is keyed by sessionId — switching sessions
+  // restarts the cursor from the end of that session's history so we
+  // don't re-fire reloads for messages already on screen.
+  const lastProcessedRef = useRef<Record<string, number>>({});
+  const sessionMessages = useSessionStore((s) =>
+    activeSessionId !== undefined ? s.messagesBySession[activeSessionId] : undefined,
+  );
+  useEffect(() => {
+    if (active === undefined || activeSessionId === undefined || sessionMessages === undefined) {
+      return;
+    }
+    const lastSeen = lastProcessedRef.current[activeSessionId] ?? sessionMessages.length;
+    // First time we see this session: skip the existing history,
+    // start watching from the next change forward.
+    if (lastProcessedRef.current[activeSessionId] === undefined) {
+      lastProcessedRef.current[activeSessionId] = sessionMessages.length;
+      return;
+    }
+    if (sessionMessages.length <= lastSeen) {
+      lastProcessedRef.current[activeSessionId] = sessionMessages.length;
+      return;
+    }
+    const fileStore = useFileStore.getState();
+    const openByPath = new Map(fileStore.openFiles.map((f) => [f.path, f]));
+    for (let i = lastSeen; i < sessionMessages.length; i++) {
+      const m = sessionMessages[i];
+      if (m === undefined) continue;
+      if (m.role !== "toolResult") continue;
+      const toolName = String(m.toolName ?? "");
+      if (toolName !== "write" && toolName !== "edit") continue;
+      const path = extractToolFilePath(m);
+      if (path === undefined) continue;
+      const open = openByPath.get(path);
+      if (open === undefined) continue;
+      if (open.dirty) {
+        fileStore.markExternallyChanged(path);
+      } else {
+        void fileStore.reloadFile(active.id, path);
+      }
+    }
+    lastProcessedRef.current[activeSessionId] = sessionMessages.length;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, activeSessionId, sessionMessages]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -76,6 +222,18 @@ export function App() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setFilesOpenPersisted(!filesOpen)}
+            className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
+              filesOpen
+                ? "border-neutral-500 bg-neutral-800 text-neutral-100"
+                : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+            }`}
+            title="Toggle the file browser + editor pane"
+          >
+            <FolderTree size={13} />
+            Files
+          </button>
+          <button
             onClick={() => setSettingsOpen(true)}
             className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-500"
             title="Settings (providers, agent defaults, skills)"
@@ -95,28 +253,80 @@ export function App() {
 
       <div className="flex flex-1 overflow-hidden">
         <ProjectSidebar />
-        <main className="flex flex-1 flex-col">
-          {projectsLoaded && projects.length === 0 ? (
-            <div className="flex flex-1 items-center justify-center">
-              <ProjectPicker required onClose={noop} />
-            </div>
-          ) : activeSessionId !== undefined ? (
-            <>
-              <ChatView sessionId={activeSessionId} />
-              <ChatInput sessionId={activeSessionId} />
-            </>
-          ) : active ? (
-            <div className="flex flex-1 items-center justify-center px-6 text-center">
-              <div className="space-y-2 text-sm text-neutral-400">
-                <h2 className="text-xl font-semibold text-neutral-100">{active.name}</h2>
-                <p className="font-mono text-xs">{active.path}</p>
-                <p>Pick a session from the sidebar — or click "+ New session" to start one.</p>
+        <main className="flex flex-1 overflow-hidden">
+          {/* Layout when files pane is open:
+                  chat (flex) | divider | editor (when ≥1 tab) | divider | files
+              The file browser is pinned to the far right; the editor
+              materialises between chat and files only when at least
+              one file is open. Both right-side panes are user-resizable
+              via their dividers; widths persist in localStorage. */}
+          <div className="flex flex-1 flex-col overflow-hidden">
+            {projectsLoaded && projects.length === 0 ? (
+              <div className="flex flex-1 items-center justify-center">
+                <ProjectPicker required onClose={noop} />
               </div>
-            </div>
-          ) : (
-            <div className="flex flex-1 items-center justify-center">
-              <p className="text-sm text-neutral-400">Select a project from the sidebar.</p>
-            </div>
+            ) : activeSessionId !== undefined ? (
+              <>
+                <ChatView sessionId={activeSessionId} />
+                <ChatInput sessionId={activeSessionId} />
+              </>
+            ) : active ? (
+              <div className="flex flex-1 items-center justify-center px-6 text-center">
+                <div className="space-y-2 text-sm text-neutral-400">
+                  <h2 className="text-xl font-semibold text-neutral-100">{active.name}</h2>
+                  <p className="font-mono text-xs">{active.path}</p>
+                  <p>Pick a session from the sidebar — or click "+ New session" to start one.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-1 items-center justify-center">
+                <p className="text-sm text-neutral-400">Select a project from the sidebar.</p>
+              </div>
+            )}
+          </div>
+
+          {filesOpen && editorVisible && (
+            <>
+              <ResizableDivider
+                getStartWidth={() => editorWidthRef.current}
+                onResize={(next) => setEditorWidth(next)}
+                /* Pane is to the RIGHT of the divider, so drag-right
+                   shrinks the editor. direction: -1 → grow as user drags left. */
+                direction={-1}
+                minWidth={MIN_EDITOR_WIDTH}
+                maxWidth={Math.max(
+                  MIN_EDITOR_WIDTH,
+                  window.innerWidth - filesWidth - MIN_CHAT_WIDTH - 240, // 240 ≈ ProjectSidebar
+                )}
+              />
+              <div
+                className="flex shrink-0 flex-col border-l border-neutral-800"
+                style={{ width: `${editorWidth}px` }}
+              >
+                <EditorPanel />
+              </div>
+            </>
+          )}
+
+          {filesOpen && (
+            <>
+              <ResizableDivider
+                getStartWidth={() => filesWidthRef.current}
+                onResize={(next) => setFilesWidth(next)}
+                direction={-1}
+                minWidth={MIN_FILES_WIDTH}
+                maxWidth={Math.max(
+                  MIN_FILES_WIDTH,
+                  window.innerWidth - MIN_CHAT_WIDTH - 240 - (editorVisible ? MIN_EDITOR_WIDTH : 0),
+                )}
+              />
+              <div
+                className="flex shrink-0 flex-col border-l border-neutral-800"
+                style={{ width: `${filesWidth}px` }}
+              >
+                <FileBrowserPanel />
+              </div>
+            </>
           )}
         </main>
       </div>
