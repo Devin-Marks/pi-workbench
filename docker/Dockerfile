@@ -40,8 +40,20 @@ FROM node:22-alpine AS runtime
 # `tini` for proper PID-1 signal handling (Ctrl-C → SIGTERM → graceful
 # shutdown of pi-workbench's onClose hook). Without it, dropped SIGTERMs
 # leave SSE clients hanging on `docker compose down`.
+#
+# PUID/PGID build args let the user match the container's `pi` user to
+# their host UID/GID. Default 1000 is the common Linux interactive UID.
+# Without this, alpine's `adduser -S` allocates a system-range UID
+# (typically 100) that won't match the host owner of the bind-mounted
+# /workspace + ~/.pi-workbench dirs, and the container can't write to
+# them. Override at build time:
+#   docker compose build --build-arg PUID=$(id -u) --build-arg PGID=$(id -g)
+ARG PUID=1000
+ARG PGID=1000
+
 RUN apk add --no-cache tini && \
-    addgroup -S pi && adduser -S pi -G pi
+    addgroup -g $PGID pi && \
+    adduser -D -u $PUID -G pi pi
 
 WORKDIR /app
 

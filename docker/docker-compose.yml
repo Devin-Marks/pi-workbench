@@ -15,6 +15,13 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      args:
+        # Match the container `pi` user to the host UID/GID so bind
+        # mounts under /workspace and /home/pi/.pi-workbench are
+        # writable. Default 1000:1000 covers most interactive Linux
+        # accounts; override in `.env` to match `id -u` / `id -g`.
+        PUID: ${PUID:-1000}
+        PGID: ${PGID:-1000}
     image: pi-workbench:latest
     container_name: ${CONTAINER_NAME:-pi-workbench}
     restart: unless-stopped
