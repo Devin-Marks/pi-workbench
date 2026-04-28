@@ -37,3 +37,7 @@ packages/client/dev-dist/
 
 # Local working notes (not committed)
 notes/
+
+# User data created by running the app locally.
+workspace/
+workbench/

@@ -4,3 +4,7 @@ node_modules
 **/.vite
 package-lock.json
 *.md
+
+# User data — written at runtime, not source.
+workspace
+workbench
