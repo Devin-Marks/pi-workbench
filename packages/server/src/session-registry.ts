@@ -81,6 +81,18 @@ export class SessionNotFoundError extends Error {
   }
 }
 
+/**
+ * Thrown by `forkSession` and `navigateTree` route helpers when an entryId
+ * doesn't resolve to a real entry on the session tree. Typed so routes can
+ * map it to a stable 400 response (instead of leaking the raw SDK message).
+ */
+export class EntryNotFoundError extends Error {
+  constructor(id: string) {
+    super(`entry not found: ${id}`);
+    this.name = "EntryNotFoundError";
+  }
+}
+
 const registry = new Map<string, LiveSession>();
 
 /** Match the project-manager UUID shape; defends against ad-hoc project IDs. */
@@ -427,14 +439,33 @@ export async function resumeSessionById(sessionId: string): Promise<LiveSession>
  * .jsonl on disk containing the path-to-leaf, then loads that new file as
  * a fresh LiveSession in the same project.
  *
- * Returns the newly-registered live session. Throws SessionNotFoundError if
- * the source session isn't live, or `Error("fork_failed")` if the SDK
- * returns no path (sessions without persistence cannot be forked).
+ * The source session remains live and untouched; callers may dispose it
+ * explicitly if the fork supersedes it. Both sessions appear in the
+ * registry until disposed.
+ *
+ * Throws:
+ *   - SessionNotFoundError — source isn't live
+ *   - EntryNotFoundError — entryId doesn't resolve on the source tree
+ *   - Error("fork_failed") — source has no on-disk persistence (in-memory
+ *     sessions can't be forked because there's no path to branch from)
  */
 export async function forkSession(sessionId: string, entryId: string): Promise<LiveSession> {
   const source = registry.get(sessionId);
   if (source === undefined) throw new SessionNotFoundError(sessionId);
-  const newPath = source.session.sessionManager.createBranchedSession(entryId);
+  let newPath: string | undefined;
+  try {
+    newPath = source.session.sessionManager.createBranchedSession(entryId);
+  } catch (err) {
+    // SDK throws `Error("Entry <id> not found")` when entryId doesn't resolve
+    // to a tree node. Translate to a typed error so the route returns a stable
+    // 400 instead of leaking the raw SDK message.
+    if (err instanceof Error && /entry .* not found/i.test(err.message)) {
+      throw new EntryNotFoundError(entryId);
+    }
+    throw err;
+  }
+  // Return is undefined for in-memory (non-persisted) sessions, which can't
+  // be forked. Map separately from entry-not-found so callers can distinguish.
   if (newPath === undefined) throw new Error("fork_failed");
 
   const dir = sessionDirFor(source.projectId);

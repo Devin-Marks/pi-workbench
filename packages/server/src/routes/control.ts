@@ -1,23 +1,48 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { getModel } from "@mariozechner/pi-ai";
-import { forkSession, getSession, SessionNotFoundError } from "../session-registry.js";
+import {
+  EntryNotFoundError,
+  forkSession,
+  getSession,
+  SessionNotFoundError,
+} from "../session-registry.js";
+import { errorSchema, liveSummaryBody, liveSummarySchema } from "./_schemas.js";
 
 function notFound(reply: FastifyReply): FastifyReply {
   return reply.code(404).send({ error: "session_not_found" });
 }
 
-const liveSummarySchema = {
-  type: "object",
-  required: ["sessionId", "projectId", "workspacePath", "createdAt", "lastActivityAt", "isLive"],
-  properties: {
-    sessionId: { type: "string" },
-    projectId: { type: "string" },
-    workspacePath: { type: "string" },
-    createdAt: { type: "string", format: "date-time" },
-    lastActivityAt: { type: "string", format: "date-time" },
-    isLive: { type: "boolean" },
-  },
-} as const;
+/**
+ * Map SDK throws — which are plain `Error` with English messages — to stable
+ * error codes the API contract documents. The SDK has no typed error classes
+ * for these cases, so message-substring matching is the best we can do; if
+ * any message ever changes the route falls back to a generic 500 with no
+ * SDK string in the body.
+ */
+function mapSdkError(reply: FastifyReply, err: unknown): FastifyReply {
+  if (!(err instanceof Error)) {
+    reply.log.error({ err }, "unexpected non-Error throw");
+    return reply.code(500).send({ error: "internal_error" });
+  }
+  const m = err.message;
+  if (/entry .* not found/i.test(m)) {
+    return reply.code(400).send({ error: "entry_not_found" });
+  }
+  if (/already compacted/i.test(m)) {
+    return reply.code(400).send({ error: "already_compacted" });
+  }
+  if (/nothing to compact/i.test(m)) {
+    return reply.code(400).send({ error: "nothing_to_compact" });
+  }
+  if (/no model/i.test(m)) {
+    return reply.code(400).send({ error: "no_model_configured" });
+  }
+  if (/no api key found/i.test(m)) {
+    return reply.code(400).send({ error: "no_api_key" });
+  }
+  reply.log.error({ err: m }, "unmapped SDK error");
+  return reply.code(500).send({ error: "internal_error" });
+}
 
 export const controlRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post<{
@@ -28,10 +53,11 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
     {
       schema: {
         description:
-          "Queue a message to be delivered while the agent is streaming. " +
-          '`mode: "steer"` (default) interrupts the current turn after its ' +
-          'tool calls finish; `mode: "followUp"` waits for the agent to ' +
-          "go fully idle.",
+          'Queue a message for an in-progress agent run. `mode: "steer"` ' +
+          "(default) interrupts the current turn after its tool calls finish; " +
+          '`mode: "followUp"` waits for the agent to go fully idle. The SDK ' +
+          "queues regardless of streaming state — a steer/followUp on an idle " +
+          "session sits on the queue and is delivered when the next prompt runs.",
         tags: ["sessions"],
         params: {
           type: "object",
@@ -53,7 +79,7 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
             required: ["accepted"],
             properties: { accepted: { type: "boolean", const: true } },
           },
-          404: { type: "object", properties: { error: { type: "string" } } },
+          404: errorSchema,
         },
       },
     },
@@ -83,7 +109,9 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         description:
           "Abort the agent's current operation and wait for it to become " +
-          "idle. Idempotent on already-idle sessions.",
+          "idle. Idempotent on already-idle sessions (resolves immediately). " +
+          "Session must be live; open the SSE stream first to auto-resume " +
+          "from disk if it isn't.",
         tags: ["sessions"],
         params: {
           type: "object",
@@ -92,7 +120,7 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
         },
         response: {
           204: { type: "null" },
-          404: { type: "object", properties: { error: { type: "string" } } },
+          404: errorSchema,
         },
       },
     },
@@ -111,7 +139,8 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
         description:
           "Create a new session from an entry on the current session's " +
           "tree. Writes a new .jsonl file containing the path-to-leaf and " +
-          "registers it as a fresh live session in the same project.",
+          "registers it as a fresh live session in the same project. The " +
+          "source session is left live and untouched.",
         tags: ["sessions"],
         params: {
           type: "object",
@@ -126,28 +155,35 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
         },
         response: {
           201: liveSummarySchema,
-          400: { type: "object", properties: { error: { type: "string" } } },
-          404: { type: "object", properties: { error: { type: "string" } } },
+          400: errorSchema,
+          404: errorSchema,
         },
       },
     },
     async (req, reply) => {
       try {
         const forked = await forkSession(req.params.id, req.body.entryId);
-        return reply.code(201).send({
-          sessionId: forked.sessionId,
-          projectId: forked.projectId,
-          workspacePath: forked.workspacePath,
-          createdAt: forked.createdAt.toISOString(),
-          lastActivityAt: forked.lastActivityAt.toISOString(),
-          isLive: true,
-        });
+        return reply.code(201).send(
+          liveSummaryBody({
+            sessionId: forked.sessionId,
+            projectId: forked.projectId,
+            workspacePath: forked.workspacePath,
+            createdAt: forked.createdAt,
+            lastActivityAt: forked.lastActivityAt,
+            name: forked.session.sessionName,
+            messageCount: forked.session.messages.length,
+            isStreaming: forked.session.isStreaming,
+          }),
+        );
       } catch (err) {
         if (err instanceof SessionNotFoundError) return notFound(reply);
+        if (err instanceof EntryNotFoundError) {
+          return reply.code(400).send({ error: "entry_not_found" });
+        }
         if (err instanceof Error && err.message === "fork_failed") {
           return reply.code(400).send({ error: "fork_failed" });
         }
-        throw err;
+        return mapSdkError(reply, err);
       }
     },
   );
@@ -168,7 +204,8 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
           "Navigate the session leaf to a different entry on its tree. " +
           "Operates IN-PLACE on the same session file (unlike fork which " +
           "creates a new file). Returns the navigation result; check " +
-          "`cancelled` to detect user-driven aborts.",
+          "`cancelled` to detect user-driven aborts. Returns 400 if " +
+          "`entryId` doesn't exist on the session's tree.",
         tags: ["sessions"],
         params: {
           type: "object",
@@ -196,7 +233,8 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
               editorText: { type: "string" },
             },
           },
-          404: { type: "object", properties: { error: { type: "string" } } },
+          400: errorSchema,
+          404: errorSchema,
         },
       },
     },
@@ -208,11 +246,15 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
       if (req.body.customInstructions !== undefined)
         opts.customInstructions = req.body.customInstructions;
       if (req.body.label !== undefined) opts.label = req.body.label;
-      const result = await live.session.navigateTree(req.body.entryId, opts);
-      const out: Record<string, unknown> = { cancelled: result.cancelled };
-      if (result.aborted !== undefined) out.aborted = result.aborted;
-      if (result.editorText !== undefined) out.editorText = result.editorText;
-      return out;
+      try {
+        const result = await live.session.navigateTree(req.body.entryId, opts);
+        const out: Record<string, unknown> = { cancelled: result.cancelled };
+        if (result.aborted !== undefined) out.aborted = result.aborted;
+        if (result.editorText !== undefined) out.editorText = result.editorText;
+        return out;
+      } catch (err) {
+        return mapSdkError(reply, err);
+      }
     },
   );
 
@@ -222,7 +264,9 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         description:
           "Manually compact the session context. Aborts any in-flight " +
-          "agent operation first. Returns the compaction summary metadata.",
+          "agent operation first. Returns 400 with a stable error code if " +
+          "the session is too small to compact, has already been compacted, " +
+          "or has no model configured.",
         tags: ["sessions"],
         params: {
           type: "object",
@@ -243,15 +287,20 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
               tokensAfter: { type: "integer", minimum: 0 },
             },
           },
-          404: { type: "object", properties: { error: { type: "string" } } },
+          400: errorSchema,
+          404: errorSchema,
         },
       },
     },
     async (req, reply) => {
       const live = getSession(req.params.id);
       if (live === undefined) return notFound(reply);
-      const result = await live.session.compact(req.body.customInstructions);
-      return result as unknown as Record<string, unknown>;
+      try {
+        const result = await live.session.compact(req.body.customInstructions);
+        return result as unknown as Record<string, unknown>;
+      } catch (err) {
+        return mapSdkError(reply, err);
+      }
     },
   );
 
@@ -261,8 +310,8 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         description:
           "Set the active model for the session. Body: `{ provider, modelId }`. " +
-          "Returns 400 if the provider/model isn't registered or no auth is " +
-          "configured for it.",
+          'Returns 400 with `error: "unknown_model"` if the provider/model isn\'t ' +
+          'registered, or `error: "set_model_failed"` if no auth is configured.',
         tags: ["sessions"],
         params: {
           type: "object",
@@ -287,23 +336,23 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
               modelId: { type: "string" },
             },
           },
-          400: { type: "object", properties: { error: { type: "string" } } },
-          404: { type: "object", properties: { error: { type: "string" } } },
+          400: errorSchema,
+          404: errorSchema,
         },
       },
     },
     async (req, reply) => {
       const live = getSession(req.params.id);
       if (live === undefined) return notFound(reply);
-      let model;
-      try {
-        // getModel's TypeScript signature narrows to KnownProvider/KnownModel
-        // unions, but at the HTTP boundary we accept any string; the function
-        // throws on unknowns which we catch immediately. Runtime behavior is
-        // the contract here, not the static union.
-        const dyn = getModel as unknown as (provider: string, modelId: string) => unknown;
-        model = dyn(req.body.provider, req.body.modelId);
-      } catch {
+      // getModel's TypeScript signature narrows to KnownProvider/KnownModel
+      // unions, but at the HTTP boundary we accept any string. The function
+      // RETURNS undefined (does not throw) for unknown provider/modelId — this
+      // is the contract from pi-ai/dist/models.js. Without an explicit
+      // undefined check, setModel(undefined) crashes with a TypeError that
+      // leaks Node-internal detail.
+      const dyn = getModel as unknown as (provider: string, modelId: string) => unknown;
+      const model = dyn(req.body.provider, req.body.modelId);
+      if (model === undefined) {
         return reply.code(400).send({ error: "unknown_model" });
       }
       try {

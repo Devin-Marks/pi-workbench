@@ -1,15 +1,14 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
-import { getProject } from "../project-manager.js";
+import { getProject, readProjects } from "../project-manager.js";
 import {
   createSession,
   disposeSession,
   findSessionLocation,
   getSession,
   listSessionsForProject,
-  resumeSessionById,
-  SessionNotFoundError,
   type UnifiedSession,
 } from "../session-registry.js";
+import { errorSchema, liveSummaryBody, liveSummarySchema } from "./_schemas.js";
 
 const unifiedSchema = {
   type: "object",
@@ -33,22 +32,6 @@ const unifiedSchema = {
     createdAt: { type: "string", format: "date-time" },
     messageCount: { type: "integer", minimum: 0 },
     firstMessage: { type: "string" },
-  },
-} as const;
-
-const liveSummarySchema = {
-  type: "object",
-  required: ["sessionId", "projectId", "workspacePath", "createdAt", "lastActivityAt", "isLive"],
-  properties: {
-    sessionId: { type: "string" },
-    projectId: { type: "string" },
-    workspacePath: { type: "string" },
-    createdAt: { type: "string", format: "date-time" },
-    lastActivityAt: { type: "string", format: "date-time" },
-    isLive: { type: "boolean" },
-    name: { type: "string" },
-    messageCount: { type: "integer", minimum: 0 },
-    isStreaming: { type: "boolean" },
   },
 } as const;
 
@@ -95,7 +78,7 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
               sessions: { type: "array", items: unifiedSchema },
             },
           },
-          404: { type: "object", properties: { error: { type: "string" } } },
+          404: errorSchema,
         },
       },
     },
@@ -109,15 +92,12 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
         const sessions = await listSessionsForProject(projectId, project.path);
         return { sessions: sessions.map(unifiedFromUnified) };
       }
-      // No projectId — merge across all known projects. Importing here to
-      // avoid a project-manager dep at the top of the closure.
-      const { readProjects } = await import("../project-manager.js");
+      // Cross-project: fan out in parallel — each project's listing is
+      // independent disk I/O. Sequential awaits would compound on every
+      // sidebar reload during Phase 9.
       const projects = await readProjects();
-      const all: UnifiedSession[] = [];
-      for (const p of projects) {
-        const list = await listSessionsForProject(p.id, p.path);
-        all.push(...list);
-      }
+      const lists = await Promise.all(projects.map((p) => listSessionsForProject(p.id, p.path)));
+      const all: UnifiedSession[] = lists.flat();
       all.sort((a, b) => b.lastActivityAt.getTime() - a.lastActivityAt.getTime());
       return { sessions: all.map(unifiedFromUnified) };
     },
@@ -137,7 +117,7 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
         },
         response: {
           201: liveSummarySchema,
-          404: { type: "object", properties: { error: { type: "string" } } },
+          404: errorSchema,
         },
       },
     },
@@ -147,16 +127,18 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ error: "project_not_found" });
       }
       const live = await createSession(project.id, project.path);
-      return reply.code(201).send({
-        sessionId: live.sessionId,
-        projectId: live.projectId,
-        workspacePath: live.workspacePath,
-        createdAt: live.createdAt.toISOString(),
-        lastActivityAt: live.lastActivityAt.toISOString(),
-        isLive: true,
-        messageCount: live.session.messages.length,
-        isStreaming: live.session.isStreaming,
-      });
+      return reply.code(201).send(
+        liveSummaryBody({
+          sessionId: live.sessionId,
+          projectId: live.projectId,
+          workspacePath: live.workspacePath,
+          createdAt: live.createdAt,
+          lastActivityAt: live.lastActivityAt,
+          name: live.session.sessionName,
+          messageCount: live.session.messages.length,
+          isStreaming: live.session.isStreaming,
+        }),
+      );
     },
   );
 
@@ -175,24 +157,23 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
         },
         response: {
           200: liveSummarySchema,
-          404: { type: "object", properties: { error: { type: "string" } } },
+          404: errorSchema,
         },
       },
     },
     async (req, reply) => {
       const live = getSession(req.params.id);
       if (live !== undefined) {
-        return {
+        return liveSummaryBody({
           sessionId: live.sessionId,
           projectId: live.projectId,
           workspacePath: live.workspacePath,
-          createdAt: live.createdAt.toISOString(),
-          lastActivityAt: live.lastActivityAt.toISOString(),
-          isLive: true,
+          createdAt: live.createdAt,
+          lastActivityAt: live.lastActivityAt,
           name: live.session.sessionName,
           messageCount: live.session.messages.length,
           isStreaming: live.session.isStreaming,
-        };
+        });
       }
       const loc = await findSessionLocation(req.params.id);
       if (loc === undefined) return notFound(reply);
@@ -200,18 +181,17 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
       const list = await listSessionsForProject(loc.projectId, loc.workspacePath);
       const match = list.find((s) => s.sessionId === req.params.id);
       if (match === undefined) return notFound(reply);
-      const out: Record<string, unknown> = {
+      return liveSummaryBody({
         sessionId: match.sessionId,
         projectId: match.projectId,
         workspacePath: match.workspacePath,
-        createdAt: match.createdAt.toISOString(),
-        lastActivityAt: match.lastActivityAt.toISOString(),
-        isLive: false,
+        createdAt: match.createdAt,
+        lastActivityAt: match.lastActivityAt,
+        name: match.name,
         messageCount: match.messageCount,
         isStreaming: false,
-      };
-      if (match.name !== undefined) out.name = match.name;
-      return out;
+        isLive: false,
+      });
     },
   );
 
@@ -221,8 +201,9 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         description:
           "Dispose the in-memory live session. The on-disk JSONL is " +
-          "preserved; the session can be resumed later. 404 if it was " +
-          "never live.",
+          "preserved; the session can be resumed later via the SSE stream " +
+          "endpoint. 404 if it was never live (deleting an on-disk-only " +
+          "session is not currently supported — see DEFERRED.md).",
         tags: ["sessions"],
         params: {
           type: "object",
@@ -231,7 +212,7 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
         },
         response: {
           204: { type: "null" },
-          404: { type: "object", properties: { error: { type: "string" } } },
+          404: errorSchema,
         },
       },
     },
@@ -241,10 +222,4 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(204).send();
     },
   );
-
-  // Helper export for tests — not a route. We don't ship this as a function;
-  // the resumeSessionById helper lives in session-registry. Re-export here
-  // would be confusing.
-  void resumeSessionById;
-  void SessionNotFoundError;
 };

@@ -317,6 +317,128 @@ async function main(): Promise<void> {
       assert("POST /abort → 204", aborted.status === 204);
     }
 
+    // POST /steer — schema validation + accept on live session.
+    {
+      const noText = await jsend("POST", `${base}/api/v1/sessions/${sessionId}/steer`, {}, auth);
+      assert("POST /steer without text → 400", noText.status === 400);
+
+      const accepted = await jsend(
+        "POST",
+        `${base}/api/v1/sessions/${sessionId}/steer`,
+        { text: "queued — sits on the queue when idle, delivered next prompt" },
+        auth,
+      );
+      assert("POST /steer with text → 202", accepted.status === 202);
+      assert(
+        "POST /steer body { accepted: true }",
+        (accepted.body as { accepted: boolean }).accepted === true,
+      );
+
+      const followUp = await jsend(
+        "POST",
+        `${base}/api/v1/sessions/${sessionId}/steer`,
+        { text: "follow-up message", mode: "followUp" },
+        auth,
+      );
+      assert("POST /steer mode=followUp → 202", followUp.status === 202);
+
+      const unknown = await jsend(
+        "POST",
+        `${base}/api/v1/sessions/00000000-0000-0000-0000-000000000000/steer`,
+        { text: "x" },
+        auth,
+      );
+      assert("POST /steer on unknown session → 404", unknown.status === 404);
+    }
+
+    // POST /model — verify `unknown_model` maps cleanly (the H1 regression
+    // would surface here as a 400 with a leaky Node-internal message instead
+    // of a stable error code).
+    {
+      const noBody = await jsend("POST", `${base}/api/v1/sessions/${sessionId}/model`, {}, auth);
+      assert("POST /model without body → 400", noBody.status === 400);
+
+      const unknownModel = await jsend(
+        "POST",
+        `${base}/api/v1/sessions/${sessionId}/model`,
+        { provider: "no-such-provider", modelId: "no-such-model" },
+        auth,
+      );
+      assert("POST /model unknown → 400", unknownModel.status === 400);
+      assert(
+        "POST /model unknown error code is `unknown_model`",
+        (unknownModel.body as { error: string }).error === "unknown_model",
+        JSON.stringify(unknownModel.body),
+      );
+    }
+
+    // POST /fork — verify entry-not-found maps to the typed code (the H2
+    // regression would have produced a 500 with the SDK message in the body).
+    {
+      const noBody = await jsend("POST", `${base}/api/v1/sessions/${sessionId}/fork`, {}, auth);
+      assert("POST /fork without entryId → 400", noBody.status === 400);
+
+      const unknownEntry = await jsend(
+        "POST",
+        `${base}/api/v1/sessions/${sessionId}/fork`,
+        { entryId: "00000000-0000-0000-0000-000000000000" },
+        auth,
+      );
+      assert("POST /fork with bad entryId → 400", unknownEntry.status === 400);
+      assert(
+        "POST /fork bad entry error code is `entry_not_found` or `fork_failed`",
+        (unknownEntry.body as { error: string }).error === "entry_not_found" ||
+          (unknownEntry.body as { error: string }).error === "fork_failed",
+        JSON.stringify(unknownEntry.body),
+      );
+
+      const unknownSession = await jsend(
+        "POST",
+        `${base}/api/v1/sessions/00000000-0000-0000-0000-000000000000/fork`,
+        { entryId: "x" },
+        auth,
+      );
+      assert("POST /fork on unknown session → 404", unknownSession.status === 404);
+    }
+
+    // POST /navigate — same treatment as fork for entry-not-found (H3).
+    {
+      const noBody = await jsend("POST", `${base}/api/v1/sessions/${sessionId}/navigate`, {}, auth);
+      assert("POST /navigate without entryId → 400", noBody.status === 400);
+
+      const unknownEntry = await jsend(
+        "POST",
+        `${base}/api/v1/sessions/${sessionId}/navigate`,
+        { entryId: "00000000-0000-0000-0000-000000000000" },
+        auth,
+      );
+      assert("POST /navigate with bad entryId → 400", unknownEntry.status === 400);
+      assert(
+        "POST /navigate bad entry error code is `entry_not_found`",
+        (unknownEntry.body as { error: string }).error === "entry_not_found",
+        JSON.stringify(unknownEntry.body),
+      );
+    }
+
+    // POST /compact — the session has only the synthetic init state; the SDK
+    // throws "Nothing to compact" / "No model" depending on context. Either
+    // is a stable typed 400 (H3 would have returned 500 with SDK message).
+    {
+      const result = await jsend("POST", `${base}/api/v1/sessions/${sessionId}/compact`, {}, auth);
+      assert("POST /compact on tiny idle session → 400", result.status === 400);
+      const allowed = new Set([
+        "nothing_to_compact",
+        "no_model_configured",
+        "already_compacted",
+        "no_api_key",
+      ]);
+      assert(
+        "POST /compact error code is one of the typed values",
+        allowed.has((result.body as { error: string }).error),
+        JSON.stringify(result.body),
+      );
+    }
+
     // DELETE the session.
     {
       const del = await jsend("DELETE", `${base}/api/v1/sessions/${sessionId}`, undefined, auth);

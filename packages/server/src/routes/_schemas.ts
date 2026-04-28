@@ -1,0 +1,84 @@
+/**
+ * Shared response schemas used across multiple route files. Extracting these
+ * keeps the wire shape consistent — e.g. /sessions, /sessions/:id, and /fork
+ * all return the same liveSummary fields rather than each route declaring its
+ * own subset.
+ */
+
+/**
+ * Standard error envelope for 4xx/5xx responses. `error` is required so
+ * generated SDK clients can rely on its presence (no extra null-check).
+ * `message` is optional context for callers that want a human-readable hint.
+ */
+export const errorSchema = {
+  type: "object",
+  required: ["error"],
+  properties: {
+    error: { type: "string" },
+    message: { type: "string" },
+  },
+} as const;
+
+/**
+ * Live session summary — the shape returned by routes that produce a single
+ * session metadata object (POST /sessions, GET /sessions/:id, POST /fork).
+ * `name` is optional because not every session has a user-defined display
+ * name; consumers should treat its absence as "no name set."
+ */
+export const liveSummarySchema = {
+  type: "object",
+  required: [
+    "sessionId",
+    "projectId",
+    "workspacePath",
+    "createdAt",
+    "lastActivityAt",
+    "isLive",
+    "messageCount",
+    "isStreaming",
+  ],
+  properties: {
+    sessionId: { type: "string" },
+    projectId: { type: "string" },
+    workspacePath: { type: "string" },
+    createdAt: { type: "string", format: "date-time" },
+    lastActivityAt: { type: "string", format: "date-time" },
+    isLive: { type: "boolean" },
+    name: { type: "string" },
+    messageCount: { type: "integer", minimum: 0 },
+    isStreaming: { type: "boolean" },
+  },
+} as const;
+
+/**
+ * Build a wire-shaped LiveSession summary, omitting `name` when unset so the
+ * serializer doesn't emit an explicit undefined.
+ *
+ * `isLive` defaults to `true` because most callers (POST /sessions, /fork,
+ * /sessions/:id when in-memory) are returning a live session. Disk-only
+ * callers should pass `isLive: false` explicitly.
+ */
+export function liveSummaryBody(args: {
+  sessionId: string;
+  projectId: string;
+  workspacePath: string;
+  createdAt: Date;
+  lastActivityAt: Date;
+  name: string | undefined;
+  messageCount: number;
+  isStreaming: boolean;
+  isLive?: boolean;
+}): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    sessionId: args.sessionId,
+    projectId: args.projectId,
+    workspacePath: args.workspacePath,
+    createdAt: args.createdAt.toISOString(),
+    lastActivityAt: args.lastActivityAt.toISOString(),
+    isLive: args.isLive ?? true,
+    messageCount: args.messageCount,
+    isStreaming: args.isStreaming,
+  };
+  if (args.name !== undefined) out.name = args.name;
+  return out;
+}

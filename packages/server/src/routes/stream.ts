@@ -1,12 +1,14 @@
 import type { FastifyPluginAsync } from "fastify";
 import { resumeSessionById, SessionNotFoundError } from "../session-registry.js";
 import { createSSEClient } from "../sse-bridge.js";
+import { errorSchema } from "./_schemas.js";
 
 /**
  * SSE stream for a session. If the session is in the live registry, attach
  * directly; otherwise auto-resume from disk via resumeSessionById (which
  * walks projects to find the .jsonl and rehydrates an AgentSession). 404
- * only when no project on disk owns the id.
+ * only when no project on disk owns the id; 500 with a stable code when
+ * the resume itself fails (corrupt JSONL, SDK error).
  */
 export const streamRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get<{ Params: { id: string } }>(
@@ -25,14 +27,12 @@ export const streamRoutes: FastifyPluginAsync = async (fastify) => {
           properties: { id: { type: "string" } },
         },
         // SSE responses don't fit Fastify's response-schema model — see the
-        // Phase-5 review notes in REVIEW_FIXES.md. Only the 404 shape is
+        // Phase-5 review notes in REVIEW_FIXES.md. Only the error shapes are
         // declared; the catalog of SSE event types lives in
         // docs/sse-events.md (Phase 17).
         response: {
-          404: {
-            type: "object",
-            properties: { error: { type: "string" } },
-          },
+          404: errorSchema,
+          500: errorSchema,
         },
       },
     },
@@ -44,7 +44,11 @@ export const streamRoutes: FastifyPluginAsync = async (fastify) => {
         if (err instanceof SessionNotFoundError) {
           return reply.code(404).send({ error: "session_not_found" });
         }
-        throw err;
+        // Corrupt JSONL, SDK error during createAgentSession, etc. Log the
+        // detail server-side; client gets a stable code without the SDK
+        // string in the body.
+        req.log.error({ err, sessionId: req.params.id }, "stream resume failed");
+        return reply.code(500).send({ error: "resume_failed" });
       }
       createSSEClient(reply, live);
       return reply;

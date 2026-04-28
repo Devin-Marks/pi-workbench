@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { getSession } from "../session-registry.js";
+import { errorSchema } from "./_schemas.js";
 
 /**
  * Prompt route. Per CLAUDE.md "Pi SDK Key Facts": session.prompt() is async
@@ -43,7 +44,7 @@ export const promptRoutes: FastifyPluginAsync = async (fastify) => {
             required: ["accepted"],
             properties: { accepted: { type: "boolean", const: true } },
           },
-          404: { type: "object", properties: { error: { type: "string" } } },
+          404: errorSchema,
         },
       },
     },
@@ -56,16 +57,23 @@ export const promptRoutes: FastifyPluginAsync = async (fastify) => {
       if (req.body.streamingBehavior !== undefined) {
         opts.streamingBehavior = req.body.streamingBehavior;
       }
-      // Fire-and-forget. session.prompt() validation throws are async (the
-      // method is async); attach .catch so an unhandled rejection doesn't
-      // crash the process — the error also surfaces over SSE as agent_end
-      // with errorMessage, which is what the client should react to.
-      live.session.prompt(req.body.text, opts).catch((err: unknown) => {
+      // Fire-and-forget. session.prompt() is async, so all current validation
+      // throws are async; .catch traps them. The outer try/catch is defensive
+      // against a future SDK rev that moves any check to a synchronous
+      // wrapper — without it a sync throw would 500 the request.
+      try {
+        live.session.prompt(req.body.text, opts).catch((err: unknown) => {
+          fastify.log.warn(
+            { err: err instanceof Error ? err.message : String(err), sessionId: req.params.id },
+            "session.prompt rejected",
+          );
+        });
+      } catch (err) {
         fastify.log.warn(
           { err: err instanceof Error ? err.message : String(err), sessionId: req.params.id },
-          "session.prompt rejected",
+          "session.prompt threw synchronously",
         );
-      });
+      }
       return reply.code(202).send({ accepted: true });
     },
   );
