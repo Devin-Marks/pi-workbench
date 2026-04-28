@@ -7,6 +7,7 @@ import { config, authEnabled } from "./config.js";
 import { extractBearer, verifyApiKey, verifyToken } from "./auth.js";
 import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
+import { projectRoutes } from "./routes/projects.js";
 
 const PUBLIC_PATHS = new Set<string>([
   "/api/v1/health",
@@ -67,6 +68,7 @@ export async function buildServer() {
     async (api) => {
       await api.register(healthRoutes);
       await api.register(authRoutes);
+      await api.register(projectRoutes);
     },
     { prefix: "/api/v1" },
   );

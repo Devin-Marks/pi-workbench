@@ -1,0 +1,242 @@
+import { useEffect, useState } from "react";
+import { api, ApiError, type BrowseEntry } from "../lib/api-client";
+import { useProjectStore } from "../store/project-store";
+
+interface Props {
+  onClose: () => void;
+  /** When true, the picker cannot be dismissed without creating a project. */
+  required?: boolean;
+}
+
+type Step = "name" | "browse";
+
+export function ProjectPicker({ onClose, required = false }: Props) {
+  const create = useProjectStore((s) => s.create);
+  const [step, setStep] = useState<Step>("name");
+  const [name, setName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+
+  const [path, setPath] = useState<string | undefined>();
+  const [entries, setEntries] = useState<BrowseEntry[]>([]);
+  const [loadingBrowse, setLoadingBrowse] = useState(false);
+  const [newFolderInput, setNewFolderInput] = useState("");
+  const [showNewFolder, setShowNewFolder] = useState(false);
+
+  useEffect(() => {
+    if (step !== "browse") return;
+    let cancelled = false;
+    setLoadingBrowse(true);
+    setError(undefined);
+    api
+      .browse(path)
+      .then((res) => {
+        if (cancelled) return;
+        setPath(res.path);
+        setEntries(res.entries);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof ApiError ? err.code : (err as Error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingBrowse(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [step, path]);
+
+  const goBrowse = (): void => {
+    if (name.trim().length === 0) return;
+    setStep("browse");
+  };
+
+  const select = async (selected: string): Promise<void> => {
+    setSubmitting(true);
+    setError(undefined);
+    try {
+      await create(name.trim(), selected);
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.code : (err as Error).message);
+      setSubmitting(false);
+    }
+  };
+
+  const goUp = (): void => {
+    if (!path) return;
+    const parent = path.replace(/\/[^/]+\/?$/, "");
+    setPath(parent.length === 0 ? "/" : parent);
+  };
+
+  const createFolder = async (): Promise<void> => {
+    if (!path || newFolderInput.trim().length === 0) return;
+    setError(undefined);
+    try {
+      const { path: created } = await api.mkdir(path, newFolderInput.trim());
+      setNewFolderInput("");
+      setShowNewFolder(false);
+      await select(created);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.code : (err as Error).message);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+      <div className="w-full max-w-lg rounded-lg border border-neutral-800 bg-neutral-900 p-6 shadow-xl">
+        <header className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold tracking-tight">
+            {step === "name" ? "New project" : `Pick a folder for "${name.trim()}"`}
+          </h2>
+          {!required && (
+            <button
+              onClick={onClose}
+              className="rounded-md px-2 py-1 text-sm text-neutral-400 hover:bg-neutral-800"
+            >
+              Cancel
+            </button>
+          )}
+        </header>
+
+        {step === "name" && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              goBrowse();
+            }}
+            className="space-y-4"
+          >
+            <label className="block space-y-1.5">
+              <span className="text-sm font-medium text-neutral-300">Project name</span>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                autoFocus
+                className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={name.trim().length === 0}
+              className="w-full rounded-md bg-neutral-100 px-3 py-2 text-sm font-medium text-neutral-900 disabled:opacity-50"
+            >
+              Next: pick folder
+            </button>
+          </form>
+        )}
+
+        {step === "browse" && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-xs text-neutral-400">
+              <button
+                onClick={goUp}
+                className="rounded-md border border-neutral-700 px-2 py-1 hover:bg-neutral-800"
+              >
+                ↑ up
+              </button>
+              <code className="truncate font-mono text-neutral-300">{path ?? "(loading)"}</code>
+            </div>
+            <div className="max-h-64 overflow-y-auto rounded-md border border-neutral-800 bg-neutral-950">
+              {loadingBrowse && <div className="px-3 py-2 text-sm text-neutral-400">Loading…</div>}
+              {!loadingBrowse && entries.length === 0 && (
+                <div className="px-3 py-2 text-sm text-neutral-400">(empty)</div>
+              )}
+              {!loadingBrowse &&
+                entries.map((e) => (
+                  <div
+                    key={e.path}
+                    className="flex items-center justify-between gap-2 border-b border-neutral-800 px-3 py-2 text-sm last:border-b-0"
+                  >
+                    <button
+                      onClick={() => setPath(e.path)}
+                      className="flex flex-1 items-center gap-2 text-left text-neutral-200 hover:text-white"
+                    >
+                      <span>📁</span>
+                      <span className="truncate">{e.name}</span>
+                      {e.isGitRepo && (
+                        <span className="rounded-sm bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-300">
+                          git
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => void select(e.path)}
+                      disabled={submitting}
+                      className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-800 disabled:opacity-50"
+                    >
+                      Select
+                    </button>
+                  </div>
+                ))}
+            </div>
+
+            {showNewFolder ? (
+              <div className="flex gap-2">
+                <input
+                  value={newFolderInput}
+                  onChange={(e) => setNewFolderInput(e.target.value)}
+                  placeholder="folder name"
+                  className="flex-1 rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm"
+                  autoFocus
+                />
+                <button
+                  onClick={() => void createFolder()}
+                  className="rounded-md bg-neutral-100 px-3 py-2 text-sm font-medium text-neutral-900"
+                >
+                  Create + select
+                </button>
+                <button
+                  onClick={() => {
+                    setShowNewFolder(false);
+                    setNewFolderInput("");
+                  }}
+                  className="rounded-md border border-neutral-700 px-3 py-2 text-sm text-neutral-300"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div className="flex justify-between gap-2">
+                <button
+                  onClick={() => setStep("name")}
+                  className="rounded-md border border-neutral-700 px-3 py-2 text-sm text-neutral-300"
+                >
+                  ← Back
+                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setShowNewFolder(true)}
+                    className="rounded-md border border-neutral-700 px-3 py-2 text-sm text-neutral-300"
+                  >
+                    + New folder
+                  </button>
+                  <button
+                    onClick={() => path && void select(path)}
+                    disabled={!path || submitting}
+                    className="rounded-md bg-neutral-100 px-3 py-2 text-sm font-medium text-neutral-900 disabled:opacity-50"
+                  >
+                    Select this folder
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {error !== undefined && (
+          <p className="mt-3 text-sm text-red-400">
+            {error === "path_not_allowed"
+              ? "That folder is outside the workspace root."
+              : error === "not_a_directory"
+                ? "That path is not a directory."
+                : error === "already_exists"
+                  ? "A folder with that name already exists."
+                  : `Error: ${error}`}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}

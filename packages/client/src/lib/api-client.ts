@@ -21,6 +21,24 @@ export interface LoginResponse {
   expiresAt: string;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  createdAt: string;
+}
+
+export interface BrowseEntry {
+  name: string;
+  path: string;
+  isGitRepo: boolean;
+}
+
+export interface BrowseResponse {
+  path: string;
+  entries: BrowseEntry[];
+}
+
 export function onUnauthorized(handler: () => void): () => void {
   const fn = (): void => handler();
   window.addEventListener(UNAUTHORIZED_EVENT, fn);
@@ -80,5 +98,24 @@ export const api = {
   health: () =>
     request<{ status: "ok"; activeSessions: number; activePtys: number }>("/api/v1/health", {
       skipAuth: true,
+    }),
+  listProjects: () => request<{ projects: Project[] }>("/api/v1/projects"),
+  createProject: (name: string, path: string) =>
+    request<Project>("/api/v1/projects", { method: "POST", body: { name, path } }),
+  renameProject: (id: string, name: string) =>
+    request<Project>(`/api/v1/projects/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: { name },
+    }),
+  deleteProject: (id: string) =>
+    request<undefined>(`/api/v1/projects/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  browse: (path?: string) => {
+    const qs = path !== undefined ? `?path=${encodeURIComponent(path)}` : "";
+    return request<BrowseResponse>(`/api/v1/projects/browse${qs}`);
+  },
+  mkdir: (parentPath: string, name: string) =>
+    request<{ path: string }>("/api/v1/projects/browse/mkdir", {
+      method: "POST",
+      body: { parentPath, name },
     }),
 };
