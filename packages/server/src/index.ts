@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
@@ -18,19 +19,25 @@ const PUBLIC_PATHS = new Set<string>([
 export async function buildServer() {
   const fastify = Fastify({
     logger: { level: config.logLevel },
-    disableRequestLogging: process.env.NODE_ENV === "test",
+    disableRequestLogging: config.isTest,
+    trustProxy: config.trustProxy,
   });
 
   await fastify.register(cors, {
-    origin: config.corsOrigin ?? false,
+    // Default to `true` (reflect request origin) so the same-origin browser
+    // workflow described in the dev plan works without extra config.
+    // `false` (the previous default) blocks all CORS preflights, including
+    // the dev proxy. Pin to a specific origin via CORS_ORIGIN in production.
+    origin: config.corsOrigin ?? true,
     credentials: false,
   });
 
-  await fastify.register(rateLimit, {
-    global: false,
-    max: config.auth.loginRateLimitMax,
-    timeWindow: config.auth.loginRateLimitWindowMs,
-  });
+  // Rate limiting is per-route only — no global cap by design (see dev plan
+  // Phase 2 § Rate limiter scope). The login route applies its own limit via
+  // route-level `config.rateLimit`. Registering the plugin here makes that
+  // route-level config available; defaults are intentionally minimal and not
+  // applied to anything because `global: false`.
+  await fastify.register(rateLimit, { global: false });
 
   await fastify.register(swagger, {
     openapi: {
@@ -60,7 +67,7 @@ export async function buildServer() {
       reply.code(401).send({ error: "missing_token" });
       return;
     }
-    if (verifyToken(presented) || verifyApiKey(presented)) return;
+    if (verifyToken(presented) !== undefined || verifyApiKey(presented)) return;
     reply.code(401).send({ error: "invalid_token" });
   });
 
@@ -87,7 +94,7 @@ async function start(): Promise<void> {
   }
 }
 
-const isMainModule = import.meta.url === `file://${process.argv[1]}`;
+const isMainModule = import.meta.url === pathToFileURL(process.argv[1] ?? "").href;
 if (isMainModule) {
   void start();
 }

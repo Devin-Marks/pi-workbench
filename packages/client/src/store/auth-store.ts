@@ -16,51 +16,59 @@ interface AuthState {
   logout: () => void;
 }
 
-export const useAuthStore = create<AuthState>((set, get) => {
-  onUnauthorized(() => set({ isAuthenticated: false }));
-  return {
-    ready: false,
-    authRequired: false,
-    isAuthenticated: false,
-    loginError: undefined,
-    loginPending: false,
-    bootstrap: async () => {
-      try {
-        const { authEnabled } = await api.authStatus();
-        if (!authEnabled) {
-          set({ ready: true, authRequired: false, isAuthenticated: true });
-          return;
-        }
-        const stored = getStoredToken();
-        set({
-          ready: true,
-          authRequired: true,
-          isAuthenticated: stored !== undefined,
-        });
-      } catch (err) {
-        set({
-          ready: true,
-          authRequired: true,
-          isAuthenticated: false,
-          loginError: err instanceof Error ? err.message : "bootstrap_failed",
-        });
+export const useAuthStore = create<AuthState>((set, get) => ({
+  ready: false,
+  authRequired: false,
+  isAuthenticated: false,
+  loginError: undefined,
+  loginPending: false,
+  bootstrap: async () => {
+    try {
+      const { authEnabled } = await api.authStatus();
+      if (!authEnabled) {
+        set({ ready: true, authRequired: false, isAuthenticated: true });
+        return;
       }
-    },
-    login: async (password: string) => {
-      if (get().loginPending) return;
-      set({ loginPending: true, loginError: undefined });
-      try {
-        const res = await api.login(password);
-        setStoredToken({ token: res.token, expiresAt: res.expiresAt });
-        set({ isAuthenticated: true, loginPending: false });
-      } catch (err) {
-        const code = err instanceof ApiError ? err.code : "login_failed";
-        set({ loginPending: false, loginError: code });
-      }
-    },
-    logout: () => {
-      clearStoredToken();
-      set({ isAuthenticated: false, loginError: undefined });
-    },
-  };
-});
+      const stored = getStoredToken();
+      set({
+        ready: true,
+        authRequired: true,
+        isAuthenticated: stored !== undefined,
+      });
+    } catch (err) {
+      set({
+        ready: true,
+        authRequired: true,
+        isAuthenticated: false,
+        loginError: err instanceof Error ? err.message : "bootstrap_failed",
+      });
+    }
+  },
+  login: async (password: string) => {
+    if (get().loginPending) return;
+    set({ loginPending: true, loginError: undefined });
+    try {
+      const res = await api.login(password);
+      setStoredToken({ token: res.token, expiresAt: res.expiresAt });
+      set({ isAuthenticated: true, loginPending: false });
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : "login_failed";
+      set({ loginPending: false, loginError: code });
+    }
+  },
+  logout: () => {
+    clearStoredToken();
+    set({ isAuthenticated: false, loginError: undefined });
+  },
+}));
+
+// Module-level (not per-store-construction) so HMR re-evaluating the store
+// factory doesn't accumulate listeners. Vite HMR will replace the entire
+// module on edit, so this fires exactly once per module instantiation.
+declare global {
+  var __piWorkbenchAuthListenerRegistered: boolean | undefined;
+}
+if (!globalThis.__piWorkbenchAuthListenerRegistered) {
+  onUnauthorized(() => useAuthStore.setState({ isAuthenticated: false }));
+  globalThis.__piWorkbenchAuthListenerRegistered = true;
+}

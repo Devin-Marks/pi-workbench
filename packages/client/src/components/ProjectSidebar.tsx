@@ -91,7 +91,12 @@ export function ProjectSidebar() {
                   </button>
                 )}
                 <button
-                  onClick={() => void remove(p.id)}
+                  onClick={() => {
+                    const ok = confirm(
+                      `Remove project "${p.name}" from the workbench?\n\nThe folder on disk is left intact.`,
+                    );
+                    if (ok) void remove(p.id);
+                  }}
                   className="hidden text-xs text-neutral-500 hover:text-red-400 group-hover:inline"
                   title="Delete project (folder is left intact)"
                 >

@@ -130,11 +130,12 @@ async function jsend(
   url: string,
   body?: unknown,
 ): Promise<{ status: number; body: unknown }> {
-  const res = await fetch(url, {
-    method,
-    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  const init: RequestInit = { method };
+  if (body !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, init);
   const text = await res.text();
   return { status: res.status, body: text === "" ? undefined : JSON.parse(text) };
 }
@@ -229,8 +230,13 @@ async function main(): Promise<void> {
     {
       const { status, body } = await jget(`${base}/api/v1/projects/browse`);
       assert("GET /projects/browse → 200", status === 200);
-      const r = body as { path: string; entries: { name: string; isGitRepo: boolean }[] };
+      const r = body as {
+        path: string;
+        parentPath: string | null;
+        entries: { name: string; isGitRepo: boolean }[];
+      };
       assert("  browse path is workspace root", r.path === resolve(workspacePath));
+      assert("  browse at root returns parentPath=null", r.parentPath === null);
       const names = r.entries.map((e) => e.name).sort();
       assert(
         "  entries are [my-repo, other] (hidden filtered out)",
@@ -241,6 +247,33 @@ async function main(): Promise<void> {
       const other = r.entries.find((e) => e.name === "other");
       assert("  my-repo is flagged isGitRepo=true", repo?.isGitRepo === true);
       assert("  other is flagged isGitRepo=false", other?.isGitRepo === false);
+    }
+
+    // 7b. browse inside a subfolder returns parentPath = the workspace root
+    {
+      const { body } = await jget(
+        `${base}/api/v1/projects/browse?path=${encodeURIComponent(repoFolder)}`,
+      );
+      const r = body as { path: string; parentPath: string | null };
+      assert(
+        "browse inside subfolder reports parentPath = workspace root",
+        r.parentPath === resolve(workspacePath),
+        `got ${r.parentPath}`,
+      );
+    }
+
+    // 7c. duplicate path is rejected with 409
+    {
+      // re-create a project at the same path as `created`
+      const { status, body } = await jsend("POST", `${base}/api/v1/projects`, {
+        name: "dup",
+        path: repoFolder,
+      });
+      assert("POST duplicate path → 409", status === 409);
+      assert(
+        "  error code is duplicate_path",
+        (body as { error: string }).error === "duplicate_path",
+      );
     }
 
     // 8. browse outside workspace → 403
@@ -282,14 +315,18 @@ async function main(): Promise<void> {
       );
     }
 
-    // 11. Persistence: restart the server, list still shows previously created projects.
-    // Create a fresh project, restart, verify.
+    // 11. Persistence: restart the server, list still shows projects with their
+    // current state — including a rename that was applied before restart.
     {
-      const { body } = await jsend("POST", `${base}/api/v1/projects`, {
+      const { body: a } = await jsend("POST", `${base}/api/v1/projects`, {
         name: "persistent",
         path: otherFolder,
       });
-      const persistentId = (body as Project).id;
+      const persistentId = (a as Project).id;
+      // Rename it, so we can prove the rename survives too.
+      await jsend("PATCH", `${base}/api/v1/projects/${persistentId}`, {
+        name: "persistent-renamed",
+      });
       // soft-restart by sending SIGTERM and starting a new child against same dirs.
       await new Promise<void>((res) => {
         srv.child.once("exit", () => res());
@@ -319,6 +356,11 @@ async function main(): Promise<void> {
           "after restart, persisted project still listed",
           projects.length === 1 && projects[0]?.id === persistentId,
           `count=${projects.length}`,
+        );
+        assert(
+          "after restart, the rename survived",
+          projects[0]?.name === "persistent-renamed",
+          `name=${projects[0]?.name}`,
         );
       } finally {
         await new Promise<void>((res) => {

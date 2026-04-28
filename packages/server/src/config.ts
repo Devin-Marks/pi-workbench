@@ -15,6 +15,14 @@ function readInt(key: string, fallback: number): number {
   return n;
 }
 
+function readBool(key: string, fallback: boolean): boolean {
+  const v = readEnv(key)?.toLowerCase();
+  if (v === undefined) return fallback;
+  if (["1", "true", "yes", "on"].includes(v)) return true;
+  if (["0", "false", "no", "off"].includes(v)) return false;
+  throw new Error(`config: ${key} must be a boolean-ish value (got ${v})`);
+}
+
 const WORKSPACE_PATH = resolve(readEnv("WORKSPACE_PATH") ?? "/workspace");
 const PI_CONFIG_DIR = resolve(readEnv("PI_CONFIG_DIR") ?? "/root/.pi/agent");
 const SESSION_DIR = resolve(readEnv("SESSION_DIR") ?? `${WORKSPACE_PATH}/.pi/sessions`);
@@ -35,6 +43,8 @@ export const config = Object.freeze({
   port: readInt("PORT", 3000),
   host: readEnv("HOST") ?? "0.0.0.0",
   logLevel: readEnv("LOG_LEVEL") ?? "info",
+  isTest: (readEnv("NODE_ENV") ?? "") === "test",
+  trustProxy: readBool("TRUST_PROXY", false),
   workspacePath: WORKSPACE_PATH,
   piConfigDir: PI_CONFIG_DIR,
   sessionDir: SESSION_DIR,

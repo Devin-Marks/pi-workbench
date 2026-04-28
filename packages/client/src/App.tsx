@@ -1,9 +1,11 @@
 import { useEffect } from "react";
 import { useAuthStore } from "./store/auth-store";
-import { useProjectStore } from "./store/project-store";
+import { useActiveProject, useProjectStore } from "./store/project-store";
 import { LoginScreen } from "./components/LoginScreen";
 import { ProjectSidebar } from "./components/ProjectSidebar";
 import { ProjectPicker } from "./components/ProjectPicker";
+
+const noop = (): void => undefined;
 
 export function App() {
   const ready = useAuthStore((s) => s.ready);
@@ -16,6 +18,7 @@ export function App() {
   const projectsLoaded = useProjectStore((s) => !s.loading);
   const loadProjects = useProjectStore((s) => s.load);
   const setActive = useProjectStore((s) => s.setActive);
+  const active = useActiveProject();
 
   useEffect(() => {
     void bootstrap();
@@ -34,8 +37,6 @@ export function App() {
   }
 
   if (!isAuthenticated) return <LoginScreen />;
-
-  const active = projects.find((p) => p.id === activeProjectId);
 
   return (
     <div className="flex h-screen flex-col bg-neutral-950 text-neutral-100">
@@ -68,7 +69,7 @@ export function App() {
         <ProjectSidebar />
         <main className="flex flex-1 items-center justify-center px-6 text-center">
           {projectsLoaded && projects.length === 0 ? (
-            <ProjectPicker required onClose={() => undefined} />
+            <ProjectPicker required onClose={noop} />
           ) : active ? (
             <div className="space-y-2 text-sm text-neutral-400">
               <h2 className="text-xl font-semibold text-neutral-100">{active.name}</h2>

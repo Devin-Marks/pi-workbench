@@ -10,11 +10,11 @@
  * check (RATE_LIMIT_LOGIN_MAX=3 → 4th login attempt returns 429).
  *
  * Note: there are no protected /api/v1/* routes yet (sessions etc. land in
- * Phase 4+). To exercise the preHandler we use /api/v1/auth/protected-probe…
- * which doesn't exist. Instead we hit /api/v1/__auth_probe — a path that does
- * not exist BUT still passes through the preHandler. The preHandler runs first;
- * if it rejects we get 401 from the hook, otherwise we get 404 from Fastify's
- * not-found handler. Both responses prove the preHandler is doing its job.
+ * Phase 4+). To exercise the preHandler we hit /api/v1/__protected_probe — a
+ * path that does not exist BUT still passes through the preHandler. The
+ * preHandler runs first; if it rejects we get 401 from the hook, otherwise we
+ * get 404 from Fastify's not-found handler. Both responses prove the
+ * preHandler is doing its job.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";

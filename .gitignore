@@ -34,3 +34,6 @@ packages/client/dev-dist/
 # Editor
 .vscode/
 .idea/
+
+# Local working notes (not committed)
+notes/

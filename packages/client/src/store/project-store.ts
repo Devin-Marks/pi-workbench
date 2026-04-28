@@ -62,24 +62,40 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
   create: async (name, path) => {
-    const project = await api.createProject(name, path);
-    set((s) => ({ projects: [...s.projects, project], activeProjectId: project.id }));
-    localStorage.setItem(ACTIVE_KEY, project.id);
-    return project;
+    set({ error: undefined });
+    try {
+      const project = await api.createProject(name, path);
+      set((s) => ({ projects: [...s.projects, project], activeProjectId: project.id }));
+      localStorage.setItem(ACTIVE_KEY, project.id);
+      return project;
+    } catch (err) {
+      set({ error: err instanceof ApiError ? err.code : (err as Error).message });
+      throw err;
+    }
   },
   rename: async (id, name) => {
-    const updated = await api.renameProject(id, name);
-    set((s) => ({ projects: s.projects.map((p) => (p.id === id ? updated : p)) }));
+    try {
+      const updated = await api.renameProject(id, name);
+      set((s) => ({ projects: s.projects.map((p) => (p.id === id ? updated : p)) }));
+    } catch (err) {
+      set({ error: err instanceof ApiError ? err.code : (err as Error).message });
+      throw err;
+    }
   },
   remove: async (id) => {
-    await api.deleteProject(id);
-    set((s) => {
-      const projects = s.projects.filter((p) => p.id !== id);
-      const activeProjectId = s.activeProjectId === id ? projects[0]?.id : s.activeProjectId;
-      if (activeProjectId) localStorage.setItem(ACTIVE_KEY, activeProjectId);
-      else localStorage.removeItem(ACTIVE_KEY);
-      return { projects, activeProjectId };
-    });
+    try {
+      await api.deleteProject(id);
+      set((s) => {
+        const projects = s.projects.filter((p) => p.id !== id);
+        const activeProjectId = s.activeProjectId === id ? projects[0]?.id : s.activeProjectId;
+        if (activeProjectId) localStorage.setItem(ACTIVE_KEY, activeProjectId);
+        else localStorage.removeItem(ACTIVE_KEY);
+        return { projects, activeProjectId };
+      });
+    } catch (err) {
+      set({ error: err instanceof ApiError ? err.code : (err as Error).message });
+      throw err;
+    }
   },
   setActive: (id) => {
     if (id) localStorage.setItem(ACTIVE_KEY, id);
@@ -94,3 +110,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
   },
 }));
+
+/** Selector for the active project record (or undefined). */
+export function useActiveProject(): Project | undefined {
+  return useProjectStore((s) =>
+    s.activeProjectId === undefined
+      ? undefined
+      : s.projects.find((p) => p.id === s.activeProjectId),
+  );
+}

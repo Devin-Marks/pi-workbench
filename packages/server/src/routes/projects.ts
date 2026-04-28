@@ -4,7 +4,10 @@ import {
   createDirectory,
   createProject,
   deleteProject,
+  DuplicatePathError,
   getProject,
+  InvalidDirectoryNameError,
+  InvalidNameError,
   NotADirectoryError,
   PathOutsideWorkspaceError,
   ProjectNotFoundError,
@@ -33,11 +36,14 @@ function handleError(reply: FastifyReply, err: unknown): FastifyReply {
   if (err instanceof ProjectNotFoundError) {
     return reply.code(404).send({ error: "project_not_found" });
   }
-  if (err instanceof Error && err.message.includes("project name")) {
+  if (err instanceof InvalidNameError) {
     return reply.code(400).send({ error: "invalid_name" });
   }
-  if (err instanceof Error && err.message === "invalid directory name") {
+  if (err instanceof InvalidDirectoryNameError) {
     return reply.code(400).send({ error: "invalid_directory_name" });
+  }
+  if (err instanceof DuplicatePathError) {
+    return reply.code(409).send({ error: "duplicate_path" });
   }
   if ((err as NodeJS.ErrnoException).code === "EEXIST") {
     return reply.code(409).send({ error: "already_exists" });
@@ -203,6 +209,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
             required: ["path", "entries"],
             properties: {
               path: { type: "string" },
+              parentPath: { type: ["string", "null"] },
               entries: {
                 type: "array",
                 items: {
@@ -224,7 +231,12 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (req, reply) => {
       try {
-        return await browseDirectory(req.query.path);
+        const result = await browseDirectory(req.query.path);
+        return {
+          path: result.path,
+          parentPath: result.parentPath ?? null,
+          entries: result.entries,
+        };
       } catch (err) {
         return handleError(reply, err);
       }

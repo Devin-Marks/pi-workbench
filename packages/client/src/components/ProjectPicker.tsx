@@ -18,6 +18,7 @@ export function ProjectPicker({ onClose, required = false }: Props) {
   const [error, setError] = useState<string | undefined>();
 
   const [path, setPath] = useState<string | undefined>();
+  const [parentPath, setParentPath] = useState<string | null>(null);
   const [entries, setEntries] = useState<BrowseEntry[]>([]);
   const [loadingBrowse, setLoadingBrowse] = useState(false);
   const [newFolderInput, setNewFolderInput] = useState("");
@@ -33,6 +34,7 @@ export function ProjectPicker({ onClose, required = false }: Props) {
       .then((res) => {
         if (cancelled) return;
         setPath(res.path);
+        setParentPath(res.parentPath);
         setEntries(res.entries);
       })
       .catch((err: unknown) => {
@@ -65,9 +67,7 @@ export function ProjectPicker({ onClose, required = false }: Props) {
   };
 
   const goUp = (): void => {
-    if (!path) return;
-    const parent = path.replace(/\/[^/]+\/?$/, "");
-    setPath(parent.length === 0 ? "/" : parent);
+    if (parentPath !== null) setPath(parentPath);
   };
 
   const createFolder = async (): Promise<void> => {
@@ -132,7 +132,9 @@ export function ProjectPicker({ onClose, required = false }: Props) {
             <div className="flex items-center gap-2 text-xs text-neutral-400">
               <button
                 onClick={goUp}
-                className="rounded-md border border-neutral-700 px-2 py-1 hover:bg-neutral-800"
+                disabled={parentPath === null}
+                className="rounded-md border border-neutral-700 px-2 py-1 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
+                title={parentPath === null ? "At workspace root" : "Up one folder"}
               >
                 ↑ up
               </button>
@@ -233,7 +235,11 @@ export function ProjectPicker({ onClose, required = false }: Props) {
                 ? "That path is not a directory."
                 : error === "already_exists"
                   ? "A folder with that name already exists."
-                  : `Error: ${error}`}
+                  : error === "duplicate_path"
+                    ? "Another project already points at that folder."
+                    : error === "network_error"
+                      ? "Couldn't reach the server."
+                      : `Error: ${error}`}
           </p>
         )}
       </div>

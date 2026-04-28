@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 
@@ -31,7 +31,28 @@ export class ProjectNotFoundError extends Error {
   }
 }
 
-const PROJECTS_FILE = () => join(config.piConfigDir, "projects.json");
+export class InvalidNameError extends Error {
+  constructor(message = "invalid name") {
+    super(message);
+    this.name = "InvalidNameError";
+  }
+}
+
+export class InvalidDirectoryNameError extends Error {
+  constructor(message = "invalid directory name") {
+    super(message);
+    this.name = "InvalidDirectoryNameError";
+  }
+}
+
+export class DuplicatePathError extends Error {
+  constructor(path: string) {
+    super(`a project already points at: ${path}`);
+    this.name = "DuplicatePathError";
+  }
+}
+
+const PROJECTS_FILE = (): string => join(config.piConfigDir, "projects.json");
 
 /** True iff `target` is the same path as `root` or strictly inside it. */
 export function isInsideWorkspace(target: string, root: string = config.workspacePath): boolean {
@@ -44,6 +65,20 @@ export function isInsideWorkspace(target: string, root: string = config.workspac
 
 async function ensureConfigDir(): Promise<void> {
   await mkdir(config.piConfigDir, { recursive: true });
+}
+
+/**
+ * Serialise all read-modify-write sequences over projects.json. Without this,
+ * two concurrent POST /projects requests can read the same baseline and race
+ * the rename(), losing one write. Single-process / single-tenant only — there
+ * is no file lock; we don't need cross-process safety.
+ */
+let projectsLock: Promise<unknown> = Promise.resolve();
+function withProjectsLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = projectsLock.then(fn, fn);
+  // Keep the chain alive but don't propagate failures into subsequent waiters.
+  projectsLock = next.catch(() => undefined);
+  return next;
 }
 
 export async function readProjects(): Promise<Project[]> {
@@ -81,7 +116,7 @@ async function writeProjects(projects: Project[]): Promise<void> {
 export async function createProject(name: string, path: string): Promise<Project> {
   const trimmedName = name.trim();
   if (trimmedName.length === 0) {
-    throw new Error("project name cannot be empty");
+    throw new InvalidNameError("project name cannot be empty");
   }
   const resolvedPath = resolve(path);
   if (!isInsideWorkspace(resolvedPath)) {
@@ -91,39 +126,48 @@ export async function createProject(name: string, path: string): Promise<Project
   if (st === undefined || !st.isDirectory()) {
     throw new NotADirectoryError(resolvedPath);
   }
-  const projects = await readProjects();
-  const project: Project = {
-    id: randomUUID(),
-    name: trimmedName,
-    path: resolvedPath,
-    createdAt: new Date().toISOString(),
-  };
-  projects.push(project);
-  await writeProjects(projects);
-  return project;
+  return withProjectsLock(async () => {
+    const projects = await readProjects();
+    if (projects.some((p) => p.path === resolvedPath)) {
+      throw new DuplicatePathError(resolvedPath);
+    }
+    const project: Project = {
+      id: randomUUID(),
+      name: trimmedName,
+      path: resolvedPath,
+      createdAt: new Date().toISOString(),
+    };
+    projects.push(project);
+    await writeProjects(projects);
+    return project;
+  });
 }
 
 export async function renameProject(id: string, name: string): Promise<Project> {
   const trimmed = name.trim();
   if (trimmed.length === 0) {
-    throw new Error("project name cannot be empty");
+    throw new InvalidNameError("project name cannot be empty");
   }
-  const projects = await readProjects();
-  const idx = projects.findIndex((p) => p.id === id);
-  if (idx === -1) throw new ProjectNotFoundError(id);
-  const existing = projects[idx];
-  if (existing === undefined) throw new ProjectNotFoundError(id);
-  const updated: Project = { ...existing, name: trimmed };
-  projects[idx] = updated;
-  await writeProjects(projects);
-  return updated;
+  return withProjectsLock(async () => {
+    const projects = await readProjects();
+    const idx = projects.findIndex((p) => p.id === id);
+    if (idx === -1) throw new ProjectNotFoundError(id);
+    const existing = projects[idx];
+    if (existing === undefined) throw new ProjectNotFoundError(id);
+    const updated: Project = { ...existing, name: trimmed };
+    projects[idx] = updated;
+    await writeProjects(projects);
+    return updated;
+  });
 }
 
 export async function deleteProject(id: string): Promise<void> {
-  const projects = await readProjects();
-  const next = projects.filter((p) => p.id !== id);
-  if (next.length === projects.length) throw new ProjectNotFoundError(id);
-  await writeProjects(next);
+  await withProjectsLock(async () => {
+    const projects = await readProjects();
+    const next = projects.filter((p) => p.id !== id);
+    if (next.length === projects.length) throw new ProjectNotFoundError(id);
+    await writeProjects(next);
+  });
 }
 
 export async function getProject(id: string): Promise<Project | undefined> {
@@ -137,10 +181,14 @@ export interface BrowseEntry {
   isGitRepo: boolean;
 }
 
-export async function browseDirectory(requested: string | undefined): Promise<{
+export interface BrowseResult {
   path: string;
+  /** Resolved parent path. `undefined` when `path` is the workspace root. */
+  parentPath: string | undefined;
   entries: BrowseEntry[];
-}> {
+}
+
+export async function browseDirectory(requested: string | undefined): Promise<BrowseResult> {
   const target = resolve(requested ?? config.workspacePath);
   if (!isInsideWorkspace(target)) {
     throw new PathOutsideWorkspaceError(target);
@@ -150,26 +198,26 @@ export async function browseDirectory(requested: string | undefined): Promise<{
     throw new NotADirectoryError(target);
   }
   const dirents = await readdir(target, { withFileTypes: true });
-  const entries: BrowseEntry[] = [];
-  for (const ent of dirents) {
-    if (!ent.isDirectory()) continue;
-    if (ent.name.startsWith(".")) continue;
-    const childPath = join(target, ent.name);
-    const gitStat = await stat(join(childPath, ".git")).catch(() => undefined);
-    entries.push({
-      name: ent.name,
-      path: childPath,
-      isGitRepo: gitStat !== undefined,
-    });
-  }
+  const dirEntries = dirents.filter((d) => d.isDirectory() && !d.name.startsWith("."));
+  // Stat all .git children in parallel — sequential round-trips per entry are
+  // O(N) of EAGAIN / disk latency on large workspaces.
+  const entries: BrowseEntry[] = await Promise.all(
+    dirEntries.map(async (ent) => {
+      const childPath = join(target, ent.name);
+      const gitStat = await stat(join(childPath, ".git")).catch(() => undefined);
+      return { name: ent.name, path: childPath, isGitRepo: gitStat !== undefined };
+    }),
+  );
   entries.sort((a, b) => a.name.localeCompare(b.name));
-  return { path: target, entries };
+  const resolvedRoot = resolve(config.workspacePath);
+  const parentPath = target === resolvedRoot ? undefined : dirname(target);
+  return { path: target, parentPath, entries };
 }
 
 export async function createDirectory(parentPath: string, name: string): Promise<string> {
   const trimmed = name.trim();
   if (trimmed.length === 0 || trimmed.includes("/") || trimmed.includes("\\") || trimmed === "..") {
-    throw new Error("invalid directory name");
+    throw new InvalidDirectoryNameError();
   }
   const parent = resolve(parentPath);
   if (!isInsideWorkspace(parent)) {

@@ -36,6 +36,7 @@ export interface BrowseEntry {
 
 export interface BrowseResponse {
   path: string;
+  parentPath: string | null;
   entries: BrowseEntry[];
 }
 
@@ -53,6 +54,15 @@ interface RequestOpts {
   skipAuth?: boolean;
 }
 
+function safeParseJson(text: string): { ok: true; value: unknown } | { ok: false } {
+  if (text === "") return { ok: true, value: undefined };
+  try {
+    return { ok: true, value: JSON.parse(text) as unknown };
+  } catch {
+    return { ok: false };
+  }
+}
+
 async function request<T>(path: string, opts: RequestOpts = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (!opts.skipAuth) {
@@ -61,12 +71,19 @@ async function request<T>(path: string, opts: RequestOpts = {}): Promise<T> {
   }
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
 
-  const res = await fetch(path, {
-    method: opts.method ?? "GET",
-    headers,
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    signal: opts.signal,
-  });
+  const init: RequestInit = { method: opts.method ?? "GET", headers };
+  if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
+  if (opts.signal !== undefined) init.signal = opts.signal;
+
+  let res: Response;
+  try {
+    res = await fetch(path, init);
+  } catch (err) {
+    // Aborts surface as DOMException with name "AbortError" — propagate so
+    // callers can distinguish from real network failures.
+    if (err instanceof Error && err.name === "AbortError") throw err;
+    throw new ApiError(0, "network_error", (err as Error).message);
+  }
 
   if (res.status === 401 && !opts.skipAuth) {
     clearStoredToken();
@@ -74,17 +91,27 @@ async function request<T>(path: string, opts: RequestOpts = {}): Promise<T> {
   }
 
   const text = await res.text();
-  const parsed: unknown = text === "" ? undefined : JSON.parse(text);
+  const parsed = safeParseJson(text);
 
   if (!res.ok) {
     const code =
-      typeof parsed === "object" && parsed !== null && "error" in parsed
-        ? String((parsed as { error: unknown }).error)
-        : "request_failed";
+      parsed.ok &&
+      typeof parsed.value === "object" &&
+      parsed.value !== null &&
+      "error" in parsed.value
+        ? String((parsed.value as { error: unknown }).error)
+        : parsed.ok
+          ? "request_failed"
+          : "invalid_response_body";
     throw new ApiError(res.status, code);
   }
 
-  return parsed as T;
+  if (!parsed.ok) {
+    // 2xx with malformed JSON is a real server bug — don't paper over it.
+    throw new ApiError(res.status, "invalid_response_body", "server returned non-JSON 2xx body");
+  }
+
+  return parsed.value as T;
 }
 
 export const api = {
