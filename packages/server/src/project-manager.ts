@@ -68,6 +68,33 @@ async function ensureConfigDir(): Promise<void> {
 }
 
 /**
+ * Run `fn` over each item with at most `limit` in flight at once. Order of
+ * results matches the input order. Used to cap fan-out over filesystem
+ * operations so we don't blow the FD ceiling on large directories.
+ */
+async function mapBounded<T, U>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<U>,
+): Promise<U[]> {
+  const results: U[] = new Array(items.length);
+  let next = 0;
+  const workers: Promise<void>[] = [];
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      const item = items[i];
+      if (item === undefined) continue;
+      results[i] = await fn(item, i);
+    }
+  };
+  for (let w = 0; w < Math.min(limit, items.length); w++) workers.push(worker());
+  await Promise.all(workers);
+  return results;
+}
+
+/**
  * Serialise all read-modify-write sequences over projects.json. Without this,
  * two concurrent POST /projects requests can read the same baseline and race
  * the rename(), losing one write. Single-process / single-tenant only — there
@@ -199,15 +226,15 @@ export async function browseDirectory(requested: string | undefined): Promise<Br
   }
   const dirents = await readdir(target, { withFileTypes: true });
   const dirEntries = dirents.filter((d) => d.isDirectory() && !d.name.startsWith("."));
-  // Stat all .git children in parallel — sequential round-trips per entry are
-  // O(N) of EAGAIN / disk latency on large workspaces.
-  const entries: BrowseEntry[] = await Promise.all(
-    dirEntries.map(async (ent) => {
-      const childPath = join(target, ent.name);
-      const gitStat = await stat(join(childPath, ".git")).catch(() => undefined);
-      return { name: ent.name, path: childPath, isGitRepo: gitStat !== undefined };
-    }),
-  );
+  // Stat .git children with a bounded concurrency cap — unbounded Promise.all
+  // could exhaust the libuv FD pool on a node_modules-shaped tree (closes the
+  // Phase-10 deferred item). 16 concurrent stats is plenty for any realistic
+  // workspace and well below the default ulimit on macOS/Linux.
+  const entries: BrowseEntry[] = await mapBounded(dirEntries, 16, async (ent) => {
+    const childPath = join(target, ent.name);
+    const gitStat = await stat(join(childPath, ".git")).catch(() => undefined);
+    return { name: ent.name, path: childPath, isGitRepo: gitStat !== undefined };
+  });
   entries.sort((a, b) => a.name.localeCompare(b.name));
   const resolvedRoot = resolve(config.workspacePath);
   const parentPath = target === resolvedRoot ? undefined : dirname(target);

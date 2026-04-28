@@ -10,6 +10,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     "/auth/status",
     {
+      config: { public: true },
       schema: {
         description: "Returns whether auth is required to call protected routes.",
         tags: ["auth"],
@@ -32,6 +33,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     "/auth/login",
     {
       config: {
+        public: true,
         rateLimit: {
           max: config.auth.loginRateLimitMax,
           timeWindow: config.auth.loginRateLimitWindowMs,

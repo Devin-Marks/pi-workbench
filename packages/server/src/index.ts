@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
@@ -10,13 +10,19 @@ import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
 import { projectRoutes } from "./routes/projects.js";
 
-const PUBLIC_PATHS = new Set<string>([
-  "/api/v1/health",
-  "/api/v1/auth/login",
-  "/api/v1/auth/status",
-]);
+/**
+ * Per-route auth metadata. Routes that should skip the auth preHandler set
+ * `config.public: true` via Fastify route config. The preHandler reads the
+ * matched route's config rather than maintaining a hard-coded path Set,
+ * which scales as the API grows (closes the Phase 6 deferred item).
+ */
+declare module "fastify" {
+  interface FastifyContextConfig {
+    public?: boolean;
+  }
+}
 
-export async function buildServer() {
+export async function buildServer(): Promise<FastifyInstance> {
   const fastify = Fastify({
     logger: { level: config.logLevel },
     disableRequestLogging: config.isTest,
@@ -32,11 +38,8 @@ export async function buildServer() {
     credentials: false,
   });
 
-  // Rate limiting is per-route only — no global cap by design (see dev plan
-  // Phase 2 § Rate limiter scope). The login route applies its own limit via
-  // route-level `config.rateLimit`. Registering the plugin here makes that
-  // route-level config available; defaults are intentionally minimal and not
-  // applied to anything because `global: false`.
+  // Rate limiting is per-route only — no global cap by design. The login
+  // route applies its own limit via route-level `config.rateLimit`.
   await fastify.register(rateLimit, { global: false });
 
   await fastify.register(swagger, {
@@ -56,10 +59,43 @@ export async function buildServer() {
     uiConfig: { docExpansion: "list" },
   });
 
-  fastify.addHook("preHandler", async (req, reply) => {
-    if (!req.url.startsWith("/api/v1/")) return;
-    const path = req.url.split("?")[0] ?? req.url;
-    if (PUBLIC_PATHS.has(path)) return;
+  /**
+   * Auth gate. Applies to:
+   *   - All `/api/v1/*` routes that are NOT marked `config.public: true`
+   *     (those are health, auth/login, auth/status — see route definitions).
+   *   - `/api/docs*` — the OpenAPI UI and JSON spec leak the route catalogue,
+   *     so they are gated when auth is enabled. (Closes the Phase-8 deferred
+   *     item.) When auth is disabled (UI_PASSWORD and API_KEY both unset),
+   *     /api/docs is open — useful for local dev.
+   *
+   * Token check: accepts a valid JWT or a constant-time-matched API key.
+   */
+  fastify.addHook("onRequest", async (req, reply) => {
+    const url = req.url;
+    const path = url.split("?")[0] ?? url;
+
+    // /api/docs* gating — these are not Fastify-defined routes (they're
+    // injected by @fastify/swagger-ui) so we can't rely on route config.
+    const isDocs = path === "/api/docs" || path.startsWith("/api/docs/");
+    if (isDocs) {
+      if (!authEnabled()) return;
+      const presented = extractBearer(req.headers.authorization);
+      if (
+        presented === undefined ||
+        (verifyToken(presented) === undefined && !verifyApiKey(presented))
+      ) {
+        reply.code(401).send({ error: "auth_required" });
+        return;
+      }
+      return;
+    }
+
+    if (!path.startsWith("/api/v1/")) return;
+
+    // Route-level public marker — set on health and auth routes via
+    // schema/config (see those route files).
+    const routeConfig = req.routeOptions?.config;
+    if (routeConfig?.public === true) return;
     if (!authEnabled()) return;
 
     const presented = extractBearer(req.headers.authorization);
@@ -94,7 +130,8 @@ async function start(): Promise<void> {
   }
 }
 
-const isMainModule = import.meta.url === pathToFileURL(process.argv[1] ?? "").href;
+const isMainModule =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMainModule) {
   void start();
 }

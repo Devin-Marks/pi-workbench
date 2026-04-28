@@ -55,6 +55,7 @@ export function ProjectPicker({ onClose, required = false }: Props) {
   };
 
   const select = async (selected: string): Promise<void> => {
+    if (submitting) return;
     setSubmitting(true);
     setError(undefined);
     try {

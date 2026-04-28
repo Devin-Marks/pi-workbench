@@ -5,6 +5,7 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     "/health",
     {
+      config: { public: true },
       schema: {
         description: "Health check — no auth required.",
         tags: ["health"],

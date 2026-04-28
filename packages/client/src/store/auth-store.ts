@@ -65,10 +65,28 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 // Module-level (not per-store-construction) so HMR re-evaluating the store
 // factory doesn't accumulate listeners. Vite HMR will replace the entire
 // module on edit, so this fires exactly once per module instantiation.
+//
+// HMR correctness: when this module is hot-reloaded, the previously-registered
+// listener still references the orphaned `useAuthStore` from the previous
+// evaluation. import.meta.hot.dispose clears the flag and unregisters the old
+// listener so the next evaluation registers against the new store.
 declare global {
   var __piWorkbenchAuthListenerRegistered: boolean | undefined;
+  var __piWorkbenchAuthListenerCleanup: (() => void) | undefined;
 }
 if (!globalThis.__piWorkbenchAuthListenerRegistered) {
-  onUnauthorized(() => useAuthStore.setState({ isAuthenticated: false }));
+  globalThis.__piWorkbenchAuthListenerCleanup = onUnauthorized(() =>
+    useAuthStore.setState({ isAuthenticated: false }),
+  );
   globalThis.__piWorkbenchAuthListenerRegistered = true;
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    if (globalThis.__piWorkbenchAuthListenerCleanup) {
+      globalThis.__piWorkbenchAuthListenerCleanup();
+    }
+    globalThis.__piWorkbenchAuthListenerRegistered = false;
+    globalThis.__piWorkbenchAuthListenerCleanup = undefined;
+  });
 }

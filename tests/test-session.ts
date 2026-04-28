@@ -199,8 +199,14 @@ async function main(): Promise<void> {
     assert("discovered.sessionId matches", discovered[0]?.sessionId === live.sessionId);
     assert("discovered.name reflects the rename", discovered[0]?.name === "phase-4-test");
     assert(
+      "discovered.messageCount === 1 (the synthetic assistant message)",
+      discovered[0]?.messageCount === 1,
+      `got ${discovered[0]?.messageCount}`,
+    );
+    assert(
       "discoverSessionsOnDisk for unknown project returns empty",
-      (await registry.discoverSessionsOnDisk("does-not-exist", workspacePath)).length === 0,
+      (await registry.discoverSessionsOnDisk("00000000-0000-4000-8000-000000000000", workspacePath))
+        .length === 0,
     );
 
     // 5. dispose removes from registry, leaves JSONL on disk
@@ -233,6 +239,64 @@ async function main(): Promise<void> {
     );
     registry.disposeSession(resumed.sessionId);
 
+    // 6b. Multi-client fan-out: in a fresh session (so it doesn't disturb
+    // the resume-name assertion above), inject two stub SSEClients and
+    // verify both receive a real AgentSessionEvent.
+    const fanSession = await registry.createSession(projectId, workspacePath);
+    try {
+      const fanA: { type: string }[] = [];
+      const fanB: { type: string }[] = [];
+      const stubA = {
+        id: "a",
+        send: (e: { type: string }) => fanA.push(e),
+        close: () => undefined,
+      };
+      const stubB = {
+        id: "b",
+        send: (e: { type: string }) => fanB.push(e),
+        close: () => undefined,
+      };
+      fanSession.clients.add(stubA);
+      fanSession.clients.add(stubB);
+      fanSession.session.setSessionName("fan-out-check");
+      assert(
+        "fan-out delivered to client A",
+        fanA.some((e) => e.type === "session_info_changed"),
+      );
+      assert(
+        "fan-out delivered to client B",
+        fanB.some((e) => e.type === "session_info_changed"),
+      );
+
+      // A misbehaving client doesn't kill the fan-out — the throwing client
+      // gets dropped while the healthy one keeps receiving.
+      const fanGood: { type: string }[] = [];
+      let badInvocations = 0;
+      const stubBad = {
+        id: "bad",
+        send: () => {
+          badInvocations += 1;
+          throw new Error("simulated send failure");
+        },
+        close: () => undefined,
+      };
+      const stubGood = {
+        id: "good",
+        send: (e: { type: string }) => fanGood.push(e),
+        close: () => undefined,
+      };
+      fanSession.clients.delete(stubA);
+      fanSession.clients.delete(stubB);
+      fanSession.clients.add(stubBad);
+      fanSession.clients.add(stubGood);
+      fanSession.session.setSessionName("fan-out-resilience");
+      assert("misbehaving client received event once", badInvocations === 1);
+      assert("misbehaving client was removed from the set", !fanSession.clients.has(stubBad));
+      assert("healthy client kept receiving events", fanGood.length > 0);
+    } finally {
+      registry.disposeSession(fanSession.sessionId);
+    }
+
     // 7. resumeSession on an unknown id throws SessionNotFoundError
     let threw = false;
     try {
@@ -245,6 +309,38 @@ async function main(): Promise<void> {
       threw = (err as Error).name === "SessionNotFoundError";
     }
     assert("resumeSession throws SessionNotFoundError for unknown id", threw);
+
+    // 7b. End-to-end: boot the Fastify server in-process and verify that
+    // /api/v1/health.activeSessions reflects the current registry size.
+    // Closes the deferred-item check that used to only assert ">= 0".
+    const buildModule = (await import(resolve(repoRoot, "packages/server/dist/index.js"))) as {
+      buildServer: () => Promise<{
+        listen: (...a: unknown[]) => Promise<string>;
+        close: () => Promise<void>;
+      }>;
+    };
+    const fastify = await buildModule.buildServer();
+    const listenAddr = await fastify.listen({ port: 0, host: "127.0.0.1" });
+    try {
+      // Registry was just emptied by section 7's dispose. Create one and
+      // assert health reports 1; then dispose and assert it reports 0.
+      const probe = await registry.createSession(projectId, workspacePath);
+      const res = await fetch(`${listenAddr}/api/v1/health`);
+      const body = (await res.json()) as { activeSessions: number; activePtys: number };
+      assert(
+        "health endpoint reflects registry.sessionCount()",
+        body.activeSessions === 1,
+        `got ${body.activeSessions}`,
+      );
+      assert("health.activePtys is still 0 (Phase 11)", body.activePtys === 0);
+      registry.disposeSession(probe.sessionId);
+      const res2 = await fetch(`${listenAddr}/api/v1/health`);
+      const body2 = (await res2.json()) as { activeSessions: number };
+      assert("health updates after dispose to 0", body2.activeSessions === 0);
+    } finally {
+      await fastify.close();
+    }
+    registry.disposeAllSessions();
 
     // 8. Optional: real prompt (only if PI_TEST_LIVE_PROMPT=1)
     if (process.env.PI_TEST_LIVE_PROMPT === "1") {
