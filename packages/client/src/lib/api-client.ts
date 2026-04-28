@@ -1,6 +1,12 @@
 import { clearStoredToken, getStoredToken } from "./auth-client";
 
-const UNAUTHORIZED_EVENT = "pi-workbench:unauthorized";
+/**
+ * Window event dispatched whenever an authenticated request returns 401
+ * (and after the SSE reader sees a 401). The auth store subscribes to this
+ * to clear `isAuthenticated` and surface the login screen. Exported so the
+ * SSE reader uses the same constant — keeps the wire-name in one place.
+ */
+export const UNAUTHORIZED_EVENT = "pi-workbench:unauthorized";
 
 export class ApiError extends Error {
   readonly status: number;

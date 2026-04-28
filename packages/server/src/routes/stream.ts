@@ -24,16 +24,15 @@ export const streamRoutes: FastifyPluginAsync = async (fastify) => {
           required: ["id"],
           properties: { id: { type: "string" } },
         },
+        // SSE responses cannot be JSON-schema-described meaningfully —
+        // they're a stream of `data: <json>\n\n` frames over text/event-stream,
+        // not a single typed body. The route hijacks the reply, so Fastify's
+        // serializer never runs against any 200 schema. We omit the 200
+        // response from the schema entirely (Fastify's
+        // FST_ERR_SCH_CONTENT_MISSING_SCHEMA forbids an empty `content` block,
+        // and `type: string` would lie about the shape). The event catalogue
+        // lives in docs/sse-events.md (Phase 17).
         response: {
-          // SSE response bodies cannot be schema-described; OpenAPI uses
-          // `description` on the response below to point readers at the
-          // event format documentation in docs/sse-events.md (Phase 6).
-          200: {
-            type: "string",
-            description:
-              "SSE stream — `data: <json>\\n\\n` per event. See " +
-              "docs/sse-events.md (Phase 6) for the event catalogue.",
-          },
           404: {
             type: "object",
             properties: { error: { type: "string" } },

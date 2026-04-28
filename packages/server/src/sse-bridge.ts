@@ -75,63 +75,98 @@ export function buildSnapshot(live: LiveSession): SnapshotEvent {
  *
  * The caller's route handler should NOT call `reply.send()` — `hijack()`
  * tells Fastify the response is being driven manually.
+ *
+ * Throws if the prelude (writeHead / snapshot write) fails. The caller is a
+ * route handler that has already hijacked, so Fastify's reply.send(err)
+ * fallback is a no-op; this function destroys the underlying socket on
+ * failure so the client doesn't hang waiting for headers.
  */
 export function createSSEClient(reply: FastifyReply, live: LiveSession): SSEClient {
   reply.hijack();
-
   const raw = reply.raw;
-  raw.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache, no-transform",
-    Connection: "keep-alive",
-    // Disable proxy buffering (nginx, Caddy) so events flush immediately.
-    "X-Accel-Buffering": "no",
-  });
 
-  const id = randomUUID();
+  // Closure state — declared up here so the prelude's catch can clean up
+  // even if `client` was never finalized.
+  let registeredClient: SSEClient | undefined;
   let closed = false;
 
-  const close = (): void => {
-    if (closed) return;
-    closed = true;
-    live.clients.delete(client);
-    try {
-      raw.end();
-    } catch {
-      // socket already torn down — fine
-    }
-  };
-
-  const send = (event: AgentSessionEvent | { type: string; [k: string]: unknown }): void => {
-    if (closed) return;
-    if (!isAllowedEvent(event)) return;
-    try {
-      raw.write(serializeSSE(event));
-    } catch {
-      // Write failed — socket is dead. Drop the client.
-      close();
-    }
-  };
-
-  const client: SSEClient = { id, send, close };
-
-  // Register before sending the snapshot so any event that fires during the
-  // microtask gap also hits this client. Set is in iteration-safe state.
-  live.clients.add(client);
-
-  // Snapshot bypass: write directly so we don't have to make `send()`
-  // skip the filter for a single special case. `snapshot` IS in the
-  // allowlist so this could go through send() too — direct write is just
-  // explicit about the unconditionality.
+  // The whole prelude (headers, registration, snapshot) is guarded as one
+  // unit. Anything that throws here would otherwise hang the client socket:
+  // after hijack() Fastify's wrap-thenable.js catches the throw and calls
+  // reply.send(err), which is a no-op because reply.sent === true post-hijack.
+  // Net result without this guard: no headers, no body, no end → connection
+  // hangs until the OS times out. So on any prelude failure we destroy the
+  // raw socket and remove the partially-registered client from the registry.
   try {
-    raw.write(serializeSSE(buildSnapshot(live)));
-  } catch {
-    close();
+    raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      // Disable proxy buffering (nginx, Caddy) so events flush immediately.
+      "X-Accel-Buffering": "no",
+    });
+
+    const id = randomUUID();
+
+    /**
+     * Direct raw write that bypasses the event filter. Used for synthetic
+     * frames the bridge owns (snapshot today; heartbeats / keepalive in
+     * later phases). Filter-bypass cannot leak SDK events because callers
+     * supply already-shaped objects.
+     */
+    const writeRaw = (chunk: string): void => {
+      if (closed) return;
+      try {
+        raw.write(chunk);
+      } catch {
+        close();
+      }
+    };
+
+    const close = (): void => {
+      if (closed) return;
+      closed = true;
+      if (registeredClient !== undefined) live.clients.delete(registeredClient);
+      try {
+        raw.end();
+      } catch {
+        // socket already torn down — fine
+      }
+    };
+
+    const send = (event: AgentSessionEvent | { type: string; [k: string]: unknown }): void => {
+      if (closed) return;
+      if (!isAllowedEvent(event)) return;
+      writeRaw(serializeSSE(event));
+    };
+
+    const client: SSEClient = { id, send, close };
+    registeredClient = client;
+    live.clients.add(client);
+
+    // Snapshot bypass — uses writeRaw, the same surface a future heartbeat
+    // would use. Server-issued synthetic frames flow through writeRaw;
+    // SDK-relayed events flow through send (which applies the filter).
+    writeRaw(serializeSSE(buildSnapshot(live)));
+
+    // Wire close listeners AFTER the snapshot write so an immediate socket
+    // close can't double-fire close() before the registry is in a coherent
+    // state. Node's 'close' event fires next-tick anyway, but explicit
+    // ordering is cheap insurance.
+    raw.on("close", close);
+    raw.on("error", close);
+
     return client;
+  } catch (err) {
+    // Prelude failure — clean up partial state and tear the socket down so
+    // the client gets a connection drop instead of a hung half-open socket.
+    closed = true;
+    if (registeredClient !== undefined) live.clients.delete(registeredClient);
+    try {
+      raw.destroy();
+    } catch {
+      // already destroyed
+    }
+    throw err;
   }
-
-  raw.on("close", close);
-  raw.on("error", close);
-
-  return client;
 }
