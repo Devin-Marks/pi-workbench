@@ -343,6 +343,12 @@ async function main(): Promise<void> {
           NODE_ENV: "test",
           WORKSPACE_PATH: workspacePath,
           PI_CONFIG_DIR: configDir,
+          // Ambient auth env from the dev's shell would otherwise enable auth
+          // on the restarted server, turning the rename-survives assertion
+          // into a confusing 401-vs-200 mismatch.
+          UI_PASSWORD: undefined,
+          JWT_SECRET: undefined,
+          API_KEY: undefined,
         },
         stdio: ["ignore", "pipe", "pipe"],
       });

@@ -79,7 +79,8 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         description:
           "Create a project pointing at an existing folder inside WORKSPACE_PATH. " +
-          "Returns 403 for paths outside the workspace, 400 if the path is not a directory.",
+          "Returns 403 for paths outside the workspace, 400 if the path is not a " +
+          "directory, 409 if another project already points at the same path.",
         tags: ["projects"],
         body: {
           type: "object",
@@ -94,6 +95,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
           201: projectSchema,
           400: { type: "object", properties: { error: { type: "string" } } },
           403: { type: "object", properties: { error: { type: "string" } } },
+          409: { type: "object", properties: { error: { type: "string" } } },
         },
       },
     },
@@ -126,6 +128,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
         },
         response: {
           200: projectSchema,
+          400: { type: "object", properties: { error: { type: "string" } } },
           404: { type: "object", properties: { error: { type: "string" } } },
         },
       },
@@ -206,7 +209,7 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
         response: {
           200: {
             type: "object",
-            required: ["path", "entries"],
+            required: ["path", "parentPath", "entries"],
             properties: {
               path: { type: "string" },
               parentPath: { type: ["string", "null"] },
