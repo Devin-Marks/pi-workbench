@@ -1,0 +1,32 @@
+{
+  "name": "pi-workbench",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev": "concurrently \"npm run dev -w packages/server\" \"npm run dev -w packages/client\"",
+    "typecheck": "npm run check --workspaces --if-present && tsc -p tests/tsconfig.json",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run typecheck && npm run lint && npm run format:check"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.25.1",
+    "@types/node": "^22.15.2",
+    "concurrently": "^9.1.2",
+    "eslint": "^9.25.1",
+    "eslint-config-prettier": "^10.1.2",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "globals": "^16.0.0",
+    "prettier": "^3.5.3",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.31.0"
+  }
+}

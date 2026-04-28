@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+packages/*/dist/
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Pi session data
+*.jsonl
+.pi/sessions/
+
+# Vite cache
+.vite/
+packages/client/.vite/
+
+# PWA dev build
+packages/client/dev-dist/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
