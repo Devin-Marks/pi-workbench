@@ -9,6 +9,7 @@ import { extractBearer, verifyApiKey, verifyToken } from "./auth.js";
 import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
 import { projectRoutes } from "./routes/projects.js";
+import { streamRoutes } from "./routes/stream.js";
 import { disposeAllSessions } from "./session-registry.js";
 
 /**
@@ -113,6 +114,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       await api.register(healthRoutes);
       await api.register(authRoutes);
       await api.register(projectRoutes);
+      await api.register(streamRoutes);
     },
     { prefix: "/api/v1" },
   );
