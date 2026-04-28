@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import { sessionCount } from "../session-registry.js";
 
 export const healthRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
@@ -23,7 +24,8 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async () => ({
       status: "ok" as const,
-      activeSessions: 0,
+      activeSessions: sessionCount(),
+      // PTYs land in Phase 11; expose 0 until pty-manager exists.
       activePtys: 0,
     }),
   );
