@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FolderTree } from "lucide-react";
+import { FolderTree, Terminal as TerminalIcon } from "lucide-react";
 import { useAuthStore } from "./store/auth-store";
 import { useActiveProject, useProjectStore } from "./store/project-store";
 import { useSessionStore } from "./store/session-store";
@@ -12,6 +12,7 @@ import { ChatInput } from "./components/ChatInput";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { FileBrowserPanel } from "./components/FileBrowserPanel";
 import { EditorPanel } from "./components/EditorPanel";
+import { TerminalPanel } from "./components/TerminalPanel";
 import { ResizableDivider } from "./components/ResizableDivider";
 
 /* Persisted pane widths. Stored in localStorage so the user-tuned
@@ -19,11 +20,14 @@ import { ResizableDivider } from "./components/ResizableDivider";
    primary surface" — files is narrow, editor is medium. */
 const FILES_WIDTH_KEY = "pi-workbench/files-width";
 const EDITOR_WIDTH_KEY = "pi-workbench/editor-width";
+const TERMINAL_HEIGHT_KEY = "pi-workbench/terminal-height";
 const DEFAULT_FILES_WIDTH = 280;
 const DEFAULT_EDITOR_WIDTH = 480;
+const DEFAULT_TERMINAL_HEIGHT = 280;
 const MIN_FILES_WIDTH = 200;
 const MIN_EDITOR_WIDTH = 320;
 const MIN_CHAT_WIDTH = 320;
+const MIN_TERMINAL_HEIGHT = 140;
 
 function readPersistedWidth(key: string, fallback: number): number {
   const raw = localStorage.getItem(key);
@@ -83,6 +87,22 @@ export function App() {
     setFilesOpen(v);
     localStorage.setItem("pi-workbench/files-open", v ? "true" : "false");
   };
+
+  const [terminalOpen, setTerminalOpen] = useState<boolean>(
+    () => localStorage.getItem("pi-workbench/terminal-open") === "true",
+  );
+  const setTerminalOpenPersisted = (v: boolean): void => {
+    setTerminalOpen(v);
+    localStorage.setItem("pi-workbench/terminal-open", v ? "true" : "false");
+  };
+  const [terminalHeight, setTerminalHeight] = useState<number>(() =>
+    readPersistedWidth(TERMINAL_HEIGHT_KEY, DEFAULT_TERMINAL_HEIGHT),
+  );
+  const terminalHeightRef = useRef(terminalHeight);
+  useEffect(() => {
+    terminalHeightRef.current = terminalHeight;
+    localStorage.setItem(TERMINAL_HEIGHT_KEY, String(terminalHeight));
+  }, [terminalHeight]);
 
   // Pane widths (px). Persisted on every drag-end via the ref; we keep
   // the live value in state so drags re-render the layout, and mirror
@@ -234,6 +254,18 @@ export function App() {
             Files
           </button>
           <button
+            onClick={() => setTerminalOpenPersisted(!terminalOpen)}
+            className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
+              terminalOpen
+                ? "border-neutral-500 bg-neutral-800 text-neutral-100"
+                : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+            }`}
+            title="Toggle the integrated terminal"
+          >
+            <TerminalIcon size={13} />
+            Terminal
+          </button>
+          <button
             onClick={() => setSettingsOpen(true)}
             className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-500"
             title="Settings (providers, agent defaults, skills)"
@@ -251,84 +283,108 @@ export function App() {
 
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
 
-      <div className="flex flex-1 overflow-hidden">
-        <ProjectSidebar />
-        <main className="flex flex-1 overflow-hidden">
-          {/* Layout when files pane is open:
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex flex-1 overflow-hidden">
+          <ProjectSidebar />
+          <main className="flex flex-1 overflow-hidden">
+            {/* Layout when files pane is open:
                   chat (flex) | divider | editor (when ≥1 tab) | divider | files
               The file browser is pinned to the far right; the editor
               materialises between chat and files only when at least
               one file is open. Both right-side panes are user-resizable
               via their dividers; widths persist in localStorage. */}
-          <div className="flex flex-1 flex-col overflow-hidden">
-            {projectsLoaded && projects.length === 0 ? (
-              <div className="flex flex-1 items-center justify-center">
-                <ProjectPicker required onClose={noop} />
-              </div>
-            ) : activeSessionId !== undefined ? (
-              <>
-                <ChatView sessionId={activeSessionId} />
-                <ChatInput sessionId={activeSessionId} />
-              </>
-            ) : active ? (
-              <div className="flex flex-1 items-center justify-center px-6 text-center">
-                <div className="space-y-2 text-sm text-neutral-400">
-                  <h2 className="text-xl font-semibold text-neutral-100">{active.name}</h2>
-                  <p className="font-mono text-xs">{active.path}</p>
-                  <p>Pick a session from the sidebar — or click "+ New session" to start one.</p>
+            <div className="flex flex-1 flex-col overflow-hidden">
+              {projectsLoaded && projects.length === 0 ? (
+                <div className="flex flex-1 items-center justify-center">
+                  <ProjectPicker required onClose={noop} />
                 </div>
-              </div>
-            ) : (
-              <div className="flex flex-1 items-center justify-center">
-                <p className="text-sm text-neutral-400">Select a project from the sidebar.</p>
-              </div>
-            )}
-          </div>
+              ) : activeSessionId !== undefined ? (
+                <>
+                  <ChatView sessionId={activeSessionId} />
+                  <ChatInput sessionId={activeSessionId} />
+                </>
+              ) : active ? (
+                <div className="flex flex-1 items-center justify-center px-6 text-center">
+                  <div className="space-y-2 text-sm text-neutral-400">
+                    <h2 className="text-xl font-semibold text-neutral-100">{active.name}</h2>
+                    <p className="font-mono text-xs">{active.path}</p>
+                    <p>Pick a session from the sidebar — or click "+ New session" to start one.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-1 items-center justify-center">
+                  <p className="text-sm text-neutral-400">Select a project from the sidebar.</p>
+                </div>
+              )}
+            </div>
 
-          {filesOpen && editorVisible && (
-            <>
-              <ResizableDivider
-                getStartWidth={() => editorWidthRef.current}
-                onResize={(next) => setEditorWidth(next)}
-                /* Pane is to the RIGHT of the divider, so drag-right
+            {filesOpen && editorVisible && (
+              <>
+                <ResizableDivider
+                  getStartSize={() => editorWidthRef.current}
+                  onResize={(next) => setEditorWidth(next)}
+                  /* Pane is to the RIGHT of the divider, so drag-right
                    shrinks the editor. direction: -1 → grow as user drags left. */
-                direction={-1}
-                minWidth={MIN_EDITOR_WIDTH}
-                maxWidth={Math.max(
-                  MIN_EDITOR_WIDTH,
-                  window.innerWidth - filesWidth - MIN_CHAT_WIDTH - 240, // 240 ≈ ProjectSidebar
-                )}
-              />
-              <div
-                className="flex shrink-0 flex-col border-l border-neutral-800"
-                style={{ width: `${editorWidth}px` }}
-              >
-                <EditorPanel />
-              </div>
-            </>
-          )}
+                  direction={-1}
+                  minSize={MIN_EDITOR_WIDTH}
+                  maxSize={Math.max(
+                    MIN_EDITOR_WIDTH,
+                    window.innerWidth - filesWidth - MIN_CHAT_WIDTH - 240, // 240 ≈ ProjectSidebar
+                  )}
+                />
+                <div
+                  className="flex shrink-0 flex-col border-l border-neutral-800"
+                  style={{ width: `${editorWidth}px` }}
+                >
+                  <EditorPanel />
+                </div>
+              </>
+            )}
 
-          {filesOpen && (
-            <>
-              <ResizableDivider
-                getStartWidth={() => filesWidthRef.current}
-                onResize={(next) => setFilesWidth(next)}
-                direction={-1}
-                minWidth={MIN_FILES_WIDTH}
-                maxWidth={Math.max(
-                  MIN_FILES_WIDTH,
-                  window.innerWidth - MIN_CHAT_WIDTH - 240 - (editorVisible ? MIN_EDITOR_WIDTH : 0),
-                )}
-              />
-              <div
-                className="flex shrink-0 flex-col border-l border-neutral-800"
-                style={{ width: `${filesWidth}px` }}
-              >
-                <FileBrowserPanel />
-              </div>
-            </>
-          )}
-        </main>
+            {filesOpen && (
+              <>
+                <ResizableDivider
+                  getStartSize={() => filesWidthRef.current}
+                  onResize={(next) => setFilesWidth(next)}
+                  direction={-1}
+                  minSize={MIN_FILES_WIDTH}
+                  maxSize={Math.max(
+                    MIN_FILES_WIDTH,
+                    window.innerWidth -
+                      MIN_CHAT_WIDTH -
+                      240 -
+                      (editorVisible ? MIN_EDITOR_WIDTH : 0),
+                  )}
+                />
+                <div
+                  className="flex shrink-0 flex-col border-l border-neutral-800"
+                  style={{ width: `${filesWidth}px` }}
+                >
+                  <FileBrowserPanel />
+                </div>
+              </>
+            )}
+          </main>
+        </div>
+
+        {terminalOpen && (
+          <>
+            <ResizableDivider
+              orientation="horizontal"
+              getStartSize={() => terminalHeightRef.current}
+              onResize={(next) => setTerminalHeight(next)}
+              direction={-1}
+              minSize={MIN_TERMINAL_HEIGHT}
+              maxSize={Math.max(MIN_TERMINAL_HEIGHT, Math.floor(window.innerHeight * 0.7))}
+            />
+            <div
+              className="shrink-0 border-t border-neutral-800"
+              style={{ height: `${terminalHeight}px` }}
+            >
+              <TerminalPanel />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

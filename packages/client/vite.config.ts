@@ -62,6 +62,10 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:3000",
         changeOrigin: true,
+        // Forward WebSocket upgrades for `/api/v1/terminal` (Phase 11).
+        // Without `ws: true`, Vite falls through to its own ws server
+        // and the upgrade handshake fails.
+        ws: true,
       },
     },
   },

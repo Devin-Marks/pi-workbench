@@ -1,0 +1,326 @@
+/**
+ * Phase 11 terminal WebSocket integration test.
+ *
+ * Boots the server in-process, creates a project, then opens a real
+ * WebSocket to `/api/v1/terminal?projectId=...&token=...` and drives
+ * it. Uses `ws` directly (Node's built-in WebSocket exists on 22+ but
+ * its API differs from `ws` and the server side speaks `ws` either
+ * way; staying with `ws` keeps the test predictable).
+ *
+ * Coverage:
+ *   - WS upgrade with `?token=` succeeds; without auth → 4401.
+ *   - Bad projectId → 4404.
+ *   - Echo: send `echo hello\n`, assert "hello" appears in PTY output.
+ *   - Resize: send `{ type: "resize", cols, rows }`, assert no error.
+ *   - Concurrent terminals: open 2 sockets, prove they're independent
+ *     (one's input doesn't appear in the other's output, both echo).
+ *   - Health endpoint reflects active PTY count: 0 → 2 → 0 across the
+ *     test lifecycle.
+ *   - Closing the socket cleans up the PTY (active count returns to 0).
+ *
+ * No LLM required.
+ */
+import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import WebSocket from "ws";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const repoRoot = resolve(__dirname, "..");
+const serverEntry = resolve(repoRoot, "packages/server/dist/index.js");
+
+let failures = 0;
+function assert(label: string, ok: boolean, detail?: string): void {
+  if (ok) console.log(`  PASS  ${label}`);
+  else {
+    failures += 1;
+    console.log(`  FAIL  ${label}${detail ? ` — ${detail}` : ""}`);
+  }
+}
+
+function pickFreePort(): Promise<number> {
+  return new Promise((resolveFn, rejectFn) => {
+    const srv = createServer();
+    srv.unref();
+    srv.on("error", rejectFn);
+    srv.listen(0, () => {
+      const addr = srv.address();
+      if (addr === null || typeof addr === "string") {
+        rejectFn(new Error("failed to acquire free port"));
+        return;
+      }
+      const { port } = addr;
+      srv.close(() => resolveFn(port));
+    });
+  });
+}
+
+async function waitFor(url: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await fetch(url);
+      return;
+    } catch {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+  throw new Error(`timeout waiting for ${url}`);
+}
+
+interface OpenedSocket {
+  ws: WebSocket;
+  /** All output bytes received so far, joined as text. */
+  output: string;
+  /** Whether the close event has fired. */
+  closed: boolean;
+  closeCode?: number;
+  closeReason?: string;
+}
+
+/**
+ * Open a WebSocket and start collecting output. Resolves once the
+ * socket transitions to OPEN (or rejects on close-before-open). Tests
+ * await the returned promise then drive the socket.
+ */
+function openTerminal(
+  base: string,
+  query: { projectId: string; token?: string },
+  onClose?: () => void,
+): Promise<OpenedSocket> {
+  return new Promise((resolveFn, rejectFn) => {
+    const qs = new URLSearchParams();
+    qs.set("projectId", query.projectId);
+    if (query.token !== undefined) qs.set("token", query.token);
+    const url = `${base.replace(/^http/, "ws")}/api/v1/terminal?${qs.toString()}`;
+    const ws = new WebSocket(url);
+    const state: OpenedSocket = { ws, output: "", closed: false };
+    let opened = false;
+    ws.on("open", () => {
+      opened = true;
+      resolveFn(state);
+    });
+    ws.on("message", (data: WebSocket.RawData) => {
+      state.output += typeof data === "string" ? data : data.toString();
+    });
+    ws.on("close", (code, reason) => {
+      state.closed = true;
+      state.closeCode = code;
+      state.closeReason = reason.toString();
+      onClose?.();
+      if (!opened)
+        rejectFn(new Error(`closed before open: code=${code} reason=${reason.toString()}`));
+    });
+    ws.on("error", () => {
+      // Errors usually arrive as a close with non-1000 code right
+      // after; let the close handler resolve/reject.
+    });
+  });
+}
+
+function send(ws: WebSocket, payload: unknown): void {
+  ws.send(JSON.stringify(payload));
+}
+
+async function waitForOutput(
+  state: OpenedSocket,
+  needle: string,
+  timeoutMs = 5_000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (state.output.includes(needle)) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return false;
+}
+
+async function getActivePtys(base: string): Promise<number> {
+  const res = await fetch(`${base}/api/v1/health`);
+  const body = (await res.json()) as { activePtys: number };
+  return body.activePtys;
+}
+
+/**
+ * Poll `activePtys` until it equals `expected` or we time out.
+ * The WS `open` event fires on handshake completion, but our handler's
+ * async `spawnPty` runs slightly after — so an immediate count query
+ * can race ahead of the registration.
+ */
+async function waitForPtyCount(base: string, expected: number, timeoutMs = 2_000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  let last = await getActivePtys(base);
+  while (Date.now() < deadline && last !== expected) {
+    await new Promise((r) => setTimeout(r, 30));
+    last = await getActivePtys(base);
+  }
+  return last;
+}
+
+async function main(): Promise<void> {
+  const workspacePath = await mkdtemp(join(tmpdir(), "pi-term-ws-"));
+  const configDir = await mkdtemp(join(tmpdir(), "pi-term-cfg-"));
+  const dataDir = await mkdtemp(join(tmpdir(), "pi-term-data-"));
+  const projectPath = join(workspacePath, "demo");
+  await mkdir(projectPath, { recursive: true });
+
+  const apiKey = "test-api-key-" + randomBytes(8).toString("hex");
+  const port = await pickFreePort();
+
+  const child: ChildProcess = spawn(process.execPath, [serverEntry], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      PORT: String(port),
+      LOG_LEVEL: "warn",
+      NODE_ENV: "test",
+      WORKSPACE_PATH: workspacePath,
+      PI_CONFIG_DIR: configDir,
+      WORKBENCH_DATA_DIR: dataDir,
+      SESSION_DIR: join(workspacePath, ".pi", "sessions"),
+      API_KEY: apiKey,
+      UI_PASSWORD: undefined,
+      JWT_SECRET: undefined,
+      SERVE_CLIENT: "false",
+      // Predictable PS1 so the prompt doesn't drown the test output.
+      PS1: "$ ",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stderr?.on("data", (b) => process.stderr.write(`[server stderr] ${String(b)}`));
+
+  const base = `http://127.0.0.1:${port}`;
+  const auth = { Authorization: `Bearer ${apiKey}` };
+  const stop = async (): Promise<void> => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    await new Promise<void>((res) => {
+      child.once("exit", () => res());
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 2000).unref();
+    });
+  };
+
+  const opened: OpenedSocket[] = [];
+
+  try {
+    await waitFor(`${base}/api/v1/health`);
+
+    // Create the project.
+    const cp = await fetch(`${base}/api/v1/projects`, {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "demo", path: projectPath }),
+    });
+    assert("POST /projects → 201", cp.status === 201);
+    const project = (await cp.json()) as { id: string; path: string };
+
+    // Baseline: 0 active PTYs.
+    assert("baseline activePtys === 0", (await getActivePtys(base)) === 0);
+
+    // ---- Auth: missing token ----
+    {
+      const url = `${base.replace(/^http/, "ws")}/api/v1/terminal?projectId=${encodeURIComponent(project.id)}`;
+      const ws = new WebSocket(url);
+      const code = await new Promise<number>((resolveFn) => {
+        ws.on("close", (c) => resolveFn(c));
+        ws.on("error", () => undefined);
+      });
+      assert("missing token → close 4401", code === 4401, `code=${code}`);
+    }
+
+    // ---- Auth: invalid token ----
+    {
+      const url = `${base.replace(/^http/, "ws")}/api/v1/terminal?projectId=${encodeURIComponent(project.id)}&token=bogus`;
+      const ws = new WebSocket(url);
+      const code = await new Promise<number>((resolveFn) => {
+        ws.on("close", (c) => resolveFn(c));
+        ws.on("error", () => undefined);
+      });
+      assert("invalid token → close 4401", code === 4401, `code=${code}`);
+    }
+
+    // ---- Bad project id ----
+    {
+      const url = `${base.replace(/^http/, "ws")}/api/v1/terminal?projectId=00000000-0000-0000-0000-000000000000&token=${apiKey}`;
+      const ws = new WebSocket(url);
+      const code = await new Promise<number>((resolveFn) => {
+        ws.on("close", (c) => resolveFn(c));
+        ws.on("error", () => undefined);
+      });
+      assert("unknown projectId → close 4404", code === 4404, `code=${code}`);
+    }
+
+    // ---- Echo + resize ----
+    let term: OpenedSocket;
+    {
+      term = await openTerminal(base, { projectId: project.id, token: apiKey });
+      opened.push(term);
+      assert("WS opened", term.ws.readyState === WebSocket.OPEN);
+      assert("activePtys === 1 after open", (await waitForPtyCount(base, 1)) === 1);
+
+      // Use a unique sentinel to avoid matching the user's PS1 echo.
+      const sentinel = "pi-workbench-marker-" + randomBytes(4).toString("hex");
+      send(term.ws, { type: "input", data: `echo ${sentinel}\n` });
+      const sawSentinel = await waitForOutput(term, sentinel, 5_000);
+      assert("echo output reaches client", sawSentinel, `output: ${term.output.slice(-200)}`);
+
+      send(term.ws, { type: "resize", cols: 120, rows: 40 });
+      // Wait a tick — the resize is fire-and-forget; we just want to
+      // assert no error closes the socket.
+      await new Promise((r) => setTimeout(r, 100));
+      assert("socket still open after resize", term.ws.readyState === WebSocket.OPEN);
+    }
+
+    // ---- Concurrent terminal ----
+    {
+      const term2 = await openTerminal(base, { projectId: project.id, token: apiKey });
+      opened.push(term2);
+      assert("activePtys === 2 with two terminals", (await waitForPtyCount(base, 2)) === 2);
+
+      const m1 = "term1-" + randomBytes(4).toString("hex");
+      const m2 = "term2-" + randomBytes(4).toString("hex");
+      send(term.ws, { type: "input", data: `echo ${m1}\n` });
+      send(term2.ws, { type: "input", data: `echo ${m2}\n` });
+      const got1 = await waitForOutput(term, m1, 5_000);
+      const got2 = await waitForOutput(term2, m2, 5_000);
+      assert("term1 sees its own marker", got1);
+      assert("term2 sees its own marker", got2);
+      assert("term1 does NOT see term2's marker", !term.output.includes(m2));
+      assert("term2 does NOT see term1's marker", !term2.output.includes(m1));
+    }
+
+    // ---- Close cleanup ----
+    {
+      for (const t of opened) {
+        const closed = new Promise<void>((res) => t.ws.on("close", () => res()));
+        t.ws.close(1000, "test_done");
+        await closed;
+      }
+      assert("activePtys returns to 0 after close", (await waitForPtyCount(base, 0)) === 0);
+    }
+  } finally {
+    for (const t of opened) {
+      if (!t.closed) t.ws.terminate();
+    }
+    await stop();
+    await rm(workspacePath, { recursive: true, force: true });
+    await rm(configDir, { recursive: true, force: true });
+    await rm(dataDir, { recursive: true, force: true });
+  }
+
+  if (failures > 0) {
+    console.log(`\n[test-terminal] FAIL — ${failures} assertion(s) failed`);
+    process.exit(1);
+  }
+  console.log("\n[test-terminal] PASS");
+}
+
+main().catch((err: unknown) => {
+  console.error("[test-terminal] uncaught:", err);
+  process.exit(1);
+});

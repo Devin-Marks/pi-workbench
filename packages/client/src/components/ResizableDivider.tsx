@@ -1,41 +1,56 @@
 import { useEffect, useRef, type PointerEvent } from "react";
 
 /**
- * Vertical drag-handle between two horizontally-stacked panes.
+ * Drag-handle between two adjacent panes. Supports both orientations:
  *
- * Pattern: the parent owns a width state for the pane on a given side
+ *   `orientation: "vertical"` (default) — vertical bar between
+ *   horizontally-stacked panes, drag left/right to resize WIDTH.
+ *
+ *   `orientation: "horizontal"` — horizontal bar between
+ *   vertically-stacked panes, drag up/down to resize HEIGHT.
+ *
+ * Pattern: the parent owns a size state for the pane on a given side
  * of the divider; this component just emits delta movements via
  * `onResize`. Pointer events (not mouse events) so trackpad two-finger
  * drag and stylus work too. We capture the pointer on down so the user
  * can drag past the divider rectangle without the move events stopping.
  *
  * Decoupling drag from React state during the move loop keeps it
- * smooth: we read the latest width from a ref, compute the new width
+ * smooth: we read the latest size from a ref, compute the new size
  * synchronously, and only call `onResize` (which usually triggers a
  * setState upstream) once per frame's pointer move event.
  */
 interface Props {
   /**
-   * Width before the drag started. Stored in a ref by the parent so we
-   * can compute `start + delta` without bouncing through React state
-   * during the drag.
+   * Size (width OR height depending on orientation) before the drag
+   * started. Stored in a ref by the parent so we can compute
+   * `start + delta` without bouncing through React state.
    */
-  getStartWidth: () => number;
-  onResize: (nextWidth: number) => void;
-  /** Direction of growth as the user drags right. `+1` for "pane is to the right of divider", `-1` for left. */
+  getStartSize: () => number;
+  onResize: (nextSize: number) => void;
+  /**
+   * Direction of growth as the user drags toward higher coordinates
+   * (right for vertical bars, down for horizontal bars). `+1` for
+   * "pane is on the high-coord side of the divider", `-1` for
+   * "low-coord side".
+   */
   direction: 1 | -1;
-  minWidth: number;
-  maxWidth: number;
+  minSize: number;
+  maxSize: number;
+  orientation?: "vertical" | "horizontal";
 }
 
 export function ResizableDivider({
-  getStartWidth,
+  getStartSize,
   onResize,
   direction,
-  minWidth,
-  maxWidth,
+  minSize,
+  maxSize,
+  orientation = "vertical",
 }: Props) {
-  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const dragRef = useRef<{ start: number; startSize: number } | null>(null);
+  const horizontal = orientation === "horizontal";
+  const cursor = horizontal ? "row-resize" : "col-resize";
 
   // Always-on cancel listeners. ESC and window blur both
   // legitimately interrupt a drag (the user wanted out, or a system
@@ -65,16 +80,20 @@ export function ResizableDivider({
   const onPointerDown = (e: PointerEvent<HTMLDivElement>): void => {
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
-    dragRef.current = { startX: e.clientX, startWidth: getStartWidth() };
-    document.body.style.cursor = "col-resize";
+    dragRef.current = {
+      start: horizontal ? e.clientY : e.clientX,
+      startSize: getStartSize(),
+    };
+    document.body.style.cursor = cursor;
     document.body.style.userSelect = "none";
   };
 
   const onPointerMove = (e: PointerEvent<HTMLDivElement>): void => {
     if (dragRef.current === null) return;
-    const dx = e.clientX - dragRef.current.startX;
-    const next = dragRef.current.startWidth + dx * direction;
-    onResize(Math.min(Math.max(next, minWidth), maxWidth));
+    const cur = horizontal ? e.clientY : e.clientX;
+    const delta = cur - dragRef.current.start;
+    const next = dragRef.current.startSize + delta * direction;
+    onResize(Math.min(Math.max(next, minSize), maxSize));
   };
 
   const onPointerUp = (e: PointerEvent<HTMLDivElement>): void => {
@@ -85,19 +104,26 @@ export function ResizableDivider({
     document.body.style.removeProperty("user-select");
   };
 
+  const baseCls =
+    "group relative shrink-0 bg-neutral-800 hover:bg-neutral-600 active:bg-neutral-500";
+  const sizeCls = horizontal ? "h-1 w-full cursor-row-resize" : "w-1 h-full cursor-col-resize";
+  const hitboxCls = horizontal
+    ? "absolute inset-x-0 -top-1 -bottom-1"
+    : "absolute inset-y-0 -left-1 -right-1";
+
   return (
     <div
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-      className="group relative w-1 shrink-0 cursor-col-resize bg-neutral-800 hover:bg-neutral-600 active:bg-neutral-500"
+      className={`${baseCls} ${sizeCls}`}
       role="separator"
-      aria-orientation="vertical"
+      aria-orientation={horizontal ? "horizontal" : "vertical"}
     >
       {/* Slightly wider invisible hitbox so the drag handle is easier
           to grab without making the visible bar fat. */}
-      <div className="absolute inset-y-0 -left-1 -right-1" />
+      <div className={hitboxCls} />
     </div>
   );
 }

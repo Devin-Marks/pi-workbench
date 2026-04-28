@@ -26,8 +26,24 @@ npm run build        # build both packages
 npm run check        # tsc + eslint + prettier --check across the workspace
 ```
 
-The Vite dev server proxies `/api/*` to the Fastify server, so the client can call
-`/api/v1/...` directly without configuring a base URL.
+The Vite dev server proxies `/api/*` to the Fastify server (including WebSocket
+upgrades for the integrated terminal), so the client can call `/api/v1/...`
+directly without configuring a base URL.
+
+### Native module gotcha (node-pty)
+
+The integrated terminal depends on `node-pty`'s native binding. Prebuilt
+binaries ship for common Node versions, but if the binding doesn't match
+the Node major you're running on (typical symptom: terminals fail to spawn
+with `posix_spawnp failed.` and no other detail), rebuild it from source:
+
+```bash
+cd node_modules/node-pty && npx node-gyp rebuild
+```
+
+Requires the system C++ toolchain (Xcode CLT on macOS; `build-essential`
+on Linux). The Docker image avoids this — its build stage compiles
+node-pty against the runtime Node version automatically.
 
 ## Environment variables
 

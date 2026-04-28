@@ -7,6 +7,7 @@ import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
+import websocket from "@fastify/websocket";
 import { config, authEnabled } from "./config.js";
 import { extractBearer, verifyApiKey, verifyToken } from "./auth.js";
 import { healthRoutes } from "./routes/health.js";
@@ -18,7 +19,9 @@ import { promptRoutes } from "./routes/prompt.js";
 import { controlRoutes } from "./routes/control.js";
 import { configRoutes } from "./routes/config.js";
 import { fileRoutes } from "./routes/files.js";
+import { terminalRoutes } from "./routes/terminal.js";
 import { disposeAllSessions } from "./session-registry.js";
+import { disposeAllPtys } from "./pty-manager.js";
 
 /**
  * Per-route auth metadata. Routes that should skip the auth preHandler set
@@ -51,6 +54,11 @@ export async function buildServer(): Promise<FastifyInstance> {
   // Rate limiting is per-route only — no global cap by design. The login
   // route applies its own limit via route-level `config.rateLimit`.
   await fastify.register(rateLimit, { global: false });
+
+  // WebSocket support for the integrated terminal (Phase 11). Must be
+  // registered before any route uses `{ websocket: true }`. Inherits
+  // the same listening server as Fastify; no extra port needed.
+  await fastify.register(websocket);
 
   await fastify.register(swagger, {
     openapi: {
@@ -128,6 +136,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       await api.register(controlRoutes);
       await api.register(configRoutes);
       await api.register(fileRoutes);
+      await api.register(terminalRoutes);
     },
     { prefix: "/api/v1" },
   );
@@ -194,6 +203,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   // will also become load-bearing in Phase 5 to flush SSE clients.
   fastify.addHook("onClose", async () => {
     disposeAllSessions();
+    disposeAllPtys();
   });
 
   return fastify;
