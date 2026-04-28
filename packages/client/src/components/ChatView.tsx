@@ -6,6 +6,7 @@ import {
   type ActiveTool,
   type AgentMessageLike,
 } from "../store/session-store";
+import { DiffBlock } from "./DiffBlock";
 
 interface Props {
   sessionId: string;
@@ -250,13 +251,16 @@ function ToolResult({ message }: { message: AgentMessageLike }) {
     const details = message.details as { diff?: string } | undefined;
     const diff = typeof details?.diff === "string" ? details.diff : text;
     const fn = extractFilename(message);
+    const { adds, dels } = countDiffLines(diff);
     return (
       <details className="rounded border border-neutral-800 bg-neutral-950 text-xs">
         <summary className="cursor-pointer px-3 py-2 text-neutral-300">
           <span className="text-neutral-500">edit{fn !== undefined ? " " : ""}</span>
           {fn !== undefined && <span className="font-mono">{fn}</span>}
+          <span className="ml-2 text-emerald-400">+{adds}</span>
+          <span className="ml-1 text-red-400">−{dels}</span>
         </summary>
-        <pre className="overflow-auto px-3 pb-2 font-mono text-[11px] text-neutral-300">{diff}</pre>
+        <DiffBlock diff={diff} />
       </details>
     );
   }
@@ -370,6 +374,22 @@ function extractFilename(message: AgentMessageLike): string | undefined {
     if (typeof src.file_path === "string") return src.file_path;
   }
   return undefined;
+}
+
+/**
+ * Cheap +/- counter for the chat tool-result summary. The full diff
+ * renderer (`DiffBlock` → `react-diff-view`) parses the same text
+ * structurally; we only need scalar counts for the collapsed summary.
+ */
+function countDiffLines(diff: string): { adds: number; dels: number } {
+  let adds = 0;
+  let dels = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) adds += 1;
+    else if (line.startsWith("-")) dels += 1;
+  }
+  return { adds, dels };
 }
 
 function extractCommand(message: AgentMessageLike): string | undefined {

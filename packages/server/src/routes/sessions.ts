@@ -9,6 +9,7 @@ import {
   type UnifiedSession,
 } from "../session-registry.js";
 import { errorSchema, liveSummaryBody, liveSummarySchema } from "./_schemas.js";
+import { buildTurnDiff } from "../turn-diff-builder.js";
 
 const unifiedSchema = {
   type: "object",
@@ -242,6 +243,57 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
       const live = getSession(req.params.id);
       if (live === undefined) return notFound(reply);
       return { messages: live.session.messages };
+    },
+  );
+
+  fastify.get<{ Params: { id: string } }>(
+    "/sessions/:id/turn-diff",
+    {
+      schema: {
+        description:
+          "Aggregate every write/edit tool result from the session's most " +
+          "recent turn into one reviewable changeset. Returns " +
+          "`{ entries: [{ file, tool, diff, additions, deletions, isPureAddition }] }`. " +
+          "Prefers `git diff HEAD -- <path>` for cumulative diffs; falls back " +
+          "to a pure-addition diff when the file is untracked or the project " +
+          "has no `.git`. 404 if the session isn't currently live.",
+        tags: ["sessions"],
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string" } },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["entries"],
+            properties: {
+              entries: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["file", "tool", "diff", "additions", "deletions", "isPureAddition"],
+                  properties: {
+                    file: { type: "string" },
+                    tool: { type: "string", enum: ["write", "edit"] },
+                    diff: { type: "string" },
+                    additions: { type: "integer", minimum: 0 },
+                    deletions: { type: "integer", minimum: 0 },
+                    isPureAddition: { type: "boolean" },
+                  },
+                },
+              },
+            },
+          },
+          404: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const live = getSession(req.params.id);
+      if (live === undefined) return notFound(reply);
+      const entries = await buildTurnDiff(live.session, live.workspacePath);
+      return { entries };
     },
   );
 

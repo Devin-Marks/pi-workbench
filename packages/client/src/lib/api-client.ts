@@ -119,6 +119,15 @@ export interface FileReadResponse {
   binary: boolean;
 }
 
+export interface TurnDiffEntry {
+  file: string;
+  tool: "write" | "edit";
+  diff: string;
+  additions: number;
+  deletions: number;
+  isPureAddition: boolean;
+}
+
 export function onUnauthorized(handler: () => void): () => void {
   const fn = (): void => handler();
   window.addEventListener(UNAUTHORIZED_EVENT, fn);
@@ -421,6 +430,35 @@ function vFileRead(value: unknown, status: number): FileReadResponse {
   };
 }
 
+function vTurnDiff(value: unknown, status: number): { entries: TurnDiffEntry[] } {
+  if (!isObject(value) || !Array.isArray(value.entries)) {
+    fail(status, "expected { entries: TurnDiffEntry[] }");
+  }
+  return {
+    entries: value.entries.map((e): TurnDiffEntry => {
+      if (
+        !isObject(e) ||
+        typeof e.file !== "string" ||
+        (e.tool !== "write" && e.tool !== "edit") ||
+        typeof e.diff !== "string" ||
+        typeof e.additions !== "number" ||
+        typeof e.deletions !== "number" ||
+        typeof e.isPureAddition !== "boolean"
+      ) {
+        fail(status, "expected TurnDiffEntry");
+      }
+      return {
+        file: e.file,
+        tool: e.tool,
+        diff: e.diff,
+        additions: e.additions,
+        deletions: e.deletions,
+        isPureAddition: e.isPureAddition,
+      };
+    }),
+  };
+}
+
 function vPathOnly(value: unknown, status: number): { path: string } {
   if (!isObject(value) || typeof value.path !== "string") {
     fail(status, "expected { path: string }");
@@ -541,6 +579,8 @@ export const api = {
       method: "POST",
       body: { name },
     }),
+  getTurnDiff: (id: string) =>
+    request(`/api/v1/sessions/${encodeURIComponent(id)}/turn-diff`, vTurnDiff),
 
   // ---------------- prompt + control ----------------
   prompt: (id: string, text: string, streamingBehavior?: "steer" | "followUp") => {

@@ -1,1 +1,35 @@
 @import "tailwindcss";
+
+/* react-diff-view dark-theme overrides. The library ships a default
+   (light) palette via `style/index.css`; we re-skin it without
+   forking by overriding the documented CSS variables + a couple of
+   class selectors that don't have variables. */
+.pi-diff-block .diff {
+  background: transparent;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --diff-background-color: transparent;
+  --diff-text-color: #e5e5e5;
+  --diff-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --diff-selection-background-color: #525252;
+  --diff-gutter-insert-background-color: #14532d;
+  --diff-gutter-insert-text-color: #86efac;
+  --diff-gutter-delete-background-color: #7f1d1d;
+  --diff-gutter-delete-text-color: #fca5a5;
+  --diff-code-insert-background-color: #052e16;
+  --diff-code-insert-text-color: #bbf7d0;
+  --diff-code-delete-background-color: #450a0a;
+  --diff-code-delete-text-color: #fecaca;
+  --diff-omit-gutter-line-color: #404040;
+  color: #e5e5e5;
+}
+.pi-diff-block .diff-gutter,
+.pi-diff-block .diff-line {
+  background: transparent;
+}
+.pi-diff-block .diff-gutter {
+  color: #737373;
+}
+.pi-diff-block .diff-decoration {
+  background: #171717;
+  color: #a3a3a3;
+}

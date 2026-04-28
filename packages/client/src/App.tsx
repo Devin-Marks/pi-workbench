@@ -13,7 +13,10 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { FileBrowserPanel } from "./components/FileBrowserPanel";
 import { EditorPanel } from "./components/EditorPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
+import { TurnDiffPanel } from "./components/TurnDiffPanel";
 import { ResizableDivider } from "./components/ResizableDivider";
+
+type RightPaneTab = "files" | "changes";
 
 /* Persisted pane widths. Stored in localStorage so the user-tuned
    layout survives reloads. Defaults err on the side of "the chat is the
@@ -86,6 +89,14 @@ export function App() {
   const setFilesOpenPersisted = (v: boolean): void => {
     setFilesOpen(v);
     localStorage.setItem("pi-workbench/files-open", v ? "true" : "false");
+  };
+
+  const [rightTab, setRightTab] = useState<RightPaneTab>(
+    () => (localStorage.getItem("pi-workbench/right-tab") as RightPaneTab | null) ?? "files",
+  );
+  const setRightTabPersisted = (next: RightPaneTab): void => {
+    setRightTab(next);
+    localStorage.setItem("pi-workbench/right-tab", next);
   };
 
   const [terminalOpen, setTerminalOpen] = useState<boolean>(
@@ -360,7 +371,27 @@ export function App() {
                   className="flex shrink-0 flex-col border-l border-neutral-800"
                   style={{ width: `${filesWidth}px` }}
                 >
-                  <FileBrowserPanel />
+                  {/* Right-pane tabs: file browser vs the turn-diff
+                      "Changes" view. Both share width + position so
+                      they don't compete for screen real estate. */}
+                  <div className="flex border-b border-neutral-800 bg-neutral-900/40">
+                    {(["files", "changes"] as const).map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => setRightTabPersisted(t)}
+                        className={`px-3 py-1.5 text-[11px] uppercase tracking-wider ${
+                          rightTab === t
+                            ? "border-b border-neutral-100 text-neutral-100"
+                            : "text-neutral-500 hover:text-neutral-300"
+                        }`}
+                      >
+                        {t === "files" ? "Files" : "Changes"}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex-1 overflow-hidden">
+                    {rightTab === "files" ? <FileBrowserPanel /> : <TurnDiffPanel />}
+                  </div>
                 </div>
               </>
             )}
