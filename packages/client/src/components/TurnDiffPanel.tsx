@@ -28,7 +28,13 @@ export function TurnDiffPanel() {
     activeSessionId !== undefined ? (s.streamingBySession[activeSessionId] ?? false) : false,
   );
 
-  const [entries, setEntries] = useState<TurnDiffEntry[] | undefined>(undefined);
+  // `entries` defaults to `[]` (NOT undefined) so the panel never
+  // gets stuck on a "Loading…" splash if the very first refresh
+  // fails for an unexpected reason — the empty-state copy + the
+  // header spinner together convey "we're trying" without blocking
+  // the rest of the UI. Real load progress comes from `loading`,
+  // surfaced via the spinning `RefreshCw` icon in the header.
+  const [entries, setEntries] = useState<TurnDiffEntry[]>([]);
   const [error, setError] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -47,6 +53,10 @@ export function TurnDiffPanel() {
       if (err instanceof ApiError && err.status === 404) {
         setEntries([]);
       } else {
+        // Surface ALL other errors AND clear entries so the user
+        // sees both signals (a stale list under a red banner is
+        // confusing). Was previously letting `entries` linger.
+        setEntries([]);
         setError(err instanceof ApiError ? err.code : (err as Error).message);
       }
     } finally {
@@ -57,6 +67,12 @@ export function TurnDiffPanel() {
   // Fetch on session change + after each agent_end (length proxy).
   // We deliberately wait for streaming to finish — fetching mid-turn
   // would show a partial set and immediately replace it on agent_end.
+  // Reset entries on session switch so the new session doesn't
+  // briefly show the previous one's diff.
+  useEffect(() => {
+    setEntries([]);
+    setError(undefined);
+  }, [activeSessionId]);
   useEffect(() => {
     if (activeSessionId === undefined || isStreaming) return;
     void refresh();
@@ -77,7 +93,7 @@ export function TurnDiffPanel() {
         <div className="flex items-center gap-2 font-medium text-neutral-200">
           <FileDiff size={13} />
           Changes
-          {entries !== undefined && entries.length > 0 && (
+          {entries.length > 0 && (
             <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400">
               {entries.length}
             </span>
@@ -97,13 +113,16 @@ export function TurnDiffPanel() {
         </div>
       )}
       <div className="flex-1 overflow-y-auto">
-        {entries === undefined && <p className="px-3 py-3 italic text-neutral-500">Loading…</p>}
-        {entries !== undefined && entries.length === 0 && (
+        {entries.length === 0 && (
           <p className="px-3 py-3 italic text-neutral-500">
-            No file changes from the most recent turn.
+            {loading
+              ? "Loading…"
+              : error !== undefined
+                ? "Couldn't load the latest turn diff (see banner)."
+                : "No file changes from the most recent turn."}
           </p>
         )}
-        {entries?.map((entry) => {
+        {entries.map((entry) => {
           const open = expanded[entry.file] ?? false;
           const name = entry.file.split("/").pop() ?? entry.file;
           return (

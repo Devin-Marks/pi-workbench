@@ -1,15 +1,21 @@
 @import "tailwindcss";
 
-/* react-diff-view dark-theme overrides. The library ships a default
-   (light) palette via `style/index.css`; we re-skin it without
-   forking by overriding the documented CSS variables + a couple of
-   class selectors that don't have variables. */
-.pi-diff-block .diff {
-  background: transparent;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+/* react-diff-view dark-theme overrides. The library declares its
+   color variables on `:root` via `style/index.css`. We re-declare
+   them on `.pi-diff-block` (one specificity tier higher than :root,
+   AND scoped so they don't leak to anything else on the page) so
+   our values win regardless of stylesheet bundle order. CSS
+   variables cascade, so child cells (.diff-code-insert / -delete /
+   .diff-gutter-* etc.) pick up our values automatically.
+
+   If the page-level diff palette ever needs to differ from the
+   chat's inline diff palette, fork this scope into separate classes
+   on the wrapping div. */
+.pi-diff-block {
   --diff-background-color: transparent;
   --diff-text-color: #e5e5e5;
-  --diff-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --diff-font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   --diff-selection-background-color: #525252;
   --diff-gutter-insert-background-color: #14532d;
   --diff-gutter-insert-text-color: #86efac;
@@ -17,10 +23,36 @@
   --diff-gutter-delete-text-color: #fca5a5;
   --diff-code-insert-background-color: #052e16;
   --diff-code-insert-text-color: #bbf7d0;
+  --diff-code-insert-edit-background-color: #166534;
+  --diff-code-insert-edit-text-color: #dcfce7;
   --diff-code-delete-background-color: #450a0a;
   --diff-code-delete-text-color: #fecaca;
+  --diff-code-delete-edit-background-color: #991b1b;
+  --diff-code-delete-edit-text-color: #fee2e2;
   --diff-omit-gutter-line-color: #404040;
+}
+.pi-diff-block .diff {
+  background: transparent;
   color: #e5e5e5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  /* react-diff-view defaults to `table-layout: fixed` + `width:
+     100%`, which combined with its `word-break: break-all` on
+     `.diff-code` crams code into 2-3 character columns inside our
+     narrow right-pane / inline chat layouts. Switch to natural-
+     width sizing: the table grows to fit content, falls back to the
+     panel width when content is short, and the parent
+     `overflow-auto` adds a horizontal scroll bar when needed. */
+  table-layout: auto;
+  width: max-content;
+  min-width: 100%;
+}
+.pi-diff-block .diff-code {
+  /* Disable react-diff-view's aggressive word-break-all — code
+     should stay on one line and scroll horizontally, not wrap mid-
+     token. */
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .pi-diff-block .diff-gutter,
 .pi-diff-block .diff-line {
@@ -28,8 +60,29 @@
 }
 .pi-diff-block .diff-gutter {
   color: #737373;
+  /* Sticky gutter: line number stays pinned to the left edge as the
+     user scrolls a long line horizontally. */
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: #0a0a0a;
 }
 .pi-diff-block .diff-decoration {
   background: #171717;
   color: #a3a3a3;
+}
+
+/* Single-column gutter. react-diff-view's unified mode renders TWO
+   `<col class="diff-gutter-col">` elements + two `<td.diff-gutter>`
+   per row (old + new line number). Our `renderGutter` callback in
+   `DiffBlock.tsx` returns null for the `side: "old"` slot, so the
+   first cell in each row is empty; we collapse the column entirely
+   to recover the visual real-estate. `:first-of-type` pinned to the
+   diff-gutter class so we only hide the first GUTTER column, not
+   any other first-of-type cell that happens to share an ancestor. */
+.pi-diff-block .diff-gutter-col:first-of-type {
+  width: 0;
+}
+.pi-diff-block td.diff-gutter:first-of-type {
+  display: none;
 }
