@@ -23,9 +23,40 @@ interface Live {
   observer: ResizeObserver;
   /** Latest cols/rows we sent to the server, used to elide redundant resize messages. */
   lastSize: { cols: number; rows: number };
+  /** Number of consecutive reconnect attempts; reset to 0 on a successful open. */
+  reconnectAttempt: number;
+  /** Pending reconnect timeout, cleared on success or teardown. */
+  reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Set when the tab is being torn down — prevents the close handler from scheduling a reconnect. */
+  disposed: boolean;
 }
 
 const live = new Map<string, Live>();
+
+/**
+ * Mirrors the SSE backoff in `streamSSE`: 1→2→4→8→16→30s then steady
+ * at 30. The cap matches the SSE client so behavior is consistent
+ * across the two transport channels.
+ */
+function reconnectDelayMs(attempt: number): number {
+  const seconds = [1, 2, 4, 8, 16, 30];
+  return (seconds[Math.min(attempt, seconds.length - 1)] ?? 30) * 1000;
+}
+
+/**
+ * Close codes the server emits for terminal failures we do NOT want
+ * to retry on:
+ *   - 4401: auth (token expired/invalid). Reconnect would just fail
+ *     the same way; the user needs to log in again.
+ *   - 4404: project not found. The project was deleted while the WS
+ *     was live; reconnect can't recover it.
+ *   - 1000 ("normal closure") issued by us in `teardown()`.
+ * Anything else (1006 abnormal close from a network blip, 1011
+ * server error, etc.) gets the backoff treatment.
+ */
+function isTerminalCloseCode(code: number): boolean {
+  return code === 1000 || code === 4401 || code === 4404;
+}
 
 /**
  * Bottom-anchored terminal panel. Toggle from the header; tabs persist
@@ -190,46 +221,24 @@ function TerminalHost({
     term.open(hostRef.current);
     fit.fit();
 
-    // Build the WS URL with the auth token in the query (browsers
-    // can't attach Authorization headers to `new WebSocket(url)`).
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    const stored = getStoredToken();
-    const tokenQs = stored !== undefined ? `&token=${encodeURIComponent(stored.token)}` : "";
-    const url = `${proto}://${window.location.host}/api/v1/terminal?projectId=${encodeURIComponent(tab.projectId)}${tokenQs}`;
-    const ws = new WebSocket(url);
-
-    ws.binaryType = "arraybuffer";
     const initialSize = { cols: term.cols, rows: term.rows };
-
-    ws.onopen = () => {
-      // Send the initial size so the shell formats correctly out of
-      // the gate. Without this the shell defaults to 80x24 even when
-      // the host is much wider.
-      ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-    };
-    ws.onmessage = (e) => {
-      // The server sends text frames for stdout. xterm's `write`
-      // accepts strings or Uint8Array; we hit both branches because
-      // some browsers deliver text frames as ArrayBuffer when
-      // binaryType is "arraybuffer".
-      if (typeof e.data === "string") term.write(e.data);
-      else if (e.data instanceof ArrayBuffer) term.write(new Uint8Array(e.data));
-    };
-    ws.onclose = (e) => {
-      term.write(`\r\n[connection closed: ${String(e.code)}]\r\n`);
-    };
+    const ws = attachWebSocket(tab.id, tab.projectId, term, initialSize, /* isReconnect */ false);
 
     // Keystrokes → server. xterm.onData fires for every key including
     // Ctrl+C, paste, etc. with the correctly-encoded byte sequence.
+    // Reads `live.get(tab.id)?.ws` each call so the listener picks up
+    // the LATEST socket after a reconnect — without this, keystrokes
+    // would silently dead-letter into the original (closed) WS object.
     const dataDisposable = term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "input", data }));
+      const sock = live.get(tab.id)?.ws;
+      if (sock !== undefined && sock.readyState === WebSocket.OPEN) {
+        sock.send(JSON.stringify({ type: "input", data }));
       }
     });
 
     // Container resize → fit + send resize message. ResizeObserver
     // is throttled by the browser so we don't need to debounce
-    // ourselves.
+    // ourselves. Reads the current WS each call (post-reconnect-safe).
     const observer = new ResizeObserver(() => {
       try {
         fit.fit();
@@ -239,19 +248,26 @@ function TerminalHost({
       }
       const cols = term.cols;
       const rows = term.rows;
-      const last = live.get(tab.id)?.lastSize;
-      if (
-        ws.readyState === WebSocket.OPEN &&
-        (last === undefined || cols !== last.cols || rows !== last.rows)
-      ) {
-        ws.send(JSON.stringify({ type: "resize", cols, rows }));
-        const entry = live.get(tab.id);
-        if (entry !== undefined) entry.lastSize = { cols, rows };
+      const entry = live.get(tab.id);
+      if (entry === undefined) return;
+      if (cols === entry.lastSize.cols && rows === entry.lastSize.rows) return;
+      entry.lastSize = { cols, rows };
+      if (entry.ws.readyState === WebSocket.OPEN) {
+        entry.ws.send(JSON.stringify({ type: "resize", cols, rows }));
       }
     });
     observer.observe(hostRef.current);
 
-    live.set(tab.id, { term, fit, ws, observer, lastSize: initialSize });
+    live.set(tab.id, {
+      term,
+      fit,
+      ws,
+      observer,
+      lastSize: initialSize,
+      reconnectAttempt: 0,
+      reconnectTimer: undefined,
+      disposed: false,
+    });
 
     // Reference the data listener so its handle survives remounts.
     // The early-return guard above (`if (live.has(tab.id))`) means
@@ -302,13 +318,90 @@ function TerminalHost({
 }
 
 /**
+ * Open a WebSocket to the terminal route and wire up the message /
+ * close handlers. Called both at first attach AND on every reconnect
+ * — the second case bumps `reconnectAttempt` and replays the cached
+ * cols/rows so the new shell formats correctly out of the gate.
+ *
+ * The new PTY spawned by the server on reconnect is a FRESH shell —
+ * env vars, foreground processes, and any in-progress command from
+ * the old shell are gone. xterm's client-side scrollback survives,
+ * so the user still sees prior output, but they're effectively at a
+ * brand-new prompt.
+ */
+function attachWebSocket(
+  tabId: string,
+  projectId: string,
+  term: Terminal,
+  size: { cols: number; rows: number },
+  isReconnect: boolean,
+): WebSocket {
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  const stored = getStoredToken();
+  const tokenQs = stored !== undefined ? `&token=${encodeURIComponent(stored.token)}` : "";
+  const url = `${proto}://${window.location.host}/api/v1/terminal?projectId=${encodeURIComponent(
+    projectId,
+  )}${tokenQs}`;
+  const ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => {
+    // Send the cached size so the shell formats correctly out of the
+    // gate — both for first connect (pre-resize default of 80x24) and
+    // reconnect (the new PTY spawns at server defaults until told).
+    ws.send(JSON.stringify({ type: "resize", cols: size.cols, rows: size.rows }));
+    if (isReconnect) {
+      term.write("\r\n[reconnected — note: this is a new shell, prior state is gone]\r\n");
+    }
+    const entry = live.get(tabId);
+    if (entry !== undefined) entry.reconnectAttempt = 0;
+  };
+
+  ws.onmessage = (e) => {
+    if (typeof e.data === "string") term.write(e.data);
+    else if (e.data instanceof ArrayBuffer) term.write(new Uint8Array(e.data));
+  };
+
+  ws.onclose = (e) => {
+    const entry = live.get(tabId);
+    if (entry === undefined || entry.disposed) return;
+    if (isTerminalCloseCode(e.code)) {
+      term.write(`\r\n[connection closed: ${String(e.code)}]\r\n`);
+      return;
+    }
+    // Schedule a reconnect with exponential backoff. The keystroke +
+    // resize listeners read live.get(tabId).ws each fire, so they'll
+    // pick up the new socket transparently.
+    const attempt = entry.reconnectAttempt + 1;
+    entry.reconnectAttempt = attempt;
+    const delay = reconnectDelayMs(attempt);
+    term.write(
+      `\r\n[connection lost (${String(e.code)}) — reconnecting in ${String(delay / 1000)}s, attempt ${String(attempt)}]\r\n`,
+    );
+    entry.reconnectTimer = setTimeout(() => {
+      const cur = live.get(tabId);
+      if (cur === undefined || cur.disposed) return;
+      cur.reconnectTimer = undefined;
+      cur.ws = attachWebSocket(tabId, projectId, term, cur.lastSize, /* isReconnect */ true);
+    }, delay);
+  };
+
+  return ws;
+}
+
+/**
  * Tear down a tab's WebSocket + xterm + observer. Called on tab
  * close and on project switch (to release shells from the previous
  * project's cwd). Server kills the PTY when the WS closes.
+ *
+ * Marks the entry `disposed` BEFORE closing the WS so the close
+ * handler short-circuits its reconnect schedule.
  */
 function teardown(id: string): void {
   const entry = live.get(id);
   if (entry === undefined) return;
+  entry.disposed = true;
+  if (entry.reconnectTimer !== undefined) clearTimeout(entry.reconnectTimer);
   live.delete(id);
   try {
     entry.observer.disconnect();
