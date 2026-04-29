@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   api,
   ApiError,
@@ -7,8 +7,10 @@ import {
   type SkillSummary,
 } from "../lib/api-client";
 import { useActiveProject } from "../store/project-store";
+import { useUiConfigStore } from "../store/ui-config-store";
+import { THEME_DEFS, useThemeStore, type ThemeId } from "../lib/theme";
 
-type Tab = "providers" | "agent" | "skills";
+type Tab = "providers" | "agent" | "skills" | "appearance";
 
 interface Props {
   onClose: () => void;
@@ -35,7 +37,24 @@ interface Props {
  * cross-mount caching, since config is small and rarely changes.
  */
 export function SettingsPanel({ onClose }: Props) {
-  const [tab, setTab] = useState<Tab>("providers");
+  const minimal = useUiConfigStore((s) => s.minimal);
+  // Minimal mode hides Providers + Agent (those are configured at
+  // the deploy level when MINIMAL_UI is set), so the default tab
+  // shifts to Skills. Build the visible tab list from a single
+  // source of truth so the buttons + the body branch can't drift.
+  const visibleTabs = useMemo<readonly Tab[]>(
+    () =>
+      minimal
+        ? (["skills", "appearance"] as const)
+        : (["providers", "agent", "skills", "appearance"] as const),
+    [minimal],
+  );
+  const [tab, setTab] = useState<Tab>(minimal ? "skills" : "providers");
+  // If the config flips after mount (rare but possible during hot-
+  // reload in dev), pull the active tab back into the visible set.
+  useEffect(() => {
+    if (!visibleTabs.includes(tab)) setTab(visibleTabs[0]!);
+  }, [visibleTabs, tab]);
   const [error, setError] = useState<string | undefined>(undefined);
 
   return (
@@ -49,7 +68,7 @@ export function SettingsPanel({ onClose }: Props) {
       >
         <header className="flex items-center justify-between border-b border-neutral-800 px-4 py-3">
           <div className="flex items-center gap-1">
-            {(["providers", "agent", "skills"] as const).map((t) => (
+            {visibleTabs.map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -59,7 +78,13 @@ export function SettingsPanel({ onClose }: Props) {
                     : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
                 }`}
               >
-                {t === "providers" ? "Providers" : t === "agent" ? "Agent" : "Skills"}
+                {t === "providers"
+                  ? "Providers"
+                  : t === "agent"
+                    ? "Agent"
+                    : t === "skills"
+                      ? "Skills"
+                      : "Appearance"}
               </button>
             ))}
           </div>
@@ -82,6 +107,7 @@ export function SettingsPanel({ onClose }: Props) {
           {tab === "providers" && <ProvidersTab onError={setError} />}
           {tab === "agent" && <AgentTab onError={setError} />}
           {tab === "skills" && <SkillsTab onError={setError} />}
+          {tab === "appearance" && <AppearanceTab />}
         </div>
       </div>
     </div>
@@ -263,6 +289,11 @@ function CustomProvidersJson({ onError }: { onError: (msg: string | undefined) =
   // gated behind a details dropdown so casual users don't see it.
   const [text, setText] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  // Transient post-save signal — clears after SAVE_FLASH_MS so the
+  // banner doesn't linger as a stale "saved" claim once the user
+  // edits again. Cleared synchronously on every new save attempt.
+  const [savedAt, setSavedAt] = useState<number | undefined>(undefined);
+  useSavedFlash(savedAt, () => setSavedAt(undefined));
   const load = async (): Promise<void> => {
     try {
       const m = await api.getModelsJson();
@@ -290,9 +321,11 @@ function CustomProvidersJson({ onError }: { onError: (msg: string | undefined) =
       return;
     }
     setBusy(true);
+    setSavedAt(undefined);
     try {
       await api.setModelsJson(parsed as { providers: Record<string, unknown> });
       onError(undefined);
+      setSavedAt(Date.now());
     } catch (err) {
       onError(`Save failed: ${errorCode(err)}`);
     } finally {
@@ -324,7 +357,12 @@ function CustomProvidersJson({ onError }: { onError: (msg: string | undefined) =
             rows={10}
             className="mt-2 w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1 font-mono text-[11px] text-neutral-100 outline-none focus:border-neutral-500"
           />
-          <div className="mt-2 flex justify-end gap-2 text-xs">
+          <div className="mt-2 flex items-center justify-end gap-2 text-xs">
+            {savedAt !== undefined && (
+              <span className="text-emerald-400" aria-live="polite">
+                Saved
+              </span>
+            )}
             <button
               onClick={() => void load()}
               disabled={busy}
@@ -337,7 +375,7 @@ function CustomProvidersJson({ onError }: { onError: (msg: string | undefined) =
               disabled={busy}
               className="rounded bg-neutral-100 px-3 py-1 font-medium text-neutral-900 disabled:opacity-50"
             >
-              Save
+              {busy ? "Saving…" : "Save"}
             </button>
           </div>
         </>
@@ -495,6 +533,8 @@ function SettingsJsonEditor({
   onError: (msg: string | undefined) => void;
 }) {
   const [text, setText] = useState(() => JSON.stringify(initial, null, 2));
+  const [savedAt, setSavedAt] = useState<number | undefined>(undefined);
+  useSavedFlash(savedAt, () => setSavedAt(undefined));
 
   const save = async (): Promise<void> => {
     let parsed: unknown;
@@ -508,8 +548,10 @@ function SettingsJsonEditor({
       onError("settings.json: top-level must be an object");
       return;
     }
+    setSavedAt(undefined);
     try {
       await onSave(parsed as Record<string, unknown>);
+      setSavedAt(Date.now());
     } catch {
       // onSave already routed the error to the panel banner
     }
@@ -537,7 +579,12 @@ function SettingsJsonEditor({
         rows={18}
         className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1 font-mono text-[11px] text-neutral-100 outline-none focus:border-neutral-500"
       />
-      <div className="flex justify-end gap-2 text-xs">
+      <div className="flex items-center justify-end gap-2 text-xs">
+        {savedAt !== undefined && (
+          <span className="text-emerald-400" aria-live="polite">
+            Saved
+          </span>
+        )}
         <button
           onClick={() => setText(JSON.stringify(initial, null, 2))}
           disabled={busy}
@@ -550,11 +597,26 @@ function SettingsJsonEditor({
           disabled={busy}
           className="rounded bg-neutral-100 px-3 py-1 font-medium text-neutral-900 disabled:opacity-50"
         >
-          Save
+          {busy ? "Saving…" : "Save"}
         </button>
       </div>
     </div>
   );
+}
+
+/**
+ * Auto-clear a transient post-save indicator. The caller stores a
+ * `Date.now()` timestamp on success; this hook clears it after a
+ * fixed window so the "Saved" pill doesn't claim freshness on a
+ * stale save the user has since edited away from.
+ */
+const SAVE_FLASH_MS = 2500;
+function useSavedFlash(savedAt: number | undefined, clear: () => void): void {
+  useEffect(() => {
+    if (savedAt === undefined) return undefined;
+    const id = window.setTimeout(clear, SAVE_FLASH_MS);
+    return () => window.clearTimeout(id);
+  }, [savedAt, clear]);
 }
 
 function Field({
@@ -714,6 +776,64 @@ function SkillsTab({ onError }: { onError: (msg: string | undefined) => void }) 
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ---------------- Appearance tab ----------------
+
+function AppearanceTab() {
+  const theme = useThemeStore((s) => s.theme);
+  const setTheme = useThemeStore((s) => s.setTheme);
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-sm font-semibold text-neutral-100">Theme</h2>
+        <p className="mt-1 text-xs text-neutral-400">
+          Sets the color palette for the chrome, editor, and terminal. Persisted in this browser
+          only — open in another browser to use a different theme there.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {THEME_DEFS.map((def) => {
+          const active = def.id === theme;
+          return (
+            <button
+              key={def.id}
+              onClick={() => setTheme(def.id as ThemeId)}
+              className={`flex items-center justify-between gap-3 rounded border px-3 py-2 text-left ${
+                active
+                  ? "border-neutral-400 bg-neutral-800"
+                  : "border-neutral-700 hover:border-neutral-500"
+              }`}
+            >
+              <div>
+                <div className="text-sm text-neutral-100">{def.label}</div>
+                <div className="text-[10px] uppercase tracking-wider text-neutral-500">
+                  {def.mode}
+                </div>
+              </div>
+              <ThemeSwatch id={def.id} />
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Live swatch for a theme — applies that theme's `data-theme` to a
+ * scoped wrapper so the four neutral steps below render in the
+ * theme's actual palette without affecting the rest of the app.
+ */
+function ThemeSwatch({ id }: { id: ThemeId }) {
+  return (
+    <div data-theme={id} className="flex h-6 overflow-hidden rounded border border-neutral-700">
+      <div className="w-4 bg-neutral-950" />
+      <div className="w-4 bg-neutral-800" />
+      <div className="w-4 bg-neutral-500" />
+      <div className="w-4 bg-neutral-200" />
     </div>
   );
 }
