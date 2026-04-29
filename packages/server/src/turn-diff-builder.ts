@@ -188,6 +188,15 @@ export async function buildTurnDiff(
     else existing.push(pair);
   }
 
+  // Single `git diff HEAD -- <files...>` for every touched file at
+  // once, then split the output by `diff --git` headers. Replaces the
+  // per-file subprocess fork; on a 50-file refactor that's 50→1 git
+  // invocations. Untracked files (no entry in HEAD) are absent from
+  // the result map and fall through to `tryPureAddition` below.
+  const gitDiffs = isGitRepo
+    ? await tryGitDiffMany(projectPath, [...byFile.keys()])
+    : new Map<string, string>();
+
   const entries: TurnDiffEntry[] = [];
   for (const [absPath, pairs] of byFile) {
     const toolName = preferredTool(pairs);
@@ -195,7 +204,7 @@ export async function buildTurnDiff(
     let isPureAddition = false;
 
     if (isGitRepo) {
-      diff = await tryGitDiff(projectPath, absPath);
+      diff = gitDiffs.get(absPath);
     }
 
     if (diff === undefined || diff.length === 0) {
@@ -252,28 +261,70 @@ function absolutize(path: string, projectPath: string): string {
 }
 
 /**
- * Run `git diff HEAD -- <path>`. Returns the diff string (possibly
- * empty if the file is unchanged from HEAD) or undefined on
- * unrecoverable error (not a repo, path outside, etc.).
+ * Run `git diff HEAD -- <files...>` for ALL touched files in one
+ * subprocess. Returns a map of absolute-path → unified-diff string;
+ * files that produced no diff (unchanged, untracked, deleted) are
+ * absent from the map. Callers fall back to `tryPureAddition` /
+ * the per-edit diff for those.
  *
  * `--no-color` keeps escape codes out; `--no-ext-diff` skips user-
  * configured external diff drivers that could vary output.
+ *
+ * Output format for multi-file diffs:
+ *   diff --git a/<rel1> b/<rel1>
+ *   ...hunks...
+ *   diff --git a/<rel2> b/<rel2>
+ *   ...
+ * We split by the regex anchor `(?=^diff --git )` (multiline) which
+ * preserves the leading `diff --git` line on each chunk so the
+ * chunk parses cleanly as a single-file unified diff downstream.
  */
-async function tryGitDiff(projectPath: string, absPath: string): Promise<string | undefined> {
-  const rel = relative(projectPath, absPath);
-  if (rel.startsWith("..")) return undefined;
+async function tryGitDiffMany(
+  projectPath: string,
+  absPaths: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (absPaths.length === 0) return out;
+  const rels: string[] = [];
+  const relToAbs = new Map<string, string>();
+  for (const abs of absPaths) {
+    const rel = relative(projectPath, abs);
+    if (rel.startsWith("..")) continue;
+    rels.push(rel);
+    relToAbs.set(rel, abs);
+  }
+  if (rels.length === 0) return out;
+  let stdout: string;
   try {
-    const { stdout } = await execFileAsync(
+    const r = await execFileAsync(
       "git",
-      ["diff", "--no-color", "--no-ext-diff", "HEAD", "--", rel],
+      ["diff", "--no-color", "--no-ext-diff", "HEAD", "--", ...rels],
       { cwd: projectPath, maxBuffer: 16 * 1024 * 1024 },
     );
-    return stdout.length > 0 ? stdout : undefined;
+    stdout = r.stdout;
   } catch {
-    // Common failures: not a git repo (no HEAD yet), git not on PATH,
-    // path not tracked. Caller will fall back.
-    return undefined;
+    // Common failures: not a git repo (no HEAD yet), git not on PATH.
+    return out;
   }
+  if (stdout.length === 0) return out;
+  // Split-with-lookahead keeps the `diff --git ...` header on each chunk.
+  const chunks = stdout.split(/(?=^diff --git )/m).filter((c) => c.length > 0);
+  for (const chunk of chunks) {
+    const newlineIdx = chunk.indexOf("\n");
+    const headerLine = newlineIdx === -1 ? chunk : chunk.slice(0, newlineIdx);
+    const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(headerLine);
+    if (m === null) continue;
+    // Prefer matching against the post-rename (b/) path; fall back to
+    // a/ for renames where we asked by the old name. Renames inside
+    // a turn-diff are rare since the agent's own write/edit tools
+    // operate by path — but be defensive.
+    const newRel = m[2] ?? "";
+    const oldRel = m[1] ?? "";
+    const abs = relToAbs.get(newRel) ?? relToAbs.get(oldRel);
+    if (abs === undefined) continue;
+    out.set(abs, chunk);
+  }
+  return out;
 }
 
 /**
