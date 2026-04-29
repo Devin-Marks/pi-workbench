@@ -199,6 +199,75 @@ services:
       "GET /assets/missing.css returns 404 (no SPA fallback for assets)",
       assetMiss.status === 404,
     );
+
+    // ---- Terminal WebSocket smoke test ----
+    // Catches: missing native node-pty binding in the runtime image,
+    // missing /bin/sh, WebSocket plugin not registered. Auth is
+    // disabled in this test stack (no UI_PASSWORD / API_KEY set), so
+    // the upgrade goes through without a token.
+    spawnSync("mkdir", ["-p", join(workspaceDir, "term-test")]);
+    const projectRes = await fetch(`${base}/api/v1/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "term-test", path: "/workspace/term-test" }),
+    });
+    assert("POST /api/v1/projects (for terminal test) returns 201", projectRes.status === 201);
+    if (projectRes.status === 201) {
+      const project = (await projectRes.json()) as { id: string };
+      const wsUrl = `ws://127.0.0.1:${port}/api/v1/terminal?projectId=${encodeURIComponent(
+        project.id,
+      )}`;
+      // Node 22 has WebSocket as a global. Treat it as `unknown` so
+      // older Node versions running this script fail loudly rather
+      // than spuriously passing.
+      const WS = (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
+      assert("WebSocket constructor available", WS !== undefined);
+      if (WS !== undefined) {
+        const ws = new WS(wsUrl);
+        const collected: string[] = [];
+        const result = await new Promise<{ ok: boolean; reason: string }>((resolveFn) => {
+          const timer = setTimeout(() => {
+            try {
+              ws.close();
+            } catch {
+              // ignore
+            }
+            resolveFn({ ok: false, reason: "timeout waiting for echo output" });
+          }, 8_000);
+          ws.addEventListener("open", () => {
+            ws.send(JSON.stringify({ type: "resize", cols: 80, rows: 24 }));
+            ws.send(JSON.stringify({ type: "input", data: "echo HELLO_FROM_DOCKER_TEST\n" }));
+          });
+          ws.addEventListener("message", (e) => {
+            const data =
+              typeof e.data === "string" ? e.data : new TextDecoder().decode(e.data as ArrayBuffer);
+            collected.push(data);
+            if (collected.join("").includes("HELLO_FROM_DOCKER_TEST")) {
+              clearTimeout(timer);
+              try {
+                ws.close();
+              } catch {
+                // ignore
+              }
+              resolveFn({ ok: true, reason: "saw echo output" });
+            }
+          });
+          ws.addEventListener("error", (e) => {
+            clearTimeout(timer);
+            const msg = (e as { message?: string }).message ?? "unknown";
+            resolveFn({ ok: false, reason: `websocket error: ${msg}` });
+          });
+          ws.addEventListener("close", (e) => {
+            // Only resolves if no echo arrived before close — otherwise
+            // the message handler beat us to it.
+            clearTimeout(timer);
+            const code = (e as { code?: number }).code ?? -1;
+            resolveFn({ ok: false, reason: `websocket closed before echo (code=${code})` });
+          });
+        });
+        assert(`terminal echo round-trip — ${result.reason}`, result.ok);
+      }
+    }
   } catch (err) {
     failures += 1;
     console.log(`[test-docker] uncaught error: ${(err as Error).message}`);
