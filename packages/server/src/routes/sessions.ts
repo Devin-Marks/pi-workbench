@@ -425,6 +425,194 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
+  // Phase 16 — Context & Token Inspector. Returns the messages the
+  // agent will send to the LLM, plus a per-turn token + cost
+  // breakdown derived from each AssistantMessage.usage. The SDK
+  // already populates .usage on every assistant message; we just
+  // aggregate. Cold sessions lazy-resume so the route works without
+  // a prior SSE connect.
+  fastify.get<{ Params: { id: string } }>(
+    "/sessions/:id/context",
+    {
+      schema: {
+        description:
+          "Token + message inspector for a session. Returns the full " +
+          "AgentMessage[] (the LLM's view, post-compaction), aggregate " +
+          "token + cost totals, a per-turn breakdown derived from each " +
+          "AssistantMessage.usage, and the SDK's contextUsage (current " +
+          "context window utilization). Lazy-resumes cold sessions so " +
+          "the route works without a prior SSE connect.",
+        tags: ["sessions"],
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string" } },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: [
+              "messages",
+              "totalInputTokens",
+              "totalOutputTokens",
+              "totalCacheReadTokens",
+              "totalCacheWriteTokens",
+              "totalTokens",
+              "totalCost",
+              "turns",
+              "contextUsage",
+            ],
+            properties: {
+              messages: { type: "array", items: { type: "object", additionalProperties: true } },
+              totalInputTokens: { type: "integer", minimum: 0 },
+              totalOutputTokens: { type: "integer", minimum: 0 },
+              totalCacheReadTokens: { type: "integer", minimum: 0 },
+              totalCacheWriteTokens: { type: "integer", minimum: 0 },
+              totalTokens: { type: "integer", minimum: 0 },
+              totalCost: { type: "number", minimum: 0 },
+              turns: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: [
+                    "index",
+                    "inputTokens",
+                    "outputTokens",
+                    "cacheReadTokens",
+                    "cacheWriteTokens",
+                    "totalTokens",
+                    "cost",
+                    "model",
+                    "provider",
+                    "timestamp",
+                  ],
+                  properties: {
+                    index: { type: "integer", minimum: 0 },
+                    inputTokens: { type: "integer", minimum: 0 },
+                    outputTokens: { type: "integer", minimum: 0 },
+                    cacheReadTokens: { type: "integer", minimum: 0 },
+                    cacheWriteTokens: { type: "integer", minimum: 0 },
+                    totalTokens: { type: "integer", minimum: 0 },
+                    cost: { type: "number", minimum: 0 },
+                    model: { type: "string" },
+                    provider: { type: "string" },
+                    timestamp: { type: "integer", minimum: 0 },
+                    stopReason: { type: "string" },
+                  },
+                },
+              },
+              contextUsage: {
+                type: "object",
+                required: ["contextWindow"],
+                properties: {
+                  // tokens / percent are nullable per the SDK
+                  // (unknown right after compaction, before next LLM
+                  // response). JSONSchema 7 doesn't have a clean
+                  // nullable; using `["integer","null"]` would block
+                  // Fastify's serializer, so we omit them entirely
+                  // when null and document the absence here.
+                  tokens: { type: "integer", minimum: 0 },
+                  percent: { type: "number", minimum: 0 },
+                  contextWindow: { type: "integer", minimum: 0 },
+                },
+              },
+            },
+          },
+          404: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      let live = getSession(req.params.id);
+      if (live === undefined) {
+        try {
+          live = await resumeSessionById(req.params.id);
+        } catch {
+          return notFound(reply);
+        }
+      }
+      const messages = live.session.messages;
+      const turns: Array<Record<string, unknown>> = [];
+      let totalInput = 0;
+      let totalOutput = 0;
+      let totalCacheRead = 0;
+      let totalCacheWrite = 0;
+      let totalCost = 0;
+      messages.forEach((m, index) => {
+        // Probe the union via record-shape rather than discriminating
+        // the AgentMessage union here — keeps the route decoupled from
+        // SDK type internals (same approach used in /tree).
+        const obj = m as { role?: unknown; usage?: unknown };
+        if (obj.role !== "assistant") return;
+        const u = obj.usage as
+          | {
+              input?: unknown;
+              output?: unknown;
+              cacheRead?: unknown;
+              cacheWrite?: unknown;
+              totalTokens?: unknown;
+              cost?: { total?: unknown };
+            }
+          | undefined;
+        if (u === undefined) return;
+        const inputT = typeof u.input === "number" ? u.input : 0;
+        const outputT = typeof u.output === "number" ? u.output : 0;
+        const cacheR = typeof u.cacheRead === "number" ? u.cacheRead : 0;
+        const cacheW = typeof u.cacheWrite === "number" ? u.cacheWrite : 0;
+        const totalT =
+          typeof u.totalTokens === "number" ? u.totalTokens : inputT + outputT + cacheR + cacheW;
+        const cost = typeof u.cost?.total === "number" ? u.cost.total : 0;
+        const am = m as {
+          provider?: unknown;
+          model?: unknown;
+          timestamp?: unknown;
+          stopReason?: unknown;
+        };
+        const turn: Record<string, unknown> = {
+          index,
+          inputTokens: inputT,
+          outputTokens: outputT,
+          cacheReadTokens: cacheR,
+          cacheWriteTokens: cacheW,
+          totalTokens: totalT,
+          cost,
+          model: typeof am.model === "string" ? am.model : "unknown",
+          provider: typeof am.provider === "string" ? am.provider : "unknown",
+          timestamp: typeof am.timestamp === "number" ? am.timestamp : 0,
+        };
+        if (typeof am.stopReason === "string") turn.stopReason = am.stopReason;
+        turns.push(turn);
+        totalInput += inputT;
+        totalOutput += outputT;
+        totalCacheRead += cacheR;
+        totalCacheWrite += cacheW;
+        totalCost += cost;
+      });
+      const totalTokens = totalInput + totalOutput + totalCacheRead + totalCacheWrite;
+      const cu = live.session.getContextUsage();
+      const contextUsage: Record<string, unknown> = {
+        // contextWindow is the only required field. Fall back to 0
+        // when SDK reports undefined; client renders an "unknown"
+        // state at the cap.
+        contextWindow:
+          cu !== undefined && typeof cu.contextWindow === "number" ? cu.contextWindow : 0,
+      };
+      if (cu !== undefined && cu.tokens !== null) contextUsage.tokens = cu.tokens;
+      if (cu !== undefined && cu.percent !== null) contextUsage.percent = cu.percent;
+      return {
+        messages,
+        totalInputTokens: totalInput,
+        totalOutputTokens: totalOutput,
+        totalCacheReadTokens: totalCacheRead,
+        totalCacheWriteTokens: totalCacheWrite,
+        totalTokens,
+        totalCost,
+        turns,
+        contextUsage,
+      };
+    },
+  );
+
   fastify.post<{ Params: { id: string }; Body: { name: string } }>(
     "/sessions/:id/name",
     {

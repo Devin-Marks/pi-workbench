@@ -18,10 +18,11 @@ import { TerminalPanel } from "./components/TerminalPanel";
 import { TurnDiffPanel } from "./components/TurnDiffPanel";
 import { GitPanel } from "./components/GitPanel";
 import { SearchPanel } from "./components/SearchPanel";
+import { ContextInspectorPanel } from "./components/ContextInspectorPanel";
 import { ResizableDivider } from "./components/ResizableDivider";
 import { useGitStatus } from "./hooks/useGitStatus";
 
-type RightPaneTab = "files" | "search" | "changes" | "git";
+type RightPaneTab = "files" | "search" | "changes" | "git" | "context";
 
 /* Persisted pane widths. Stored in localStorage so the user-tuned
    layout survives reloads. Defaults err on the side of "the chat is the
@@ -96,7 +97,11 @@ export function App() {
 
   const [rightTab, setRightTab] = useState<RightPaneTab>(() => {
     const raw = localStorage.getItem("pi-workbench/right-tab");
-    return raw === "files" || raw === "search" || raw === "changes" || raw === "git"
+    return raw === "files" ||
+      raw === "search" ||
+      raw === "changes" ||
+      raw === "git" ||
+      raw === "context"
       ? raw
       : "files";
   });
@@ -406,7 +411,7 @@ export function App() {
                   <div className="flex border-b border-neutral-800 bg-neutral-900/40">
                     {(minimal
                       ? (["files", "search"] as const)
-                      : (["files", "search", "changes", "git"] as const)
+                      : (["files", "search", "changes", "git", "context"] as const)
                     ).map((t) => (
                       <button
                         key={t}
@@ -426,7 +431,9 @@ export function App() {
                             ? "Search"
                             : t === "changes"
                               ? "Last turn"
-                              : "Git"}
+                              : t === "git"
+                                ? "Git"
+                                : "Context"}
                         {t === "git" && gitChangedCount > 0 && (
                           <span className="rounded bg-amber-900/40 px-1 py-0.5 text-[9px] text-amber-300">
                             {gitChangedCount}
@@ -444,10 +451,12 @@ export function App() {
                       <TurnDiffPanel />
                     ) : !minimal && rightTab === "git" ? (
                       <GitPanel />
+                    ) : !minimal && rightTab === "context" ? (
+                      <ContextInspectorPanel />
                     ) : (
-                      // minimal mode: stale persisted "changes"/"git" falls
-                      // back to the file browser rather than rendering a
-                      // tab the user can't even see.
+                      // minimal mode: stale persisted "changes"/"git"/"context"
+                      // falls back to the file browser rather than rendering
+                      // a tab the user can't even see.
                       <FileBrowserPanel />
                     )}
                   </div>

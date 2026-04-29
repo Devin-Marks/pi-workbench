@@ -250,6 +250,48 @@ export interface SessionTreeEntry {
   label?: string;
 }
 
+export interface ContextTurn {
+  /** Index into the messages array of this assistant turn. */
+  index: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  /** Cost in USD for this turn (sum of per-token costs). */
+  cost: number;
+  model: string;
+  provider: string;
+  /** Unix epoch ms. */
+  timestamp: number;
+  stopReason?: string;
+}
+
+export interface ContextUsageStats {
+  /** Total context window the model supports (max input tokens). */
+  contextWindow: number;
+  /** Estimated current context tokens, omitted when SDK reports unknown. */
+  tokens?: number;
+  /** Usage as fraction of contextWindow (0..1), omitted when unknown. */
+  percent?: number;
+}
+
+export interface SessionContextResponse {
+  /** Full message array as the LLM sees it (post-compaction). */
+  messages: Array<Record<string, unknown>>;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheWriteTokens: number;
+  /** Sum of input + output + cache reads + cache writes across every turn. */
+  totalTokens: number;
+  /** Cumulative USD cost across every turn. */
+  totalCost: number;
+  /** Per-turn breakdown derived from each AssistantMessage.usage. */
+  turns: ContextTurn[];
+  contextUsage: ContextUsageStats;
+}
+
 export interface SessionTreeResponse {
   /** Current leaf id of the session — the active branch tip. */
   leafId: string | null;
@@ -704,6 +746,71 @@ function vGitBranches(value: unknown, status: number): GitBranchesResponse {
   return out;
 }
 
+function vSessionContext(value: unknown, status: number): SessionContextResponse {
+  if (
+    !isObject(value) ||
+    !Array.isArray(value.messages) ||
+    typeof value.totalInputTokens !== "number" ||
+    typeof value.totalOutputTokens !== "number" ||
+    typeof value.totalCacheReadTokens !== "number" ||
+    typeof value.totalCacheWriteTokens !== "number" ||
+    typeof value.totalTokens !== "number" ||
+    typeof value.totalCost !== "number" ||
+    !Array.isArray(value.turns) ||
+    !isObject(value.contextUsage)
+  ) {
+    fail(status, "expected SessionContextResponse");
+  }
+  const turns = value.turns.map((t): ContextTurn => {
+    if (
+      !isObject(t) ||
+      typeof t.index !== "number" ||
+      typeof t.inputTokens !== "number" ||
+      typeof t.outputTokens !== "number" ||
+      typeof t.cacheReadTokens !== "number" ||
+      typeof t.cacheWriteTokens !== "number" ||
+      typeof t.totalTokens !== "number" ||
+      typeof t.cost !== "number" ||
+      typeof t.model !== "string" ||
+      typeof t.provider !== "string" ||
+      typeof t.timestamp !== "number"
+    ) {
+      fail(status, "expected ContextTurn");
+    }
+    const out: ContextTurn = {
+      index: t.index,
+      inputTokens: t.inputTokens,
+      outputTokens: t.outputTokens,
+      cacheReadTokens: t.cacheReadTokens,
+      cacheWriteTokens: t.cacheWriteTokens,
+      totalTokens: t.totalTokens,
+      cost: t.cost,
+      model: t.model,
+      provider: t.provider,
+      timestamp: t.timestamp,
+    };
+    if (typeof t.stopReason === "string") out.stopReason = t.stopReason;
+    return out;
+  });
+  const cu = value.contextUsage as Record<string, unknown>;
+  const contextUsage: ContextUsageStats = {
+    contextWindow: typeof cu.contextWindow === "number" ? cu.contextWindow : 0,
+  };
+  if (typeof cu.tokens === "number") contextUsage.tokens = cu.tokens;
+  if (typeof cu.percent === "number") contextUsage.percent = cu.percent;
+  return {
+    messages: value.messages.filter((m): m is Record<string, unknown> => isObject(m)),
+    totalInputTokens: value.totalInputTokens,
+    totalOutputTokens: value.totalOutputTokens,
+    totalCacheReadTokens: value.totalCacheReadTokens,
+    totalCacheWriteTokens: value.totalCacheWriteTokens,
+    totalTokens: value.totalTokens,
+    totalCost: value.totalCost,
+    turns,
+    contextUsage,
+  };
+}
+
 function vSessionTree(value: unknown, status: number): SessionTreeResponse {
   if (
     !isObject(value) ||
@@ -999,6 +1106,8 @@ export const api = {
       method: "POST",
       body: { name },
     }),
+  getSessionContext: (id: string) =>
+    request(`/api/v1/sessions/${encodeURIComponent(id)}/context`, vSessionContext),
   getSessionTree: (id: string) =>
     request(`/api/v1/sessions/${encodeURIComponent(id)}/tree`, vSessionTree),
   navigateSession: (
