@@ -160,6 +160,16 @@ function TokenSummary({
     () => categorizeContext(data.messages, cu.tokens),
     [data.messages, cu.tokens],
   );
+  // Per-turn "new content" delta: sum of estimated tokens for every
+  // user / toolResult message between this assistant turn and the
+  // prior assistant turn. Answers "what did this turn ACTUALLY add
+  // to the context?" — distinct from usage.input which is the full
+  // re-sent prompt. Keyed by message index for O(1) lookup in the
+  // turn table.
+  const newDeltas = useMemo(
+    () => computeNewDeltas(data.messages, data.turns),
+    [data.messages, data.turns],
+  );
   const usageTokens = cu.tokens ?? breakdown.total;
   const usagePct = cu.contextWindow > 0 ? Math.min(1, usageTokens / cu.contextWindow) : 0;
   const usageLabel = cu.tokens === undefined ? "estimate" : "current";
@@ -192,30 +202,52 @@ function TokenSummary({
           best-effort and may differ from the provider's true count. */}
       <ContextBreakdown breakdown={breakdown} contextWindow={cu.contextWindow} />
 
-      {/* Last-turn line + cumulative cost. The earlier per-turn
-          format showed `<in> in · <out> out · <cache> cache` but
-          `usage.input` per turn IS the entire re-sent prior context
-          (LLMs are stateless), so the "in" number was indistinguishable
-          from "context size at that point" — meaningless as a per-turn
-          signal. Output + cost are the only genuinely per-turn numbers:
-          output is the fresh content the assistant produced, cost is
-          normalised across all the input/cache complexity. */}
-      <div className="border-t border-neutral-800 pt-1.5">
+      {/* Last turn + lifetime totals. Three numbers per row, each
+          answering a distinct question:
+            - "New": NEW user/tool content the LLM saw this turn,
+              derived from the message-array delta since the prior
+              assistant turn. NOT usage.input (which is the full
+              re-sent prompt and grows monotonically with
+              conversation length).
+            - "Out": tokens the assistant produced (genuinely per-turn).
+            - "Cost": that turn's bill, normalized across input/cache.
+          The lifetime row uses sums of the same usage fields the
+          per-turn table shows, with explicit "Prompt billed" wording
+          so users don't read it as "new tokens entered." */}
+      <div className="space-y-0.5 border-t border-neutral-800 pt-1.5">
         {data.turns.length > 0 &&
           (() => {
             const last = data.turns[data.turns.length - 1]!;
+            const lastNew = newDeltas.get(last.index) ?? 0;
             return (
-              <div className="mb-0.5 flex items-center justify-between text-[11px]">
+              <div className="flex items-center justify-between text-[11px]">
                 <span className="text-neutral-500">Last turn</span>
                 <span
                   className="font-mono text-neutral-300"
-                  title="Output tokens + cost from the most recent assistant turn. Input/cache numbers are dropped because they reflect the full re-sent context, not new work."
+                  title="New = user message + tool results since the prior assistant turn (estimate). Out = assistant output tokens. Cost = that turn's billed cost."
                 >
-                  {formatTokens(last.outputTokens)} tok · {formatUsd(last.cost)}
+                  ~{formatTokens(lastNew)} new · {formatTokens(last.outputTokens)} out ·{" "}
+                  {formatUsd(last.cost)}
                 </span>
               </div>
             );
           })()}
+        <div className="flex items-center justify-between text-[11px]">
+          <span
+            className="text-neutral-500"
+            title="Sum of usage.input across every turn — full prompts including re-sent prior context. Useful for billing analysis, not for understanding what the agent is doing."
+          >
+            Prompt billed (lifetime)
+          </span>
+          <span className="font-mono text-neutral-400">
+            {formatTokens(data.totalInputTokens)} in · {formatTokens(data.totalCacheReadTokens)} cR
+            · {formatTokens(data.totalCacheWriteTokens)} cW
+          </span>
+        </div>
+        <div className="flex items-center justify-between text-[11px]">
+          <span className="text-neutral-500">Output (lifetime)</span>
+          <span className="font-mono text-neutral-400">{formatTokens(data.totalOutputTokens)}</span>
+        </div>
         <div className="flex items-center justify-between text-[11px] font-medium">
           <span className="text-neutral-300">Total cost</span>
           <span className="font-mono text-emerald-400">{formatUsd(data.totalCost)}</span>
@@ -232,7 +264,7 @@ function TokenSummary({
             {turnsExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
             Per-turn ({data.turns.length})
           </button>
-          {turnsExpanded && <TurnsTable turns={data.turns} />}
+          {turnsExpanded && <TurnsTable turns={data.turns} newDeltas={newDeltas} />}
         </div>
       )}
     </div>
@@ -440,18 +472,27 @@ function categorizeContext(
   };
 }
 
-function TurnsTable({ turns }: { turns: ContextTurn[] }) {
-  // Per-turn columns deliberately exclude input + cacheRead +
-  // cacheWrite. `usage.input` per turn is the FULL re-sent prompt
-  // (LLMs are stateless; every turn ships the entire prior
-  // conversation), so it grows turn-over-turn just because the
-  // session accumulated — useful for the bill, useless as a
-  // per-turn signal of "what happened this turn." Output + cost
-  // are the genuinely-per-turn numbers: output is the assistant's
-  // fresh contribution, cost is normalised across all the
-  // input/cache complexity. Raw view (Code2 button on each
-  // message) shows the full Usage object for anyone debugging
-  // caching behavior.
+function TurnsTable({
+  turns,
+  newDeltas,
+}: {
+  turns: ContextTurn[];
+  newDeltas: Map<number, number>;
+}) {
+  // Columns answer four distinct questions per turn:
+  //   New     — estimated NEW tokens this turn (user message + tool
+  //             results since the prior assistant turn). The number
+  //             you want when asking "how big was this exchange?"
+  //   Prompt  — usage.input + cacheRead + cacheWrite from the
+  //             provider. The full input the LLM saw, including
+  //             re-sent prior context. Grows monotonically with
+  //             conversation length — that's normal LLM behavior,
+  //             not a bug.
+  //   Out     — assistant output tokens this turn (purely per-turn).
+  //   Cost    — that turn's billed cost (normalises across cache
+  //             pricing differences).
+  // Hover each header for the precise definition; hover the Prompt
+  // value for its input/cR/cW breakdown.
   return (
     <div className="mt-1 overflow-x-auto">
       <table className="w-full font-mono text-[10px]">
@@ -461,24 +502,50 @@ function TurnsTable({ turns }: { turns: ContextTurn[] }) {
             <th className="pr-2 text-left font-normal">Model</th>
             <th
               className="pr-2 text-right font-normal"
-              title="Output tokens — the new content this turn"
+              title="Estimated new tokens this turn — user message + tool results since the prior assistant turn (~chars/4 estimate). Distinct from Prompt."
             >
+              New
+            </th>
+            <th
+              className="pr-2 text-right font-normal"
+              title="Full prompt sent to the LLM = usage.input + cacheRead + cacheWrite. Includes ALL re-sent prior context — this grows monotonically with conversation length, which is normal LLM behavior."
+            >
+              Prompt
+            </th>
+            <th className="pr-2 text-right font-normal" title="Assistant output tokens this turn">
               Out
             </th>
-            <th className="text-right font-normal">Cost</th>
+            <th className="text-right font-normal" title="Cost billed for this turn">
+              Cost
+            </th>
           </tr>
         </thead>
         <tbody className="text-neutral-300">
-          {turns.map((t, i) => (
-            <tr key={`${t.index}-${t.timestamp}`} className="border-t border-neutral-800/60">
-              <td className="pr-2 text-neutral-600">{i + 1}</td>
-              <td className="max-w-[160px] truncate pr-2" title={`${t.provider}/${t.model}`}>
-                {t.model}
-              </td>
-              <td className="pr-2 text-right">{formatTokens(t.outputTokens)}</td>
-              <td className="text-right text-emerald-400">{formatUsd(t.cost)}</td>
-            </tr>
-          ))}
+          {turns.map((t, i) => {
+            const promptTotal = t.inputTokens + t.cacheReadTokens + t.cacheWriteTokens;
+            const newTokens = newDeltas.get(t.index) ?? 0;
+            return (
+              <tr key={`${t.index}-${t.timestamp}`} className="border-t border-neutral-800/60">
+                <td className="pr-2 text-neutral-600">{i + 1}</td>
+                <td className="max-w-[140px] truncate pr-2" title={`${t.provider}/${t.model}`}>
+                  {t.model}
+                </td>
+                <td className="pr-2 text-right text-neutral-200" title="New content (estimate)">
+                  ~{formatTokens(newTokens)}
+                </td>
+                <td
+                  className="pr-2 text-right"
+                  title={`input ${formatTokens(t.inputTokens)} + cR ${formatTokens(
+                    t.cacheReadTokens,
+                  )} + cW ${formatTokens(t.cacheWriteTokens)}`}
+                >
+                  {formatTokens(promptTotal)}
+                </td>
+                <td className="pr-2 text-right">{formatTokens(t.outputTokens)}</td>
+                <td className="text-right text-emerald-400">{formatUsd(t.cost)}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -709,6 +776,48 @@ function estimateTokens(message: Record<string, unknown>): number {
     if (o.type === "image") images += 1;
   }
   return Math.ceil(chars / 4) + images * 1500;
+}
+
+/**
+ * For each assistant turn, estimate the NEW tokens this turn added
+ * to the context — i.e. the user message + tool results between
+ * this assistant turn and the previous one. Excludes the assistant
+ * turn itself (its output is reported separately) and excludes any
+ * earlier history (which is "re-sent context", not new).
+ *
+ * Returned as a Map keyed by message index for O(1) lookup in the
+ * per-turn table. The first turn's "new" includes everything before
+ * it (which is normally just the first user message). Subsequent
+ * turns' "new" only includes content between consecutive assistant
+ * messages.
+ *
+ * Uses the same ~chars/4 heuristic as `estimateTokens` and
+ * `categorizeContext` so the three numbers tell a consistent story.
+ * This is a UX-grade estimate; the per-turn `Prompt` column shows
+ * the provider's authoritative input number alongside.
+ */
+function computeNewDeltas(
+  messages: Array<Record<string, unknown>>,
+  turns: ContextTurn[],
+): Map<number, number> {
+  const result = new Map<number, number>();
+  let prevAssistantIdx = -1;
+  for (const t of turns) {
+    let sum = 0;
+    for (let i = prevAssistantIdx + 1; i < t.index; i++) {
+      const m = messages[i];
+      if (m === undefined) continue;
+      const role = typeof m.role === "string" ? m.role : "";
+      // Only user prompts and tool results count as "new" — assistant
+      // messages between turns shouldn't happen, and meta entries
+      // (system_info, etc.) aren't part of the conversation flow.
+      if (role !== "user" && role !== "toolResult") continue;
+      sum += estimateTokens(m);
+    }
+    result.set(t.index, sum);
+    prevAssistantIdx = t.index;
+  }
+  return result;
 }
 
 function renderExpanded(
