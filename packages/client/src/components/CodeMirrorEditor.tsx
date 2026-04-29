@@ -3,6 +3,8 @@ import { EditorView, basicSetup } from "codemirror";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { themeDef, useThemeStore } from "../lib/theme";
+import { StreamLanguage } from "@codemirror/language";
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
 import { rust } from "@codemirror/lang-rust";
@@ -12,6 +14,39 @@ import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { html } from "@codemirror/lang-html";
 import { css } from "@codemirror/lang-css";
+import { yaml } from "@codemirror/lang-yaml";
+// Legacy modes — CM5-era language definitions wrapped via
+// `StreamLanguage.define()` for CM6. Quality is generally lower than
+// the first-party Lezer parsers above (no incremental parsing, no
+// nested-language support), but the coverage is wide and the bundle
+// cost per language is small (~1–3 KB minified each). Sub-path
+// imports keep tree-shaking honest — the bundler only pulls in the
+// modes we actually reference.
+import { jinja2 } from "@codemirror/legacy-modes/mode/jinja2";
+import { shell } from "@codemirror/legacy-modes/mode/shell";
+import { toml } from "@codemirror/legacy-modes/mode/toml";
+import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
+import { properties } from "@codemirror/legacy-modes/mode/properties";
+import { lua } from "@codemirror/legacy-modes/mode/lua";
+import { perl } from "@codemirror/legacy-modes/mode/perl";
+import { r } from "@codemirror/legacy-modes/mode/r";
+import { powerShell } from "@codemirror/legacy-modes/mode/powershell";
+import { ruby } from "@codemirror/legacy-modes/mode/ruby";
+import { go } from "@codemirror/legacy-modes/mode/go";
+import { swift } from "@codemirror/legacy-modes/mode/swift";
+import { kotlin, scala, csharp } from "@codemirror/legacy-modes/mode/clike";
+import { groovy } from "@codemirror/legacy-modes/mode/groovy";
+import { xml } from "@codemirror/legacy-modes/mode/xml";
+// `sql` here is the legacy-modes factory; `standardSQL` is the
+// pre-baked StreamParser for ANSI SQL, which is what we want.
+import { standardSQL } from "@codemirror/legacy-modes/mode/sql";
+import { diff } from "@codemirror/legacy-modes/mode/diff";
+import { clojure } from "@codemirror/legacy-modes/mode/clojure";
+import { haskell } from "@codemirror/legacy-modes/mode/haskell";
+import { oCaml } from "@codemirror/legacy-modes/mode/mllike";
+import { protobuf } from "@codemirror/legacy-modes/mode/protobuf";
+import { cmake } from "@codemirror/legacy-modes/mode/cmake";
+import { nginx } from "@codemirror/legacy-modes/mode/nginx";
 import type { OpenFile } from "../store/file-store";
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
@@ -31,11 +66,19 @@ export default function CodeMirrorEditor({
   onChange,
   onSaveShortcut,
   wrap,
+  onConsumePendingNav,
 }: {
   file: OpenFile;
   onChange: (next: string) => void;
   onSaveShortcut: () => void;
   wrap: boolean;
+  /**
+   * Called after the editor scrolls to a `pendingNav` position so the
+   * caller can clear the field and prevent re-scroll on subsequent
+   * draft updates. Passes the path so the caller can match the
+   * right tab when multiple are open.
+   */
+  onConsumePendingNav: (path: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -45,17 +88,28 @@ export default function CodeMirrorEditor({
   // rebuilding the entire EditorState (which would lose cursor, undo,
   // selection, etc.).
   const wrapCompartmentRef = useRef<Compartment>(new Compartment());
+  // Theme compartment lets us swap between oneDark and the
+  // CodeMirror default light theme at runtime when the user picks a
+  // different app theme — same trick as the wrap compartment, no
+  // EditorState rebuild required.
+  const themeCompartmentRef = useRef<Compartment>(new Compartment());
+  const activeTheme = useThemeStore((s) => s.theme);
+  const editorMode = themeDef(activeTheme).mode;
 
   // Latest `onChange` / `onSaveShortcut` in refs so the EditorView
   // listener doesn't capture stale closures across renders.
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSaveShortcut);
+  const consumePendingNavRef = useRef(onConsumePendingNav);
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
   useEffect(() => {
     onSaveRef.current = onSaveShortcut;
   }, [onSaveShortcut]);
+  useEffect(() => {
+    consumePendingNavRef.current = onConsumePendingNav;
+  }, [onConsumePendingNav]);
 
   // Build the EditorView once per mount (per file, thanks to the React
   // `key`). Tearing down on unmount avoids the classic CodeMirror leak
@@ -66,7 +120,12 @@ export default function CodeMirrorEditor({
     const langExt = languageExtension(file.language);
     const exts: Extension[] = [
       basicSetup,
-      oneDark,
+      // Initial theme matches the user's currently-applied app
+      // theme. Swapped at runtime via the compartment below; no
+      // light-themed CodeMirror pack is bundled, so light mode
+      // falls back to CodeMirror's default light styling (which
+      // reads cleanly on white backgrounds).
+      themeCompartmentRef.current.of(editorMode === "dark" ? oneDark : []),
       wrapCompartmentRef.current.of(wrap ? EditorView.lineWrapping : []),
       keymap.of([
         {
@@ -105,6 +164,18 @@ export default function CodeMirrorEditor({
     });
   }, [wrap]);
 
+  // Reconfigure the theme compartment when the user changes the
+  // app theme. dark→light flips oneDark off; light→dark flips it
+  // back on. Same compartment trick as wrap — preserves editor
+  // state.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === null) return;
+    view.dispatch({
+      effects: themeCompartmentRef.current.reconfigure(editorMode === "dark" ? oneDark : []),
+    });
+  }, [editorMode]);
+
   // External draft change (e.g. reloadFile bringing fresh disk content)
   // — sync into the editor without firing onChange.
   useEffect(() => {
@@ -125,6 +196,32 @@ export default function CodeMirrorEditor({
     }, AUTOSAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [file.dirty, file.draft, file.binary]);
+
+  // Pending-navigation effect: when the file-store sets `pendingNav`
+  // on this tab (e.g. from a search-result click), scroll the editor
+  // to that line, place the cursor there, and clear the field via
+  // `consumePendingNav` so it doesn't replay on the next render.
+  // Wait for a tick so the doc is in place if pendingNav was set
+  // alongside an `openFile` that just dispatched a doc replace.
+  useEffect(() => {
+    if (file.pendingNav === undefined) return;
+    const nav = file.pendingNav;
+    const view = viewRef.current;
+    if (view === null) return;
+    const id = window.setTimeout(() => {
+      const lineNo = Math.max(1, Math.min(view.state.doc.lines, nav.line));
+      const line = view.state.doc.line(lineNo);
+      const col = Math.max(0, (nav.column ?? 1) - 1);
+      const pos = Math.min(line.from + col, line.to);
+      view.dispatch({
+        selection: { anchor: pos },
+        effects: EditorView.scrollIntoView(pos, { y: "center" }),
+      });
+      view.focus();
+      consumePendingNavRef.current(file.path);
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [file.pendingNav, file.path]);
 
   return <div ref={containerRef} className="flex-1 overflow-auto" />;
 }
@@ -153,6 +250,66 @@ function languageExtension(language: string): Extension | undefined {
     case "css":
     case "scss":
       return css();
+    case "yaml":
+      return yaml();
+    // ----------------- legacy-modes-backed -----------------
+    case "jinja2":
+      return StreamLanguage.define(jinja2);
+    case "shell":
+      return StreamLanguage.define(shell);
+    case "toml":
+      return StreamLanguage.define(toml);
+    case "dockerfile":
+      return StreamLanguage.define(dockerFile);
+    case "properties":
+      return StreamLanguage.define(properties);
+    case "lua":
+      return StreamLanguage.define(lua);
+    case "perl":
+      return StreamLanguage.define(perl);
+    case "r":
+      return StreamLanguage.define(r);
+    case "powershell":
+      return StreamLanguage.define(powerShell);
+    case "ruby":
+      return StreamLanguage.define(ruby);
+    case "go":
+      return StreamLanguage.define(go);
+    case "swift":
+      return StreamLanguage.define(swift);
+    case "kotlin":
+      return StreamLanguage.define(kotlin);
+    case "scala":
+      return StreamLanguage.define(scala);
+    case "groovy":
+      return StreamLanguage.define(groovy);
+    case "csharp":
+      return StreamLanguage.define(csharp);
+    case "xml":
+      return StreamLanguage.define(xml);
+    case "sql":
+      return StreamLanguage.define(standardSQL);
+    case "diff":
+      return StreamLanguage.define(diff);
+    case "clojure":
+      return StreamLanguage.define(clojure);
+    case "haskell":
+      return StreamLanguage.define(haskell);
+    case "ocaml":
+      return StreamLanguage.define(oCaml);
+    case "protobuf":
+      return StreamLanguage.define(protobuf);
+    case "cmake":
+      return StreamLanguage.define(cmake);
+    case "nginx":
+      return StreamLanguage.define(nginx);
+    // Note: `legacy-modes` ships no makefile mode; the server detects
+    // Makefile/.mk files but falls through to plaintext here. Use
+    // shell as a passable fallback so tabs/comments at least colour
+    // sensibly. (Could swap to a dedicated Lezer makefile parser
+    // later if it surfaces as a real annoyance.)
+    case "makefile":
+      return StreamLanguage.define(shell);
     default:
       return undefined;
   }

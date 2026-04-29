@@ -30,6 +30,14 @@ export interface OpenFile {
   /** Last successful save timestamp (ms). Drives the "Saved at hh:mm:ss" hint. */
   savedAt: number | undefined;
   loadingError: string | undefined;
+  /**
+   * One-shot navigation request — when set, the CodeMirror host
+   * scrolls + sets selection to this position on its next render and
+   * clears the field so subsequent draft updates don't re-scroll.
+   * Set by `openFile` callers that want to land on a specific line
+   * (e.g. clicking a search result).
+   */
+  pendingNav?: { line: number; column?: number };
 }
 
 interface FileState {
@@ -45,7 +53,13 @@ interface FileState {
   error: string | undefined;
 
   loadTree: (projectId: string) => Promise<void>;
-  openFile: (projectId: string, absPath: string) => Promise<void>;
+  openFile: (
+    projectId: string,
+    absPath: string,
+    nav?: { line: number; column?: number },
+  ) => Promise<void>;
+  /** Clear `pendingNav` on a tab after the editor has consumed it. */
+  consumePendingNav: (path: string) => void;
   closeFile: (path: string) => void;
   setActiveFile: (path: string | undefined) => void;
   updateDraft: (path: string, draft: string) => void;
@@ -77,6 +91,22 @@ interface FileState {
   // Tree mutations — fire the route, then refresh the tree on success.
   createFile: (projectId: string, parentAbsPath: string, name: string) => Promise<string>;
   createFolder: (projectId: string, parentAbsPath: string, name: string) => Promise<void>;
+  /**
+   * Multipart upload of one or more files into `parentAbsPath`. The
+   * client SHA-256s each file via WebCrypto and the server verifies
+   * before swap-in. Returns the per-file results so callers can
+   * surface "uploaded N files" feedback or open the result. Refreshes
+   * the tree on success.
+   */
+  uploadFiles: (
+    projectId: string,
+    parentAbsPath: string,
+    files: File[],
+    opts?: {
+      overwrite?: boolean;
+      onHashProgress?: (hashed: number, total: number) => void;
+    },
+  ) => Promise<Array<{ path: string; size: number; sha256: string }>>;
   renameEntry: (projectId: string, absPath: string, newName: string) => Promise<string>;
   /**
    * Move `srcAbsPath` to `destAbsPath`. Caller is responsible for
@@ -116,11 +146,20 @@ export const useFileStore = create<FileState>((set, get) => ({
     }
   },
 
-  openFile: async (projectId, absPath) => {
-    // If already open, just activate.
+  openFile: async (projectId, absPath, nav) => {
+    // If already open, just activate. When `nav` is supplied, also
+    // patch the existing tab so the editor scrolls to the requested
+    // line on its next render.
     const existing = get().openFiles.find((f) => f.path === absPath);
     if (existing !== undefined) {
-      set({ activePath: absPath });
+      if (nav !== undefined) {
+        set((s) => ({
+          openFiles: s.openFiles.map((f) => (f.path === absPath ? { ...f, pendingNav: nav } : f)),
+          activePath: absPath,
+        }));
+      } else {
+        set({ activePath: absPath });
+      }
       return;
     }
     set({ error: undefined });
@@ -138,6 +177,7 @@ export const useFileStore = create<FileState>((set, get) => ({
         savedAt: undefined,
         loadingError: r.binary ? "Binary file — open externally to edit." : undefined,
       };
+      if (nav !== undefined) tab.pendingNav = nav;
       set((s) => ({
         openFiles: [...s.openFiles, tab],
         activePath: absPath,
@@ -161,6 +201,17 @@ export const useFileStore = create<FileState>((set, get) => ({
   },
 
   setActiveFile: (path) => set({ activePath: path }),
+
+  consumePendingNav: (path) => {
+    set((s) => ({
+      openFiles: s.openFiles.map((f) => {
+        if (f.path !== path || f.pendingNav === undefined) return f;
+        const next: OpenFile = { ...f };
+        delete next.pendingNav;
+        return next;
+      }),
+    }));
+  },
 
   updateDraft: (path, draft) => {
     set((s) => ({
@@ -311,6 +362,21 @@ export const useFileStore = create<FileState>((set, get) => ({
       const open = get().openFiles.find((f) => f.path === absPath);
       if (open !== undefined) get().closeFile(absPath);
       await get().loadTree(projectId);
+    } catch (err) {
+      set({ error: err instanceof ApiError ? err.code : (err as Error).message });
+      throw err;
+    }
+  },
+
+  uploadFiles: async (projectId, parentAbsPath, files, opts) => {
+    set({ error: undefined });
+    try {
+      const res = await api.uploadFiles(projectId, parentAbsPath, files, {
+        ...(opts?.overwrite !== undefined ? { overwrite: opts.overwrite } : {}),
+        ...(opts?.onHashProgress !== undefined ? { onHashProgress: opts.onHashProgress } : {}),
+      });
+      await get().loadTree(projectId);
+      return res.files;
     } catch (err) {
       set({ error: err instanceof ApiError ? err.code : (err as Error).message });
       throw err;

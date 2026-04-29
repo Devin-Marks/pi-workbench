@@ -1,3 +1,4 @@
+import { createSHA256 } from "hash-wasm";
 import { clearStoredToken, getStoredToken } from "./auth-client";
 
 /**
@@ -50,6 +51,13 @@ export interface HealthResponse {
   status: "ok";
   activeSessions: number;
   activePtys: number;
+}
+
+export interface UiConfigResponse {
+  /** Frontend "minimal" mode — see server config.minimalUi. */
+  minimal: boolean;
+  /** Absolute path to the workspace root, used by minimal-mode project create. */
+  workspaceRoot: string;
 }
 
 export interface UnifiedSession {
@@ -164,6 +172,10 @@ export interface GitLogEntry {
   message: string;
   author: string;
   date: string;
+  /** Parent commit hashes — empty for the root, two for merges. */
+  parents: string[];
+  /** git ref decorations (e.g. "HEAD -> main", "tag: v1", "origin/main"). */
+  refs: string[];
 }
 
 export interface GitLogResponse {
@@ -181,6 +193,59 @@ export interface GitBranchesResponse {
   isGitRepo: boolean;
   current?: string;
   branches: GitBranch[];
+}
+
+export interface GitRemote {
+  name: string;
+  fetchUrl: string;
+  pushUrl: string;
+}
+
+export interface GitRemotesResponse {
+  isGitRepo: boolean;
+  remotes: GitRemote[];
+}
+
+export interface SearchMatch {
+  /** Project-relative POSIX path. */
+  path: string;
+  /** 1-based line number. */
+  line: number;
+  /** 1-based column where the match starts on that line. */
+  column: number;
+  /** Number of UTF-16 units the match spans (0 if unavailable). */
+  length: number;
+  /** Full text of the matching line, with no trailing newline. */
+  lineSnippet: string;
+}
+
+export interface SearchResponse {
+  engine: "ripgrep" | "node";
+  matches: SearchMatch[];
+  /** True when the result hit the limit and more matches exist. */
+  truncated: boolean;
+}
+
+export interface SearchOptions {
+  query: string;
+  regex?: boolean;
+  caseSensitive?: boolean;
+  includeGitignored?: boolean;
+  include?: string;
+  exclude?: string;
+  limit?: number;
+}
+
+export interface UploadedFile {
+  /** Absolute path the file was written to. */
+  path: string;
+  size: number;
+  /** Lowercase hex SHA-256 of the bytes the server actually wrote. */
+  sha256: string;
+}
+
+export interface UploadResponse {
+  files: UploadedFile[];
 }
 
 export function onUnauthorized(handler: () => void): () => void {
@@ -238,6 +303,17 @@ function vLogin(value: unknown, status: number): LoginResponse {
     fail(status, "expected { token, expiresAt }");
   }
   return { token: value.token, expiresAt: value.expiresAt };
+}
+
+function vUiConfig(value: unknown, status: number): UiConfigResponse {
+  if (
+    !isObject(value) ||
+    typeof value.minimal !== "boolean" ||
+    typeof value.workspaceRoot !== "string"
+  ) {
+    fail(status, "expected { minimal: boolean, workspaceRoot: string }");
+  }
+  return { minimal: value.minimal, workspaceRoot: value.workspaceRoot };
 }
 
 function vHealth(value: unknown, status: number): HealthResponse {
@@ -565,11 +641,20 @@ function vGitLog(value: unknown, status: number): GitLogResponse {
         typeof c.hash !== "string" ||
         typeof c.message !== "string" ||
         typeof c.author !== "string" ||
-        typeof c.date !== "string"
+        typeof c.date !== "string" ||
+        !Array.isArray(c.parents) ||
+        !Array.isArray(c.refs)
       ) {
         fail(status, "expected GitLogEntry");
       }
-      return { hash: c.hash, message: c.message, author: c.author, date: c.date };
+      return {
+        hash: c.hash,
+        message: c.message,
+        author: c.author,
+        date: c.date,
+        parents: c.parents.filter((p): p is string => typeof p === "string"),
+        refs: c.refs.filter((r): r is string => typeof r === "string"),
+      };
     }),
   };
 }
@@ -596,11 +681,133 @@ function vGitBranches(value: unknown, status: number): GitBranchesResponse {
   return out;
 }
 
+function vUploadResponse(value: unknown, status: number): UploadResponse {
+  if (!isObject(value) || !Array.isArray(value.files)) {
+    fail(status, "expected { files: UploadedFile[] }");
+  }
+  return {
+    files: value.files.map((f): UploadedFile => {
+      if (
+        !isObject(f) ||
+        typeof f.path !== "string" ||
+        typeof f.size !== "number" ||
+        typeof f.sha256 !== "string"
+      ) {
+        fail(status, "expected UploadedFile");
+      }
+      return { path: f.path, size: f.size, sha256: f.sha256 };
+    }),
+  };
+}
+
+function vSearchResponse(value: unknown, status: number): SearchResponse {
+  if (
+    !isObject(value) ||
+    (value.engine !== "ripgrep" && value.engine !== "node") ||
+    typeof value.truncated !== "boolean" ||
+    !Array.isArray(value.matches)
+  ) {
+    fail(status, "expected SearchResponse");
+  }
+  return {
+    engine: value.engine,
+    truncated: value.truncated,
+    matches: value.matches.map((m): SearchMatch => {
+      if (
+        !isObject(m) ||
+        typeof m.path !== "string" ||
+        typeof m.line !== "number" ||
+        typeof m.column !== "number" ||
+        typeof m.length !== "number" ||
+        typeof m.lineSnippet !== "string"
+      ) {
+        fail(status, "expected SearchMatch");
+      }
+      return {
+        path: m.path,
+        line: m.line,
+        column: m.column,
+        length: m.length,
+        lineSnippet: m.lineSnippet,
+      };
+    }),
+  };
+}
+
+function vGitRemotes(value: unknown, status: number): GitRemotesResponse {
+  if (!isObject(value) || typeof value.isGitRepo !== "boolean" || !Array.isArray(value.remotes)) {
+    fail(status, "expected GitRemotesResponse");
+  }
+  return {
+    isGitRepo: value.isGitRepo,
+    remotes: value.remotes.map((r): GitRemote => {
+      if (
+        !isObject(r) ||
+        typeof r.name !== "string" ||
+        typeof r.fetchUrl !== "string" ||
+        typeof r.pushUrl !== "string"
+      ) {
+        fail(status, "expected GitRemote");
+      }
+      return { name: r.name, fetchUrl: r.fetchUrl, pushUrl: r.pushUrl };
+    }),
+  };
+}
+
 function vPathOnly(value: unknown, status: number): { path: string } {
   if (!isObject(value) || typeof value.path !== "string") {
     fail(status, "expected { path: string }");
   }
   return { path: value.path };
+}
+
+/**
+ * Hash a Blob (File is a Blob) with SHA-256 by reading it through a
+ * `ReadableStream` and feeding each chunk to a hash-wasm hasher.
+ * Streaming matters because uploads can be hundreds of MB — a full
+ * `arrayBuffer()` load would OOM the tab. Returns a lowercase-hex
+ * digest. `onChunk` reports the byte count of each chunk as it
+ * passes through, used by the UI for progress.
+ */
+async function streamSha256(blob: Blob, onChunk?: (delta: number) => void): Promise<string> {
+  const hasher = await createSHA256();
+  hasher.init();
+  // Browsers prior to 2022 don't support Blob.stream(); the broad
+  // baseline target here (Chromium / WebKit / Firefox in PWA mode) all
+  // do, so we don't bother with a FileReader fallback.
+  const reader = blob.stream().getReader();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      // Some browsers hand back chunks larger than HASH_CHUNK_BYTES;
+      // hash-wasm handles arbitrary sizes, so we don't slice.
+      hasher.update(value);
+      onChunk?.(value.byteLength);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return hasher.digest("hex");
+}
+
+/**
+ * Parse the filename out of a Content-Disposition header. Prefers
+ * `filename*` (RFC 5987) when present so we get the original
+ * non-ASCII name; falls back to the legacy `filename=` value.
+ */
+function parseContentDispositionFilename(header: string): string | undefined {
+  const star = /filename\*=UTF-8''([^;\r\n]+)/i.exec(header);
+  if (star !== null) {
+    try {
+      return decodeURIComponent(star[1]!);
+    } catch {
+      // fall through
+    }
+  }
+  const ascii = /filename="([^"]+)"/i.exec(header) ?? /filename=([^;\r\n]+)/i.exec(header);
+  if (ascii !== null) return ascii[1];
+  return undefined;
 }
 
 function safeParseJson(text: string): { ok: true; value: unknown } | { ok: false } {
@@ -622,10 +829,17 @@ async function request<T>(
     const stored = getStoredToken();
     if (stored) headers.Authorization = `Bearer ${stored.token}`;
   }
-  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+  // FormData bodies (multipart uploads) — let the browser set
+  // Content-Type with the auto-generated boundary. Setting it
+  // manually here would break parsing on the server because we
+  // can't compute the boundary string.
+  const isFormData = opts.body instanceof FormData;
+  if (opts.body !== undefined && !isFormData) headers["Content-Type"] = "application/json";
 
   const init: RequestInit = { method: opts.method ?? "GET", headers };
-  if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
+  if (opts.body !== undefined) {
+    init.body = isFormData ? (opts.body as FormData) : JSON.stringify(opts.body);
+  }
   if (opts.signal !== undefined) init.signal = opts.signal;
 
   let res: Response;
@@ -670,6 +884,7 @@ export const api = {
       skipAuth: true,
     }),
   health: () => request("/api/v1/health", vHealth, { skipAuth: true }),
+  uiConfig: () => request("/api/v1/ui-config", vUiConfig, { skipAuth: true }),
   listProjects: () => request("/api/v1/projects", vProjectList),
   createProject: (name: string, path: string) =>
     request("/api/v1/projects", vProject, { method: "POST", body: { name, path } }),
@@ -678,8 +893,17 @@ export const api = {
       method: "PATCH",
       body: { name },
     }),
-  deleteProject: (id: string) =>
-    request(`/api/v1/projects/${encodeURIComponent(id)}`, vVoid, { method: "DELETE" }),
+  deleteProject: (id: string, opts?: { cascade?: boolean }) => {
+    const qs = opts?.cascade === true ? "?cascade=1" : "";
+    return request(
+      `/api/v1/projects/${encodeURIComponent(id)}${qs}`,
+      (v, s) => {
+        if (!isObject(v) || typeof v.cascaded !== "boolean") fail(s, "expected { cascaded }");
+        return { cascaded: v.cascaded };
+      },
+      { method: "DELETE" },
+    );
+  },
   browse: (path?: string) => {
     const qs = path !== undefined ? `?path=${encodeURIComponent(path)}` : "";
     return request(`/api/v1/projects/browse${qs}`, vBrowse);
@@ -709,8 +933,10 @@ export const api = {
       }
       return { messages: v.messages as Array<Record<string, unknown>> };
     }),
-  disposeSession: (id: string) =>
-    request(`/api/v1/sessions/${encodeURIComponent(id)}`, vVoid, { method: "DELETE" }),
+  disposeSession: (id: string, opts?: { hard?: boolean }) => {
+    const qs = opts?.hard === true ? "?hard=1" : "";
+    return request(`/api/v1/sessions/${encodeURIComponent(id)}${qs}`, vVoid, { method: "DELETE" });
+  },
   renameSession: (id: string, name: string) =>
     request(`/api/v1/sessions/${encodeURIComponent(id)}/name`, vSessionSummary, {
       method: "POST",
@@ -720,13 +946,36 @@ export const api = {
     request(`/api/v1/sessions/${encodeURIComponent(id)}/turn-diff`, vTurnDiff),
 
   // ---------------- prompt + control ----------------
-  prompt: (id: string, text: string, streamingBehavior?: "steer" | "followUp") => {
+  prompt: (
+    id: string,
+    text: string,
+    opts?: {
+      streamingBehavior?: "steer" | "followUp";
+      attachments?: File[];
+    },
+  ) => {
+    // Multipart path when attachments are present — server splits
+    // images vs text files by MIME type. JSON path otherwise to keep
+    // the request lightweight in the common case.
+    const path = `/api/v1/sessions/${encodeURIComponent(id)}/prompt`;
+    if (opts?.attachments !== undefined && opts.attachments.length > 0) {
+      const fd = new FormData();
+      fd.append("text", text);
+      if (opts.streamingBehavior !== undefined) {
+        fd.append("streamingBehavior", opts.streamingBehavior);
+      }
+      for (const file of opts.attachments) {
+        // Field name is "attachments" — server iterates `req.parts()`
+        // and reads files by part.type === "file" regardless of
+        // fieldname, so the choice is cosmetic but matches the dev
+        // plan and the OpenAPI description.
+        fd.append("attachments", file, file.name);
+      }
+      return request(path, vAccepted, { method: "POST", body: fd });
+    }
     const body: Record<string, unknown> = { text };
-    if (streamingBehavior !== undefined) body.streamingBehavior = streamingBehavior;
-    return request(`/api/v1/sessions/${encodeURIComponent(id)}/prompt`, vAccepted, {
-      method: "POST",
-      body,
-    });
+    if (opts?.streamingBehavior !== undefined) body.streamingBehavior = opts.streamingBehavior;
+    return request(path, vAccepted, { method: "POST", body });
   },
   steer: (id: string, text: string, mode?: "steer" | "followUp") => {
     const body: Record<string, unknown> = { text };
@@ -817,6 +1066,108 @@ export const api = {
     const qs = new URLSearchParams({ projectId, path });
     return request(`/api/v1/files/delete?${qs.toString()}`, vVoid, { method: "DELETE" });
   },
+  /**
+   * Authed download of a file or directory. Files come down verbatim;
+   * directories arrive as a gzipped tar (`<name>.tar.gz`). Returns a
+   * Blob + the server-supplied filename so the caller can trigger an
+   * `<a download>` click. We can't use a plain `<a href>` because the
+   * route requires an Authorization header, which `<a>` clicks don't
+   * carry.
+   *
+   * Memory caveat: this buffers the full response into a Blob. Fine
+   * for individual files (capped 5 MB on read) and small projects.
+   * For multi-GB projects swap to a service-worker-mediated download
+   * — see notes in CLAUDE.md.
+   */
+  filesDownload: async (
+    projectId: string,
+    path?: string,
+  ): Promise<{ blob: Blob; filename: string }> => {
+    const qs = new URLSearchParams({ projectId });
+    if (path !== undefined && path.length > 0) qs.set("path", path);
+    const headers: Record<string, string> = {};
+    const stored = getStoredToken();
+    if (stored !== undefined) headers.Authorization = `Bearer ${stored.token}`;
+    const res = await fetch(`/api/v1/files/download?${qs.toString()}`, { headers });
+    if (res.status === 401) {
+      clearStoredToken();
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+      throw new ApiError(401, "unauthorized");
+    }
+    if (!res.ok) {
+      let code = "request_failed";
+      try {
+        const body = (await res.json()) as { error?: unknown };
+        if (typeof body.error === "string") code = body.error;
+      } catch {
+        // body wasn't JSON — keep generic code
+      }
+      throw new ApiError(res.status, code);
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") ?? "";
+    return { blob, filename: parseContentDispositionFilename(cd) ?? "download" };
+  },
+  /**
+   * Multipart upload of one or more files into `parentPath` under the
+   * project. Each file's SHA-256 is hashed in the browser via WebCrypto
+   * and sent as a `sha256:<filename>` field BEFORE the corresponding
+   * file part — the server matches by filename and rejects with 422
+   * (`checksum_mismatch`) if the bytes it wrote don't hash to the same
+   * digest. Field-order matters: FormData preserves insertion order,
+   * so the server can rely on field-before-file.
+   */
+  uploadFiles: async (
+    projectId: string,
+    parentPath: string,
+    files: File[],
+    opts?: {
+      overwrite?: boolean;
+      signal?: AbortSignal;
+      /**
+       * Called with the total bytes hashed across all files, so the
+       * UI can render a "Hashing 350/500 MB" progress label. Fires
+       * once per chunk (~1 MB) — coarse enough not to spam React.
+       */
+      onHashProgress?: (hashed: number, total: number) => void;
+    },
+  ): Promise<UploadResponse> => {
+    const fd = new FormData();
+    fd.append("projectId", projectId);
+    fd.append("parentPath", parentPath);
+    if (opts?.overwrite === true) fd.append("overwrite", "1");
+    const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+    let hashedSoFar = 0;
+    for (const file of files) {
+      const digest = await streamSha256(file, (delta) => {
+        hashedSoFar += delta;
+        opts?.onHashProgress?.(hashedSoFar, totalBytes);
+      });
+      fd.append(`sha256:${file.name}`, digest);
+    }
+    for (const file of files) {
+      fd.append("files", file, file.name);
+    }
+    return request("/api/v1/files/upload", vUploadResponse, {
+      method: "POST",
+      body: fd,
+      ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+  },
+  searchFiles: (projectId: string, opts: SearchOptions, signal?: AbortSignal) => {
+    const qs = new URLSearchParams({ projectId, q: opts.query });
+    if (opts.regex === true) qs.set("regex", "1");
+    if (opts.caseSensitive === true) qs.set("caseSensitive", "1");
+    if (opts.includeGitignored === true) qs.set("includeGitignored", "1");
+    if (opts.include !== undefined && opts.include.length > 0) qs.set("include", opts.include);
+    if (opts.exclude !== undefined && opts.exclude.length > 0) qs.set("exclude", opts.exclude);
+    if (opts.limit !== undefined) qs.set("limit", String(opts.limit));
+    return request(
+      `/api/v1/files/search?${qs.toString()}`,
+      vSearchResponse,
+      signal !== undefined ? { signal } : {},
+    );
+  },
 
   // ---------------- git ----------------
   gitStatus: (projectId: string) =>
@@ -837,6 +1188,26 @@ export const api = {
   },
   gitBranches: (projectId: string) =>
     request(`/api/v1/git/branches?projectId=${encodeURIComponent(projectId)}`, vGitBranches),
+  gitRemotes: (projectId: string) =>
+    request(`/api/v1/git/remotes?projectId=${encodeURIComponent(projectId)}`, vGitRemotes),
+  gitRemoteAdd: (projectId: string, name: string, url: string) =>
+    request(
+      "/api/v1/git/remote/add",
+      (v, s) => {
+        if (!isObject(v) || v.ok !== true) fail(s, "expected { ok: true }");
+        return { ok: true as const };
+      },
+      { method: "POST", body: { projectId, name, url } },
+    ),
+  gitRemoteRemove: (projectId: string, name: string) =>
+    request(
+      `/api/v1/git/remote/${encodeURIComponent(name)}?projectId=${encodeURIComponent(projectId)}`,
+      (v, s) => {
+        if (!isObject(v) || v.ok !== true) fail(s, "expected { ok: true }");
+        return { ok: true as const };
+      },
+      { method: "DELETE" },
+    ),
   gitCheckout: (projectId: string, branch: string) =>
     request(
       "/api/v1/git/checkout",

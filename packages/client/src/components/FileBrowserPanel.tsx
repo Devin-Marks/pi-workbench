@@ -1,16 +1,19 @@
-import { useEffect, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import {
   ChevronDown,
   ChevronRight,
+  Download,
   FilePlus2,
   FolderPlus,
+  Loader2,
   Pencil,
   RefreshCw,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { useFileStore } from "../store/file-store";
 import { useActiveProject } from "../store/project-store";
-import type { FileTreeNode } from "../lib/api-client";
+import { api, type FileTreeNode } from "../lib/api-client";
 import { ConfirmDialog, PromptDialog } from "./Modal";
 
 /**
@@ -58,6 +61,13 @@ export function FileBrowserPanel() {
   // used to highlight the row. Cleared on dragleave/drop.
   const [dropTarget, setDropTarget] = useState<string | undefined>(undefined);
   const [dialog, setDialog] = useState<DialogState>(undefined);
+  // Upload state: progress message during in-flight uploads, target dir
+  // chosen by the toolbar button (so the same hidden <input> can be
+  // re-used for both root-level and per-folder uploads).
+  const [uploadStatus, setUploadStatus] = useState<string | undefined>(undefined);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const uploadTargetRef = useRef<string | undefined>(undefined);
+  const uploadFiles = useFileStore((s) => s.uploadFiles);
 
   useEffect(() => {
     if (project !== undefined) void loadTree(project.id);
@@ -128,15 +138,22 @@ export function FileBrowserPanel() {
 
   /**
    * Drop handler — `targetDirAbsPath` is the directory the user dropped
-   * onto (or the project root when the drop hit the empty area). The
-   * source path comes from `dataTransfer` set on dragstart. Same-dir
-   * drops are no-ops; descendant drops surface the server's 400 via
-   * the store's `error` slot.
+   * onto (or the project root when the drop hit the empty area). Two
+   * sources: an in-app drag (a tree row) carries `application/x-pi-path`
+   * and triggers a move; an OS drag carries `dataTransfer.files` and
+   * triggers an upload. Same-dir moves are no-ops; descendant moves
+   * surface the server's 400 via the store's `error` slot.
    */
   const handleDrop = async (e: DragEvent<HTMLElement>, targetDirAbsPath: string): Promise<void> => {
     e.preventDefault();
     e.stopPropagation();
     setDropTarget(undefined);
+    // OS file drop: upload into the target directory.
+    if (e.dataTransfer.files.length > 0) {
+      const files = Array.from(e.dataTransfer.files);
+      await runUpload(targetDirAbsPath, files);
+      return;
+    }
     const src = e.dataTransfer.getData("application/x-pi-path");
     if (src.length === 0) return;
     // basename of src
@@ -152,6 +169,88 @@ export function FileBrowserPanel() {
     } catch {
       // store.error renders banner
     }
+  };
+
+  const runUpload = async (targetDirAbsPath: string, files: File[]): Promise<void> => {
+    if (files.length === 0) return;
+    const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+    setUploadStatus(
+      `Hashing ${files.length} file${files.length === 1 ? "" : "s"} (${formatBytes(totalBytes)})…`,
+    );
+    try {
+      const written = await uploadFiles(project.id, targetDirAbsPath, files, {
+        onHashProgress: (hashed, total) => {
+          // Once hashing is done the network upload kicks off; we
+          // can't cheaply track POST progress without an XHR upload
+          // hook, so the label flips to "Uploading…" via the
+          // post-progress branch below.
+          if (hashed < total) {
+            setUploadStatus(
+              `Hashing ${formatBytes(hashed)} / ${formatBytes(total)} (${Math.floor((hashed / total) * 100)}%)…`,
+            );
+          } else {
+            setUploadStatus(
+              `Uploading ${files.length} file${files.length === 1 ? "" : "s"} (${formatBytes(total)})…`,
+            );
+          }
+        },
+      });
+      setUploadStatus(`Uploaded ${written.length} file${written.length === 1 ? "" : "s"}.`);
+      window.setTimeout(() => setUploadStatus(undefined), 2500);
+    } catch {
+      setUploadStatus(undefined);
+      // store.error renders the failure banner
+    }
+  };
+
+  const onPickUpload = (targetDirAbsPath: string): void => {
+    uploadTargetRef.current = targetDirAbsPath;
+    uploadInputRef.current?.click();
+  };
+
+  /**
+   * Trigger an authed download of a file or directory. Folders +
+   * the project root come back as `.tar.gz`. We blob-buffer the
+   * response then click a hidden anchor — `<a href download>` alone
+   * can't carry the Authorization header.
+   */
+  const downloadEntry = async (absPath: string | undefined): Promise<void> => {
+    setUploadStatus("Preparing download…");
+    try {
+      const { blob, filename } = await api.filesDownload(project.id, absPath);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Defer revoke a tick so Safari's download handler has a chance
+      // to grab the blob — revoking inside the same task can race.
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setUploadStatus(undefined);
+    } catch (err) {
+      setUploadStatus(undefined);
+      // Surface via the store error slot for consistency with the
+      // rest of the panel — wrap unknown errors in a code-ish string.
+      useFileStore.setState({
+        error: err instanceof Error ? err.message : "download_failed",
+      });
+    }
+  };
+
+  const onUploadInputChange = async (e: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    // Snapshot the FileList into a real array BEFORE we reset
+    // input.value — the reset empties the FileList in-place, so any
+    // later read would see zero files. Same trick as the chat input's
+    // attachment handler.
+    const list = e.target.files;
+    const files = list !== null ? Array.from(list) : [];
+    const target = uploadTargetRef.current ?? project.path;
+    e.target.value = "";
+    uploadTargetRef.current = undefined;
+    if (files.length === 0) return;
+    await runUpload(target, files);
   };
 
   return (
@@ -176,6 +275,20 @@ export function FileBrowserPanel() {
             <FolderPlus size={14} />
           </button>
           <button
+            onClick={() => onPickUpload(project.path)}
+            className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+            title="Upload files into project root (drag-and-drop also works on any folder)"
+          >
+            <Upload size={14} />
+          </button>
+          <button
+            onClick={() => void downloadEntry(undefined)}
+            className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+            title="Download project as .tar.gz (skips node_modules, .git, dist, etc.)"
+          >
+            <Download size={14} />
+          </button>
+          <button
             onClick={() => void loadTree(project.id)}
             className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
             title="Refresh"
@@ -184,6 +297,19 @@ export function FileBrowserPanel() {
           </button>
         </div>
       </div>
+      <input
+        ref={uploadInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => void onUploadInputChange(e)}
+      />
+      {uploadStatus !== undefined && (
+        <div className="flex items-center gap-1.5 border-b border-emerald-700/40 bg-emerald-900/20 px-3 py-1.5 text-[11px] text-emerald-200">
+          {!uploadStatus.startsWith("Uploaded") && <Loader2 size={11} className="animate-spin" />}
+          <span>{uploadStatus}</span>
+        </div>
+      )}
       {error !== undefined && (
         <div className="border-b border-red-700/40 bg-red-900/20 px-3 py-1.5 text-[11px] text-red-300">
           {error}
@@ -191,13 +317,16 @@ export function FileBrowserPanel() {
       )}
       <div
         className="flex-1 overflow-y-auto py-1"
-        // Empty-area drop = move to the project root. dragover MUST
-        // preventDefault to enable the drop; the dragleave clear runs
-        // when the cursor leaves THIS container, not its children.
+        // Empty-area drop = move/upload to the project root. dragover
+        // MUST preventDefault to enable the drop. We accept either an
+        // in-app drag (custom mime) or a native OS file drag (`Files`).
         onDragOver={(e) => {
-          if (e.dataTransfer.types.includes("application/x-pi-path")) {
+          if (
+            e.dataTransfer.types.includes("application/x-pi-path") ||
+            e.dataTransfer.types.includes("Files")
+          ) {
             e.preventDefault();
-            e.dataTransfer.dropEffect = "move";
+            e.dataTransfer.dropEffect = e.dataTransfer.types.includes("Files") ? "copy" : "move";
           }
         }}
         onDrop={(e) => void handleDrop(e, project.path)}
@@ -219,6 +348,8 @@ export function FileBrowserPanel() {
             onRenameCommit={(absPath) => void commitRename(absPath)}
             onRenameStart={startRename}
             onDelete={(absPath, name, isDir) => requestDelete(absPath, name, isDir)}
+            onUpload={(absPath) => onPickUpload(absPath)}
+            onDownload={(absPath) => void downloadEntry(absPath)}
             dropTarget={dropTarget}
             onDropTargetChange={setDropTarget}
             onDrop={(e, dir) => void handleDrop(e, dir)}
@@ -275,6 +406,10 @@ interface TreeProps {
   onRenameCommit: (absPath: string) => void;
   onRenameStart: (absPath: string, name: string) => void;
   onDelete: (absPath: string, name: string, isDir: boolean) => void;
+  /** Click-to-upload into this directory; click-fired from a hover icon. */
+  onUpload: (absPath: string) => void;
+  /** Click-to-download (file: verbatim; directory: tar.gz). */
+  onDownload: (absPath: string) => void;
   /** Path of the directory currently being hovered as a drop target. */
   dropTarget: string | undefined;
   onDropTargetChange: (path: string | undefined) => void;
@@ -316,14 +451,17 @@ function Tree(props: TreeProps) {
         // Drop target: only directories accept drops. dragover MUST
         // preventDefault to enable the drop; we also stopPropagation
         // so the project-root drop area doesn't fire when dropping on
-        // a nested folder.
+        // a nested folder. Accepts either in-app moves (custom mime)
+        // or native OS file uploads (`Files`).
         onDragOver={
           isDir
             ? (e) => {
-                if (!e.dataTransfer.types.includes("application/x-pi-path")) return;
+                const isFile = e.dataTransfer.types.includes("Files");
+                const isPiPath = e.dataTransfer.types.includes("application/x-pi-path");
+                if (!isFile && !isPiPath) return;
                 e.preventDefault();
                 e.stopPropagation();
-                e.dataTransfer.dropEffect = "move";
+                e.dataTransfer.dropEffect = isFile ? "copy" : "move";
                 if (props.dropTarget !== absPath) props.onDropTargetChange(absPath);
               }
             : undefined
@@ -385,6 +523,28 @@ function Tree(props: TreeProps) {
         </button>
         {!isRenaming && (
           <div className="hidden items-center gap-0.5 group-hover:flex">
+            {isDir && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onUpload(absPath);
+                }}
+                className="rounded p-0.5 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200"
+                title="Upload into this folder"
+              >
+                <Upload size={11} />
+              </button>
+            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                props.onDownload(absPath);
+              }}
+              className="rounded p-0.5 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200"
+              title={isDir ? "Download folder as .tar.gz" : "Download file"}
+            >
+              <Download size={11} />
+            </button>
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -429,4 +589,11 @@ function Tree(props: TreeProps) {
 function joinPath(root: string, rel: string): string {
   if (rel === "") return root;
   return `${root}/${rel.replaceAll("\\", "/")}`;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
