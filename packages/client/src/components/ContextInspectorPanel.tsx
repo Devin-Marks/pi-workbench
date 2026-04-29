@@ -145,13 +145,21 @@ function TokenSummary({
   onToggleTurns: () => void;
 }) {
   const cu = data.contextUsage;
-  // SDK reports `tokens` as null when unknown (right after compaction
-  // before the next LLM response). Fall back to the running totalTokens
-  // estimate so the bar still renders meaningfully.
-  const usageTokens = cu.tokens ?? data.totalTokens;
-  const usagePct =
-    cu.percent ?? (cu.contextWindow > 0 ? Math.min(1, usageTokens / cu.contextWindow) : 0);
-  const usageLabel = cu.tokens === undefined ? "estimate" : "actual";
+  // Always derive the bar percent from tokens / contextWindow rather
+  // than honoring the SDK's `percent` field. The SDK reports percent
+  // as 0..100 (e.g. 1.19 = 1.19%); my earlier code multiplied that
+  // by 100 again and produced "119%" for a session that was actually
+  // 1% full. Deriving locally avoids the unit ambiguity entirely.
+  //
+  // `cu.tokens` is the *current* context-window state — what counts
+  // toward the next request's input limit. NOT the lifetime token
+  // sum (which inflates with cache reads + every prior turn). When
+  // the SDK doesn't have a fresh number (right after compaction),
+  // we use the per-message breakdown total below as the estimate.
+  const breakdown = useMemo(() => categorizeContext(data.messages), [data.messages]);
+  const usageTokens = cu.tokens ?? breakdown.total;
+  const usagePct = cu.contextWindow > 0 ? Math.min(1, usageTokens / cu.contextWindow) : 0;
+  const usageLabel = cu.tokens === undefined ? "estimate" : "current";
   return (
     <div className="space-y-2 border-b border-neutral-800 px-3 py-2">
       {/* Context-window bar */}
@@ -174,31 +182,50 @@ function TokenSummary({
         </div>
       </div>
 
-      {/* Aggregate counts grid */}
-      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
-        <div className="flex justify-between">
-          <span className="text-neutral-500">Input</span>
-          <span className="font-mono text-neutral-200">{formatTokens(data.totalInputTokens)}</span>
+      {/* Per-category breakdown — what's *actually* taking up the
+          window, derived client-side from the current message array.
+          Estimates are ~chars/4 (same heuristic as estimateTokens).
+          The SDK doesn't ship a categorized breakdown, so this is
+          best-effort and may differ from the provider's true count. */}
+      <ContextBreakdown breakdown={breakdown} contextWindow={cu.contextWindow} />
+
+      {/* Lifetime cost + token totals (per-turn sum, NOT current
+          context). Cache reads/writes are billing categories — they
+          don't represent context occupancy and live here so users
+          can reason about cost separately from context fill. */}
+      <div className="border-t border-neutral-800 pt-1.5">
+        <div className="mb-0.5 text-[10px] uppercase tracking-wider text-neutral-500">
+          Lifetime (per-turn sum)
         </div>
-        <div className="flex justify-between">
-          <span className="text-neutral-500">Output</span>
-          <span className="font-mono text-neutral-200">{formatTokens(data.totalOutputTokens)}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-neutral-500">Cache read</span>
-          <span className="font-mono text-neutral-200">
-            {formatTokens(data.totalCacheReadTokens)}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-neutral-500">Cache write</span>
-          <span className="font-mono text-neutral-200">
-            {formatTokens(data.totalCacheWriteTokens)}
-          </span>
-        </div>
-        <div className="col-span-2 flex justify-between border-t border-neutral-800 pt-0.5 font-medium">
-          <span className="text-neutral-300">Cost</span>
-          <span className="font-mono text-emerald-400">{formatUsd(data.totalCost)}</span>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
+          <div className="flex justify-between">
+            <span className="text-neutral-500">Input</span>
+            <span className="font-mono text-neutral-200">
+              {formatTokens(data.totalInputTokens)}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-neutral-500">Output</span>
+            <span className="font-mono text-neutral-200">
+              {formatTokens(data.totalOutputTokens)}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-neutral-500">Cache read</span>
+            <span className="font-mono text-neutral-200">
+              {formatTokens(data.totalCacheReadTokens)}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-neutral-500">Cache write</span>
+            <span className="font-mono text-neutral-200">
+              {formatTokens(data.totalCacheWriteTokens)}
+            </span>
+          </div>
+          <div className="col-span-2 flex justify-between border-t border-neutral-800 pt-0.5 font-medium">
+            <span className="text-neutral-300">Cost</span>
+            <span className="font-mono text-emerald-400">{formatUsd(data.totalCost)}</span>
+          </div>
         </div>
       </div>
 
@@ -217,6 +244,181 @@ function TokenSummary({
       )}
     </div>
   );
+}
+
+/* ------------------------- context category breakdown ------------------------- */
+
+interface ContextBreakdownData {
+  userPrompts: number;
+  assistantText: number;
+  thinking: number;
+  toolCalls: number;
+  toolResults: number;
+  images: number;
+  total: number;
+}
+
+const BREAKDOWN_PALETTE: {
+  key: keyof Omit<ContextBreakdownData, "total">;
+  label: string;
+  color: string;
+}[] = [
+  { key: "userPrompts", label: "User prompts", color: "#0ea5e9" },
+  { key: "assistantText", label: "Assistant text", color: "#a78bfa" },
+  { key: "thinking", label: "Thinking", color: "#71717a" },
+  { key: "toolCalls", label: "Tool calls", color: "#f59e0b" },
+  { key: "toolResults", label: "Tool results", color: "#10b981" },
+  { key: "images", label: "Images", color: "#ec4899" },
+];
+
+function ContextBreakdown({
+  breakdown,
+  contextWindow,
+}: {
+  breakdown: ContextBreakdownData;
+  contextWindow: number;
+}) {
+  const total = breakdown.total;
+  if (total === 0) return null;
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between text-[10px] text-neutral-400">
+        <span>What&rsquo;s in the context</span>
+        <span className="text-neutral-600" title="Sum of category estimates (~chars/4)">
+          ~{formatTokens(total)} tok
+          {contextWindow > 0 && (
+            <span className="ml-1">({((total / contextWindow) * 100).toFixed(1)}%)</span>
+          )}
+        </span>
+      </div>
+      {/* Stacked horizontal bar — one segment per category, widths
+          proportional to its share of `total` (not contextWindow,
+          so a small session still fills the bar and the relative
+          mix is readable). */}
+      <div className="flex h-1.5 w-full overflow-hidden rounded bg-neutral-800">
+        {BREAKDOWN_PALETTE.map((c) => {
+          const v = breakdown[c.key];
+          if (v === 0) return null;
+          const pct = (v / total) * 100;
+          return (
+            <div
+              key={c.key}
+              style={{ width: `${pct}%`, background: c.color }}
+              title={`${c.label}: ${formatTokens(v)} tok (${pct.toFixed(1)}%)`}
+            />
+          );
+        })}
+      </div>
+      <ul className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px]">
+        {BREAKDOWN_PALETTE.map((c) => {
+          const v = breakdown[c.key];
+          if (v === 0) return null;
+          const pct = (v / total) * 100;
+          return (
+            <li key={c.key} className="flex items-center gap-1.5">
+              <span
+                className="inline-block h-2 w-2 rounded-sm"
+                style={{ background: c.color }}
+                aria-hidden="true"
+              />
+              <span className="flex-1 truncate text-neutral-400">{c.label}</span>
+              <span className="font-mono text-neutral-300">{formatTokens(v)}</span>
+              <span className="w-10 text-right text-neutral-600">{pct.toFixed(0)}%</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Walk the messages array and bucket text into context categories.
+ * Token estimate is the same ~chars/4 heuristic estimateTokens
+ * uses — provider-specific tokenizers would be more accurate, but
+ * the per-turn `usage` data above carries the authoritative numbers.
+ * This breakdown answers "where did the tokens go?", which is a
+ * relative question that survives the heuristic.
+ *
+ * Image content is counted as a per-attachment placeholder rather
+ * than being measured byte-wise — provider image tokens scale with
+ * resolution, not file size. (See Ctx3 in DEFERRED.md for the
+ * proper fix.)
+ */
+function categorizeContext(messages: Array<Record<string, unknown>>): ContextBreakdownData {
+  let userChars = 0;
+  let asstTextChars = 0;
+  let thinkingChars = 0;
+  let toolCallChars = 0;
+  let toolResultChars = 0;
+  let imageCount = 0;
+  for (const m of messages) {
+    const role = typeof m.role === "string" ? m.role : "";
+    const content = m.content;
+    if (role === "user") {
+      if (typeof content === "string") {
+        userChars += content.length;
+      } else if (Array.isArray(content)) {
+        for (const c of content) {
+          const o = c as { type?: unknown; text?: unknown };
+          if (o.type === "text" && typeof o.text === "string") userChars += o.text.length;
+          else if (o.type === "image") imageCount += 1;
+        }
+      }
+    } else if (role === "assistant" && Array.isArray(content)) {
+      for (const c of content) {
+        const o = c as { type?: unknown; text?: unknown; input?: unknown };
+        if (o.type === "text" && typeof o.text === "string") {
+          asstTextChars += o.text.length;
+        } else if (o.type === "thinking" && typeof o.text === "string") {
+          thinkingChars += o.text.length;
+        } else if (o.type === "toolUse") {
+          // Tool args go through the LLM as a JSON-encoded string;
+          // measuring the JSON length is closer to the truth than
+          // measuring raw character counts of object values.
+          try {
+            toolCallChars += JSON.stringify(o.input ?? {}).length;
+          } catch {
+            // circular ref → estimate via toString
+            toolCallChars += String(o.input ?? "").length;
+          }
+        }
+      }
+    } else if (role === "toolResult") {
+      if (typeof content === "string") {
+        toolResultChars += content.length;
+      } else if (Array.isArray(content)) {
+        for (const c of content) {
+          const o = c as { type?: unknown; text?: unknown };
+          if (o.type === "text" && typeof o.text === "string") {
+            toolResultChars += o.text.length;
+          } else if (o.type === "image") {
+            imageCount += 1;
+          }
+        }
+      }
+    }
+  }
+  // 4 chars / token is the conventional rule of thumb. Image rough
+  // estimate at 1500 tok/image — between Anthropic's ~1200 (1024px
+  // square) and OpenAI's ~1700 (high-detail). Same number used in
+  // estimateTokens for consistency; both undercount large images.
+  const tokens = (chars: number): number => Math.ceil(chars / 4);
+  const userPrompts = tokens(userChars);
+  const assistantText = tokens(asstTextChars);
+  const thinking = tokens(thinkingChars);
+  const toolCalls = tokens(toolCallChars);
+  const toolResults = tokens(toolResultChars);
+  const images = imageCount * 1500;
+  return {
+    userPrompts,
+    assistantText,
+    thinking,
+    toolCalls,
+    toolResults,
+    images,
+    total: userPrompts + assistantText + thinking + toolCalls + toolResults + images,
+  };
 }
 
 function TurnsTable({ turns }: { turns: ContextTurn[] }) {
@@ -463,7 +665,9 @@ function extractPreview(message: Record<string, unknown>, showThinking: boolean)
 /**
  * Rough token estimate: ~4 chars per token. Used in the row badge
  * as an at-a-glance signal; the real per-turn counts come from
- * the SDK's usage field rendered in TurnsTable.
+ * the SDK's usage field rendered in TurnsTable. Image constant
+ * matches `categorizeContext` for consistency (1500 tok/image:
+ * between Anthropic's ~1200 and OpenAI's ~1700 high-detail).
  */
 function estimateTokens(message: Record<string, unknown>): number {
   // Prefer the SDK's actual usage when present (assistant messages).
@@ -473,12 +677,13 @@ function estimateTokens(message: Record<string, unknown>): number {
   if (typeof content === "string") return Math.ceil(content.length / 4);
   if (!Array.isArray(content)) return 0;
   let chars = 0;
+  let images = 0;
   for (const c of content) {
     const o = c as { text?: unknown; type?: unknown };
     if (typeof o.text === "string") chars += o.text.length;
-    if (o.type === "image") chars += 1000; // rough placeholder
+    if (o.type === "image") images += 1;
   }
-  return Math.ceil(chars / 4);
+  return Math.ceil(chars / 4) + images * 1500;
 }
 
 function renderExpanded(
