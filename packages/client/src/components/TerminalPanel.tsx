@@ -5,8 +5,9 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { useTerminalStore, type TerminalTab } from "../store/terminal-store";
-import { useActiveProject } from "../store/project-store";
+import { useActiveProject, useProjectStore } from "../store/project-store";
 import { getStoredToken } from "../lib/auth-client";
+import { readCssVar, useThemeStore } from "../lib/theme";
 
 /**
  * Per-tab DOM/WebSocket/xterm bag. Lives OUTSIDE React state because
@@ -72,27 +73,23 @@ export function TerminalPanel() {
   const openTab = useTerminalStore((s) => s.openTab);
   const closeTab = useTerminalStore((s) => s.closeTab);
   const setActiveTab = useTerminalStore((s) => s.setActiveTab);
-  const closeProjectTabs = useTerminalStore((s) => s.closeProjectTabs);
+  const projects = useProjectStore((s) => s.projects);
   const projectTabs = tabs.filter((t) => project !== undefined && t.projectId === project.id);
   const activeTab = projectTabs.find((t) => t.id === activeTabId) ?? projectTabs[0];
 
-  // On project change, prune tabs from OTHER projects: their PTYs
-  // were spawned in those projects' cwds, and showing them under a
-  // different project header would be misleading. We tear down the
-  // imperative resources here, then call the store helper for each
-  // stale projectId to clear the registry.
-  useEffect(() => {
-    if (project === undefined) return;
-    const stale = new Set<string>();
-    for (const t of tabs) {
-      if (t.projectId !== project.id) {
-        teardown(t.id);
-        stale.add(t.projectId);
-      }
-    }
-    for (const pid of stale) closeProjectTabs(pid);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project?.id]);
+  // Project-path lookup for cross-project tabs. We keep TerminalHost
+  // components mounted for tabs in ALL projects (see render block
+  // below), so we need to know each tab's project path for the
+  // host's tooltip — `useActiveProject()` only gives us the
+  // currently-selected one.
+  const projectPathById = new Map(projects.map((p) => [p.id, p.path]));
+
+  // Tabs from OTHER projects stay in the store and on the server —
+  // they're filtered out of the visible tab list via `projectTabs`
+  // above, so switching projects just hides them. The PTYs keep
+  // running; the user can switch back and pick up where they left
+  // off. (Earlier versions tore them down here; the rationale was
+  // tied to a topbar project picker that no longer exists.)
 
   if (project === undefined) {
     return (
@@ -154,22 +151,25 @@ export function TerminalPanel() {
         </div>
       </div>
 
-      {/* xterm hosts. We render ALL tabs at once (one host per id) and
-          toggle visibility — that way switching tabs doesn't tear down
-          the WebSocket or lose scrollback. The host is also where the
-          ResizeObserver lives, which calls fit() on container changes. */}
+      {/* xterm hosts. We render every tab across EVERY project here
+          (not just the active project's) so each host div stays
+          attached to the DOM for the lifetime of the tab. Switching
+          projects merely toggles visibility — xterm never has to
+          re-bind to a fresh parent, which it doesn't always do
+          cleanly (the symptom was a blank pane after project
+          switch + back). Visibility = same project AND active tab. */}
       <div className="relative flex-1 overflow-hidden">
         {projectTabs.length === 0 && (
           <div className="flex h-full items-center justify-center text-xs italic text-neutral-500">
             Click "New" to open a terminal in {project.path}.
           </div>
         )}
-        {projectTabs.map((t) => (
+        {tabs.map((t) => (
           <TerminalHost
             key={t.id}
             tab={t}
-            projectPath={project.path}
-            visible={t.id === activeTab?.id}
+            projectPath={projectPathById.get(t.projectId) ?? ""}
+            visible={t.projectId === project.id && t.id === activeTab?.id}
           />
         ))}
       </div>
@@ -190,19 +190,83 @@ function TerminalHost({
 
   useEffect(() => {
     if (hostRef.current === null) return undefined;
-    if (live.has(tab.id)) return undefined; // already attached
+    const host = hostRef.current;
+
+    // Re-mount path: the panel was toggled off and back on (or any
+    // ancestor unmounted us), but the imperative resources in `live`
+    // are still alive. Re-attach the existing xterm to the FRESH
+    // host div, rebind a new ResizeObserver (the old host's
+    // observer was disconnected on unmount below), and re-fit.
+    // Without this branch the new host stays an empty div and the
+    // user just sees blank space.
+    const existing = live.get(tab.id);
+    if (existing !== undefined) {
+      try {
+        existing.term.open(host);
+        // visibility:hidden (not display:none) is used for tab
+        // switching, so `host` has real layout dimensions on every
+        // mount — fit always returns correct cols/rows.
+        existing.fit.fit();
+      } catch {
+        // open() can throw transiently if the host hasn't been laid
+        // out yet; the visibility-change effect below also calls
+        // fit() so this isn't load-bearing on success.
+      }
+      const observer = new ResizeObserver(() => {
+        try {
+          existing.fit.fit();
+        } catch {
+          // host detached momentarily during tab/panel toggles
+        }
+        const cols = existing.term.cols;
+        const rows = existing.term.rows;
+        if (cols === existing.lastSize.cols && rows === existing.lastSize.rows) return;
+        existing.lastSize = { cols, rows };
+        if (existing.ws.readyState === WebSocket.OPEN) {
+          existing.ws.send(JSON.stringify({ type: "resize", cols, rows }));
+        }
+      });
+      observer.observe(host);
+      // Disconnect the previous observer (which was watching a now-
+      // detached host div) and replace it with the new one.
+      try {
+        existing.observer.disconnect();
+      } catch {
+        // ignore
+      }
+      existing.observer = observer;
+      requestAnimationFrame(() => {
+        try {
+          existing.fit.fit();
+          existing.term.focus();
+        } catch {
+          // ignore
+        }
+      });
+      return () => {
+        // On unmount (panel closed or component otherwise removed)
+        // tear down only the observer — the term + ws survive so
+        // the next mount can re-attach. Full cleanup happens in
+        // teardown() when the tab is closed.
+        try {
+          observer.disconnect();
+        } catch {
+          // ignore
+        }
+      };
+    }
 
     const term = new Terminal({
-      // Inherit the app's neutral-950 background; xterm's default
-      // black is too contrasty against the rest of the dark theme.
+      // Theme reads `--pi-terminal-bg` / `--pi-terminal-fg` from
+      // the active app theme so the terminal blends with the rest
+      // of the chrome on every theme. ANSI palette is left to
+      // xterm's defaults — themable per-color is a v2 polish.
       theme: {
-        background: "#0a0a0a",
-        foreground: "#e5e5e5",
-        cursor: "#e5e5e5",
-        black: "#262626",
-        brightBlack: "#525252",
-        // Default ANSI palette — xterm fills the rest if we don't
-        // override.
+        background: readCssVar("--pi-terminal-bg", "#0a0a0a"),
+        foreground: readCssVar("--pi-terminal-fg", "#e5e5e5"),
+        cursor: readCssVar("--pi-terminal-fg", "#e5e5e5"),
+        black: readCssVar("--color-neutral-800", "#262626"),
+        brightBlack: readCssVar("--color-neutral-600", "#525252"),
       },
       fontFamily:
         'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
@@ -218,7 +282,13 @@ function TerminalHost({
     const links = new WebLinksAddon();
     term.loadAddon(fit);
     term.loadAddon(links);
-    term.open(hostRef.current);
+    term.open(host);
+    // Hosts use `visibility: hidden` (not `display: none`) for tab
+    // switching — see render block — so every host has real layout
+    // dimensions even when not the active tab. fit() therefore
+    // returns the correct cols/rows on first mount regardless of
+    // which tab is active, and the initial resize message we send
+    // matches the server PTY's actual rendering size from the start.
     fit.fit();
 
     const initialSize = { cols: term.cols, rows: term.rows };
@@ -270,14 +340,23 @@ function TerminalHost({
     });
 
     // Reference the data listener so its handle survives remounts.
-    // The early-return guard above (`if (live.has(tab.id))`) means
-    // we don't re-attach on remount — so we MUST NOT dispose here
-    // either, or HMR/parent-rerender would leave the WS open with
-    // no keystroke listener and typing would silently break.
-    // Cleanup is the responsibility of `teardown()` below, which
-    // calls `term.dispose()` to remove every listener at once.
+    // The re-mount branch above re-uses the same `term`, so we MUST
+    // NOT dispose `dataDisposable` on unmount — the keystroke
+    // listener has to keep working when the panel re-opens.
+    // Cleanup is the responsibility of `teardown()`, which calls
+    // `term.dispose()` to remove every listener at once.
     void dataDisposable;
-    return undefined;
+    return () => {
+      // Panel toggled off / parent unmounted: disconnect just the
+      // observer. The next mount creates a fresh observer bound to
+      // the new host. Term + WS + listeners are intentionally kept
+      // alive so the PTY stays connected and scrollback survives.
+      try {
+        observer.disconnect();
+      } catch {
+        // ignore
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id]);
 
@@ -297,6 +376,24 @@ function TerminalHost({
     });
   }, [visible, tab.id]);
 
+  // Live theme update for an existing xterm. xterm 5+ accepts a
+  // re-assignment to `options.theme` and re-renders. We read the
+  // CSS vars *after* the theme store has applied the new
+  // data-theme to the document, so the values reflect the just-
+  // selected palette.
+  const activeTheme = useThemeStore((s) => s.theme);
+  useEffect(() => {
+    const entry = live.get(tab.id);
+    if (entry === undefined) return;
+    entry.term.options.theme = {
+      background: readCssVar("--pi-terminal-bg", "#0a0a0a"),
+      foreground: readCssVar("--pi-terminal-fg", "#e5e5e5"),
+      cursor: readCssVar("--pi-terminal-fg", "#e5e5e5"),
+      black: readCssVar("--color-neutral-800", "#262626"),
+      brightBlack: readCssVar("--color-neutral-600", "#525252"),
+    };
+  }, [activeTheme, tab.id]);
+
   // Click-to-focus safety net. xterm normally handles its own focus
   // on click via its internal textarea, but the click can land on
   // empty space below the cursor (especially in a freshly-opened
@@ -311,7 +408,21 @@ function TerminalHost({
       ref={hostRef}
       onClick={onHostClick}
       className="absolute inset-0"
-      style={{ display: visible ? "block" : "none" }}
+      // `visibility: hidden` instead of `display: none` so every host
+      // keeps real layout dimensions whether or not it's the active
+      // tab. That way fit() always reads the correct cols/rows on
+      // first mount AND every host's ResizeObserver tracks the panel
+      // size for the lifetime of the tab — no stale PTY size, no
+      // catch-up resize on tab switch (which previously triggered
+      // zsh's PROMPT_EOL_MARK and dropped a `%` into the scrollback
+      // of every inactive tab on page refresh).
+      // pointerEvents:none so clicks pass through to the visible tab.
+      // zIndex layered so the visible tab's xterm receives focus.
+      style={{
+        visibility: visible ? "visible" : "hidden",
+        pointerEvents: visible ? "auto" : "none",
+        zIndex: visible ? 1 : 0,
+      }}
       title={projectPath}
     />
   );
@@ -339,22 +450,35 @@ function attachWebSocket(
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   const stored = getStoredToken();
   const tokenQs = stored !== undefined ? `&token=${encodeURIComponent(stored.token)}` : "";
+  // Pass the stable client tabId so the server can reattach to the
+  // existing PTY (with its rolling output buffer replayed) on
+  // reconnect / page reload, instead of spawning a fresh shell.
   const url = `${proto}://${window.location.host}/api/v1/terminal?projectId=${encodeURIComponent(
     projectId,
-  )}${tokenQs}`;
+  )}&tabId=${encodeURIComponent(tabId)}${tokenQs}`;
   const ws = new WebSocket(url);
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
     // Send the cached size so the shell formats correctly out of the
-    // gate — both for first connect (pre-resize default of 80x24) and
-    // reconnect (the new PTY spawns at server defaults until told).
+    // gate — both for first connect and reconnect. On reattach the
+    // server resizes the existing PTY rather than spawning a new one.
+    // visibility:hidden tab-switching means every host has real
+    // dimensions at mount, so this size is always honest.
     ws.send(JSON.stringify({ type: "resize", cols: size.cols, rows: size.rows }));
-    if (isReconnect) {
-      term.write("\r\n[reconnected — note: this is a new shell, prior state is gone]\r\n");
-    }
+    // Note: no "reconnected" banner here. The server's buffer
+    // replay (sent on attach) shows recent output, and the same PTY
+    // is still alive — the user is back in the SAME shell, not a
+    // fresh one. A banner would just be a lie if the reattach
+    // succeeded; a fresh PTY only happens if the idle reaper killed
+    // it (10 min) and that case looks indistinguishable from "new
+    // tab" on the wire.
     const entry = live.get(tabId);
     if (entry !== undefined) entry.reconnectAttempt = 0;
+    // Suppress the unused-arg lint without changing the function
+    // signature (kept stable for future use, e.g. a server-side
+    // "fresh_pty" hint frame).
+    void isReconnect;
   };
 
   ws.onmessage = (e) => {

@@ -2,19 +2,27 @@ import { randomUUID } from "node:crypto";
 import * as nodePty from "node-pty";
 
 /**
- * Per-project PTY tracking. Each browser terminal tab opens its own
- * WebSocket which spawns its own PTY here — never share PTY instances
- * across clients (single-tenant or not, mixed input streams break the
- * shell's line-edit state in ways users notice immediately).
+ * Per-project PTY tracking with reattach support.
  *
- * The map key is a generated `ptyId` so the manager doesn't have to
- * trust client-provided IDs. Routes hold the `ptyId` in their closure
- * and use it for cleanup.
+ * Each browser terminal tab opens its own WebSocket which spawns a
+ * dedicated PTY here — never share PTY instances across distinct
+ * tabs (mixed input streams break the shell's line-edit state in
+ * ways users notice immediately).
  *
- * On graceful shutdown (Fastify `onClose` hook calls `disposeAllPtys`),
- * every spawned process is killed. A safety-net `process.on("exit")`
- * mirror is registered once at module load — guards against the
- * fastify hook missing in pathological exit paths.
+ * **Survival across page refresh.** On WS close the PTY is NOT
+ * killed; it is detached and held for {@link IDLE_REAP_MS} so a
+ * page reload (or a transient network blip) can reattach via
+ * `tabId` and pick up where the user left off. A rolling output
+ * buffer ({@link OUTPUT_BUFFER_BYTES}) is replayed on reattach so
+ * the new xterm shows recent output instead of just a fresh prompt.
+ *
+ * After {@link IDLE_REAP_MS} with no socket attached, the PTY is
+ * killed. This is the safety valve: a user who closed the browser
+ * for the day shouldn't leave shells running indefinitely.
+ *
+ * The map key is a generated `ptyId` (server-trusted). The route
+ * also indexes lookups by client-supplied `tabId` (constrained to
+ * the same project for safety) so reconnects find the right PTY.
  */
 
 export interface SpawnOptions {
@@ -23,75 +31,208 @@ export interface SpawnOptions {
   env?: NodeJS.ProcessEnv;
   cols?: number;
   rows?: number;
+  /**
+   * Stable client-side identifier for this terminal tab. Used to
+   * index reconnects: the same tab id, after a WS drop, finds the
+   * existing detached PTY instead of spawning a new one.
+   */
+  tabId: string;
+  /**
+   * Project id this PTY is scoped to. Reattach is only allowed for
+   * the same project — defense-in-depth against the (unlikely)
+   * scenario of one project's tabId colliding with another's.
+   */
+  projectId: string;
 }
 
 export interface ManagedPty {
   ptyId: string;
+  tabId: string;
+  projectId: string;
   process: nodePty.IPty;
   /** Snapshot of the cwd this PTY was spawned in, for diagnostics. */
   cwd: string;
 }
 
-const ptys = new Map<string, ManagedPty>();
+/** Rolling output buffer cap per PTY (in bytes). 256 KB ≈ ~3000 lines of typical shell output. */
+const OUTPUT_BUFFER_BYTES = 256 * 1024;
+/** Time a detached PTY (no WS attached) is held alive before being reaped. */
+const IDLE_REAP_MS = 10 * 60 * 1000;
 
-/**
- * Default shell selection. SHELL is the user-set value (login shell);
- * /bin/sh is the POSIX baseline guaranteed by alpine + every distro
- * we'd plausibly ship under. Don't fall back to bash unconditionally —
- * alpine doesn't ship it.
- */
+interface Entry {
+  managed: ManagedPty;
+  /** onData disposable — replaced each time a new socket attaches. */
+  dataDisposable: nodePty.IDisposable | undefined;
+  /** Idle reaper for the period when no socket is attached. */
+  idleTimer: NodeJS.Timeout | undefined;
+  /** Rolling output buffer; replayed in order to a reattaching client. */
+  buffer: Buffer[];
+  bufferBytes: number;
+}
+
+const ptys = new Map<string, Entry>();
+
 function defaultShell(): string {
   return process.env.SHELL ?? "/bin/sh";
+}
+
+/**
+ * Find an existing PTY for `tabId` within `projectId`. Returns
+ * undefined if none exists (caller should spawn) or if a PTY with
+ * that tabId belongs to a DIFFERENT project (caller should treat as
+ * "no match" — never reattach across projects, that would expose
+ * one project's shell to another).
+ */
+export function findPtyByTabId(tabId: string, projectId: string): ManagedPty | undefined {
+  for (const entry of ptys.values()) {
+    if (entry.managed.tabId !== tabId) continue;
+    if (entry.managed.projectId !== projectId) continue;
+    return entry.managed;
+  }
+  return undefined;
 }
 
 export function spawnPty(opts: SpawnOptions): ManagedPty {
   const shell = opts.shell ?? defaultShell();
   const cols = opts.cols ?? 80;
   const rows = opts.rows ?? 24;
-  // Pass the parent env by default. Overrides come through opts.env
-  // (e.g. tests injecting PS1='$ '). We deliberately preserve PATH so
-  // the user's tooling (npm, git, etc.) is reachable from the
-  // spawned shell.
   const env = opts.env ?? process.env;
   const proc = nodePty.spawn(shell, [], {
     name: "xterm-color",
     cols,
     rows,
     cwd: opts.cwd,
-    // node-pty's TS type wants `Record<string, string>` here; ProcessEnv
-    // tolerates undefined values so coerce by stripping them.
     env: filterEnv(env),
   });
   const ptyId = randomUUID();
-  const managed: ManagedPty = { ptyId, process: proc, cwd: opts.cwd };
-  ptys.set(ptyId, managed);
-  // Auto-cleanup on the underlying process exiting (the user typed
-  // `exit`, ran `kill -9 $$`, segfaulted a tool, etc.). The route
-  // handler also calls killPty on WS close — one of the two paths
-  // wins; whichever is second is a no-op.
+  const managed: ManagedPty = {
+    ptyId,
+    tabId: opts.tabId,
+    projectId: opts.projectId,
+    process: proc,
+    cwd: opts.cwd,
+  };
+  const entry: Entry = {
+    managed,
+    dataDisposable: undefined,
+    idleTimer: undefined,
+    buffer: [],
+    bufferBytes: 0,
+  };
+  ptys.set(ptyId, entry);
+  // Always-on output capture, independent of any attached socket —
+  // that way disconnected periods still accumulate the rolling
+  // buffer for the next reattach to replay.
+  const captureDisposable = proc.onData((chunk) => {
+    appendToBuffer(entry, chunk);
+  });
   proc.onExit(() => {
+    captureDisposable.dispose();
     ptys.delete(ptyId);
+    if (entry.idleTimer !== undefined) clearTimeout(entry.idleTimer);
   });
   return managed;
 }
 
+/**
+ * Attach a socket-style sink to a managed PTY. Replays the rolling
+ * output buffer immediately, then forwards every subsequent
+ * `onData` chunk to `onData(chunk)`. Returns a detach function the
+ * caller MUST invoke on socket close — without this, the prior
+ * sink keeps receiving bytes and a reattach can't replace it.
+ *
+ * Cancels any pending idle reaper — the PTY is back in active use.
+ *
+ * `replayBytes` lets the caller request only the tail of the
+ * buffer (e.g. xterm already has prior scrollback locally and only
+ * wants the last ~16 KB). Pass `Infinity` (default) to replay all.
+ */
+export function attachSink(
+  ptyId: string,
+  onData: (chunk: string) => void,
+  replayBytes: number = OUTPUT_BUFFER_BYTES,
+): (() => void) | undefined {
+  const entry = ptys.get(ptyId);
+  if (entry === undefined) return undefined;
+  if (entry.idleTimer !== undefined) {
+    clearTimeout(entry.idleTimer);
+    entry.idleTimer = undefined;
+  }
+  // Replace any existing data sink so a stale reconnect never
+  // double-delivers chunks. The previous detach() the caller
+  // captured still works (it disposes whatever disposable it
+  // captured), but the route should always call the latest detach.
+  if (entry.dataDisposable !== undefined) {
+    entry.dataDisposable.dispose();
+    entry.dataDisposable = undefined;
+  }
+  // Replay only the tail the caller asked for. The buffer is a
+  // chunk array; flatten just enough from the right edge to hit
+  // `replayBytes`. Edge case: replayBytes <= 0 → skip replay.
+  if (replayBytes > 0 && entry.bufferBytes > 0) {
+    let remaining = Math.min(replayBytes, entry.bufferBytes);
+    const tail: Buffer[] = [];
+    for (let i = entry.buffer.length - 1; i >= 0 && remaining > 0; i--) {
+      const chunk = entry.buffer[i]!;
+      if (chunk.byteLength <= remaining) {
+        tail.unshift(chunk);
+        remaining -= chunk.byteLength;
+      } else {
+        tail.unshift(chunk.subarray(chunk.byteLength - remaining));
+        remaining = 0;
+      }
+    }
+    for (const chunk of tail) onData(chunk.toString("utf8"));
+  }
+  const live = entry.managed.process.onData((chunk: string) => {
+    onData(chunk);
+  });
+  entry.dataDisposable = live;
+  return () => {
+    if (entry.dataDisposable === live) {
+      live.dispose();
+      entry.dataDisposable = undefined;
+    } else {
+      // A newer attach replaced ours; nothing to do.
+    }
+    // Start the idle reaper. If a fresh attach arrives within
+    // IDLE_REAP_MS the timer is cancelled in the next attachSink.
+    if (entry.idleTimer === undefined && ptys.has(ptyId)) {
+      entry.idleTimer = setTimeout(() => {
+        entry.idleTimer = undefined;
+        killPty(ptyId);
+      }, IDLE_REAP_MS);
+    }
+  };
+}
+
+function appendToBuffer(entry: Entry, chunk: string): void {
+  const buf = Buffer.from(chunk, "utf8");
+  entry.buffer.push(buf);
+  entry.bufferBytes += buf.byteLength;
+  // Evict from the front until we're under cap. Keeps memory
+  // bounded across multi-hour shells running noisy output (npm
+  // install, pip install, etc.).
+  while (entry.bufferBytes > OUTPUT_BUFFER_BYTES && entry.buffer.length > 0) {
+    const head = entry.buffer.shift()!;
+    entry.bufferBytes -= head.byteLength;
+  }
+}
+
 export function getPty(ptyId: string): ManagedPty | undefined {
-  return ptys.get(ptyId);
+  return ptys.get(ptyId)?.managed;
 }
 
 export function killPty(ptyId: string): boolean {
-  const managed = ptys.get(ptyId);
-  if (managed === undefined) return false;
+  const entry = ptys.get(ptyId);
+  if (entry === undefined) return false;
   ptys.delete(ptyId);
+  if (entry.idleTimer !== undefined) clearTimeout(entry.idleTimer);
+  if (entry.dataDisposable !== undefined) entry.dataDisposable.dispose();
   try {
-    // SIGTERM lets the shell run its trap handlers; the OS reaps the
-    // pty fd. node-pty's kill() defaults to SIGHUP which some shells
-    // (e.g. bash with `huponexit`) handle differently — SIGTERM is
-    // more predictable across shells.
-    managed.process.kill("SIGTERM");
+    entry.managed.process.kill("SIGTERM");
   } catch {
-    // Process already exited between get + kill. The map delete above
-    // is the only state we care about.
+    // already exited between get + kill; nothing to do
   }
   return true;
 }
@@ -100,29 +241,20 @@ export function ptyCount(): number {
   return ptys.size;
 }
 
-/**
- * Kill every tracked PTY. Called from Fastify's `onClose` hook so
- * `docker compose down` and graceful test teardown don't leak shells.
- */
 export function disposeAllPtys(): void {
   for (const ptyId of Array.from(ptys.keys())) {
     killPty(ptyId);
   }
 }
 
-// Belt-and-suspenders: if the process exits without going through
-// Fastify's onClose (uncaught throw, SIGKILL on the parent that we
-// somehow caught, etc.), at least try to reap children. `process.exit`
-// listeners run synchronously, so we can't await anything — the
-// kill call goes out as a best effort.
 let exitHandlerInstalled = false;
 function installExitHandler(): void {
   if (exitHandlerInstalled) return;
   exitHandlerInstalled = true;
   process.on("exit", () => {
-    for (const managed of ptys.values()) {
+    for (const entry of ptys.values()) {
       try {
-        managed.process.kill("SIGTERM");
+        entry.managed.process.kill("SIGTERM");
       } catch {
         // ignore
       }

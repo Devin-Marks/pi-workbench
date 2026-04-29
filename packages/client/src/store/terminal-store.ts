@@ -8,13 +8,13 @@ import { create } from "zustand";
  * activates, keeps them in a module-level Map keyed by tab id, and
  * tears them down on close.
  *
- * The tab list IS persisted to localStorage so a page reload doesn't
- * silently lose every open terminal. On reload, TerminalPanel
- * re-attaches a fresh PTY for each persisted tab — the server-side
- * shell from the prior session is gone (the WS close from page
- * unload reaped it), so the user sees a clean prompt under the same
- * tab label. Scrollback / in-progress shell state DOES NOT survive
- * (same constraint as Trm1's reconnect path).
+ * The tab list IS persisted to localStorage. Combined with the
+ * server's reattach-by-tabId path (see pty-manager.ts), a page
+ * reload reattaches each tab to its existing PTY and replays a
+ * rolling output buffer — the user is back in the SAME shell, not
+ * a fresh one. After IDLE_REAP_MS (10 min) of no attached socket
+ * the server kills the PTY, at which point the next reconnect
+ * silently spawns a fresh shell under the same tab label.
  */
 export interface TerminalTab {
   id: string;

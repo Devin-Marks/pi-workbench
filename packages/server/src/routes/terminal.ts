@@ -3,7 +3,7 @@ import type { WebSocket } from "ws";
 import { extractBearer, verifyApiKey, verifyToken } from "../auth.js";
 import { authEnabled } from "../config.js";
 import { getProject } from "../project-manager.js";
-import { killPty, spawnPty } from "../pty-manager.js";
+import { attachSink, findPtyByTabId, spawnPty } from "../pty-manager.js";
 
 /**
  * WebSocket close codes used here. Per RFC 6455 §7.4, codes in
@@ -101,7 +101,7 @@ function authorize(req: FastifyRequest): boolean {
 }
 
 export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get<{ Querystring: { projectId: string; token?: string } }>(
+  fastify.get<{ Querystring: { projectId: string; tabId?: string; token?: string } }>(
     "/terminal",
     {
       // `public: true` skips the global onRequest auth hook (browsers
@@ -128,6 +128,11 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
           required: ["projectId"],
           properties: {
             projectId: { type: "string", minLength: 1 },
+            // Stable client tab id. When the client reconnects with
+            // a previously-seen tabId (within the project) the
+            // server reattaches to the existing PTY and replays the
+            // rolling output buffer instead of spawning a new shell.
+            tabId: { type: "string", minLength: 1, maxLength: 128 },
             token: { type: "string" },
           },
         },
@@ -167,51 +172,80 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
         return;
       }
 
-      let managed: ReturnType<typeof spawnPty>;
-      try {
-        managed = spawnPty({ cwd: project.path });
-      } catch (err) {
-        log.error({ err }, "pty spawn failed");
-        socket.close(CLOSE_INTERNAL_ERROR, "spawn_failed");
-        return;
+      // Reattach path: client supplied a stable `tabId` AND a PTY
+      // for that tab in this project is still alive on the server
+      // (i.e. previous WS dropped within IDLE_REAP_MS). Skip the
+      // spawn — the PTY's rolling buffer will be replayed by
+      // attachSink so xterm shows recent output, not just a fresh
+      // prompt.
+      const requestedTabId = req.query.tabId;
+      let managed: ReturnType<typeof spawnPty> | undefined;
+      let reattached = false;
+      if (requestedTabId !== undefined) {
+        const existing = findPtyByTabId(requestedTabId, project.id);
+        if (existing !== undefined) {
+          managed = existing;
+          reattached = true;
+        }
       }
-      log.info({ ptyId: managed.ptyId, cwd: project.path }, "terminal opened");
+      if (managed === undefined) {
+        try {
+          managed = spawnPty({
+            cwd: project.path,
+            tabId: requestedTabId ?? `srv-${Date.now().toString(36)}`,
+            projectId: project.id,
+          });
+        } catch (err) {
+          log.error({ err }, "pty spawn failed");
+          socket.close(CLOSE_INTERNAL_ERROR, "spawn_failed");
+          return;
+        }
+      }
+      log.info(
+        { ptyId: managed.ptyId, tabId: managed.tabId, cwd: project.path, reattached },
+        reattached ? "terminal reattached" : "terminal opened",
+      );
 
-      // PTY → client. node-pty emits decoded UTF-8 strings via onData;
-      // we forward as text frames so xterm consumes them directly
-      // without a binary-frame round-trip-conversion in the browser.
-      const dataDisposable = managed.process.onData((data) => {
+      // PTY → client via the manager. attachSink handles the
+      // initial buffer replay (recent output before any new
+      // streaming) and gives back a detach() we call on socket
+      // close — that detach starts the idle reaper but does NOT
+      // kill the PTY, so the next reconnect can pick it up.
+      const detach = attachSink(managed.ptyId, (chunk) => {
         if (socket.readyState === socket.OPEN) {
-          socket.send(data);
+          socket.send(chunk);
         }
       });
+      if (detach === undefined) {
+        log.error({ ptyId: managed.ptyId }, "attachSink failed; pty vanished");
+        socket.close(CLOSE_INTERNAL_ERROR, "attach_failed");
+        return;
+      }
+
+      // The shell really exiting (user typed `exit`, kill -9, etc.)
+      // is a terminal-state event distinct from a transient WS
+      // drop: there's nothing to reattach to. Close the socket so
+      // the client doesn't try to reconnect to a dead PTY.
       const exitDisposable = managed.process.onExit(({ exitCode, signal }) => {
         log.info({ ptyId: managed.ptyId, exitCode, signal }, "terminal exited");
         if (socket.readyState === socket.OPEN || socket.readyState === socket.CONNECTING) {
-          // 1000 = normal closure. The shell exited (the user typed
-          // `exit`, the process was killed, etc.).
           socket.close(1000, "pty_exited");
         }
       });
 
-      // Single teardown path called from both `close` and `error`.
-      // Idempotent thanks to the disposed-flag guard; previously the
-      // `error` handler killed the pty but left the onData/onExit
-      // listeners attached, which was harmless (the IPty becomes
-      // GC-able once reaped) but inconsistent.
       let disposed = false;
       const cleanup = (reason: string): void => {
         if (disposed) return;
         disposed = true;
-        dataDisposable.dispose();
+        detach();
         exitDisposable.dispose();
-        killPty(managed.ptyId);
-        log.info({ ptyId: managed.ptyId, reason }, "terminal closed");
+        // NB: no killPty here. The PTY is intentionally kept alive
+        // so a page-refresh / network blip can reattach. The idle
+        // reaper inside attachSink will GC it after IDLE_REAP_MS
+        // if no reconnect arrives.
+        log.info({ ptyId: managed.ptyId, tabId: managed.tabId, reason }, "terminal detached");
       };
 
-      // Client → PTY. We deliberately do NOT trust the WS frame size
-      // limits to keep us safe; ws caps frames at 100 MB by default
-      // which is fine for any keystroke, paste, or large input.
       socket.on("message", (raw: WebSocket.RawData) => {
         const msg = parseClientMessage(raw);
         if (msg === undefined) return;
