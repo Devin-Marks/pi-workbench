@@ -396,18 +396,32 @@ export async function renameEntry(absPath: string, root: string, newName: string
   // and we'd 409 with "target_exists" even though the user is just
   // rewriting the casing of their own file. Detect this — same path,
   // different case — and route through a tmp-name two-step rename.
+  //
+  // The tmp name uses `crypto.randomUUID()` for collision resistance
+  // against another process racing to create the same path. There IS
+  // a TOCTOU window between our rename(resolved → tmp) and rename(
+  // tmp → target) where another process could create `target`; POSIX
+  // rename atomically replaces it. Single-tenant by design so the
+  // attacker = user, but we still stat the target right before the
+  // second rename and bail with TargetExistsError if a squatter
+  // appeared.
   if (resolved.toLowerCase() === target.toLowerCase()) {
-    const tmp = `${resolved}.casefix-${Date.now().toString(36)}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}`;
+    const tmp = `${resolved}.casefix-${randomUUID()}`;
     await fsRename(resolved, tmp);
     try {
+      // Recheck the target now that source is at `tmp` — on a
+      // case-insensitive FS the original `stat(target)` above would
+      // have hit the same inode as source, so this is the first
+      // honest "is target empty?" check.
+      const squatter = await stat(target).catch(() => undefined);
+      if (squatter !== undefined) throw new TargetExistsError(target);
       await fsRename(tmp, target);
     } catch (err) {
-      // Best-effort rollback: if the second rename fails, try to put
-      // the file back under its original name. If THAT fails too,
-      // surface the original error — the file is at `tmp` and the
-      // user can recover via the file browser.
+      // Best-effort rollback: if the second rename fails (or the
+      // squatter check trips), put the file back under its original
+      // name. If THAT fails too, surface the original error — the
+      // file is at `tmp` and the user can recover via the file
+      // browser.
       await fsRename(tmp, resolved).catch(() => undefined);
       throw err;
     }

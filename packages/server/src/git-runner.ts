@@ -444,21 +444,31 @@ function assertBranchName(name: string): void {
   if (name === "HEAD" || name === "FETCH_HEAD" || name === "ORIG_HEAD" || name === "MERGE_HEAD") {
     throw new InvalidBranchNameError(name);
   }
+  // git's check-ref-format rules we replicate explicitly so the user
+  // gets the cleaner `invalid_branch_name` 400 instead of `git_failed`:
+  //   - no segment may begin with `.` (so `.foo` and `bar/.baz` reject)
+  //   - no segment may end with `.lock` (git uses .lock files for ref locks)
+  //   - the whole name may not end with `.`
+  if (name.endsWith(".")) throw new InvalidBranchNameError(name);
+  for (const segment of name.split("/")) {
+    if (segment.startsWith(".")) throw new InvalidBranchNameError(name);
+    if (segment.endsWith(".lock")) throw new InvalidBranchNameError(name);
+  }
 }
 
 /**
  * Switch the working tree to `branch`. Refuses on a dirty tree (git's
  * default) — the caller is expected to surface the resulting
  * `GitCommandError` to the user, who can stash or revert first.
+ *
+ * No `--` separator: `git checkout -- <name>` interprets <name> as a
+ * pathspec and ALWAYS fails with "did not match any file(s) known to
+ * git". The branch-name validator (assertBranchName) already rejects
+ * leading dashes, so flag injection isn't a concern here.
  */
 export async function checkoutBranch(cwd: string, branch: string): Promise<void> {
   assertBranchName(branch);
-  await runGit(cwd, ["checkout", "--", branch]).catch(async () => {
-    // `--` fails on some old git when the branch doesn't yet exist as a
-    // local; retry without the separator so e.g. `origin/feature` can
-    // produce a tracking checkout.
-    await runGit(cwd, ["checkout", branch]);
-  });
+  await runGit(cwd, ["checkout", branch]);
 }
 
 export interface CreateBranchOptions {

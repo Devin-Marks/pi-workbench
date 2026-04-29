@@ -428,6 +428,22 @@ async function main(): Promise<void> {
         `got: ${body.error}`,
       );
     }
+    // Names git itself rejects but our validator now catches earlier
+    // so the user sees `invalid_branch_name` not `git_failed`.
+    for (const bogus of ["foo.lock", ".foo", "foo.", "bar/.baz"]) {
+      const r = await jsend(
+        "POST",
+        `${base}/api/v1/git/branch/create`,
+        { projectId: gitProjectId, name: bogus },
+        auth,
+      );
+      const body = r.body as { error?: string };
+      assert(
+        `${bogus} → invalid_branch_name`,
+        r.status === 400 && body.error === "invalid_branch_name",
+        `got status=${r.status} error=${body.error ?? "(none)"}`,
+      );
+    }
 
     // ---- push without upstream → 400 with sanitized message ----
     {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import { X } from "lucide-react";
 
 /**
@@ -22,17 +22,33 @@ export function Modal({
   title,
   children,
   width = "max-w-sm",
+  initialFocusRef,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
   width?: string;
+  /**
+   * Optional ref to the element that should receive focus when the
+   * dialog opens. When omitted, focus moves to the first focusable
+   * descendant — but the close-X is usually that, which is rarely
+   * what callers want. PromptDialog passes its input ref here.
+   */
+  initialFocusRef?: RefObject<HTMLElement | null>;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
 
   useEffect(() => {
     if (!open) return undefined;
+    // Capture the trigger so we can restore focus to it on close —
+    // standard a11y pattern, keeps keyboard users on the same row of
+    // the UI they just acted on. Also snapshot the dialog DOM node
+    // here so the cleanup contains() check still works after React
+    // has cleared the ref on unmount.
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const dialogNode = dialogRef.current;
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -59,8 +75,14 @@ export function Modal({
       }
     };
     document.addEventListener("keydown", onKey);
-    // Move focus to the first focusable child after the dialog mounts.
+    // Initial focus: prefer the caller-provided ref (input field for
+    // PromptDialog) over "first focusable" — which would land on the
+    // header X button and require Tab before the user could type.
     const id = window.setTimeout(() => {
+      if (initialFocusRef?.current !== undefined && initialFocusRef.current !== null) {
+        initialFocusRef.current.focus();
+        return;
+      }
       const first = dialogRef.current?.querySelector<HTMLElement>(
         'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
       );
@@ -69,8 +91,19 @@ export function Modal({
     return () => {
       document.removeEventListener("keydown", onKey);
       window.clearTimeout(id);
+      // Restore focus only if it's still inside our dialog. If the
+      // user clicked elsewhere on the page since open, don't yank
+      // their focus back.
+      if (
+        previouslyFocused !== null &&
+        document.contains(previouslyFocused) &&
+        dialogNode !== null &&
+        dialogNode.contains(document.activeElement)
+      ) {
+        previouslyFocused.focus();
+      }
     };
-  }, [open, onClose]);
+  }, [open, onClose, initialFocusRef]);
 
   if (!open) return null;
   return (
@@ -79,7 +112,7 @@ export function Modal({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label={title}
+      aria-labelledby={titleId}
     >
       <div
         ref={dialogRef}
@@ -87,7 +120,9 @@ export function Modal({
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-neutral-800 px-4 py-2">
-          <h2 className="text-sm font-medium text-neutral-100">{title}</h2>
+          <h2 id={titleId} className="text-sm font-medium text-neutral-100">
+            {title}
+          </h2>
           <button
             onClick={onClose}
             className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200"
@@ -130,6 +165,7 @@ export function PromptDialog({
   primaryLabel?: string;
 }) {
   const [value, setValue] = useState(initialValue);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Reset the draft each time the dialog opens.
   useEffect(() => {
@@ -143,7 +179,7 @@ export function PromptDialog({
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={title}>
+    <Modal open={open} onClose={onClose} title={title} initialFocusRef={inputRef}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -154,6 +190,7 @@ export function PromptDialog({
         <label className="block space-y-1.5">
           <span className="text-xs text-neutral-300">{label}</span>
           <input
+            ref={inputRef}
             type="text"
             value={value}
             onChange={(e) => setValue(e.target.value)}
