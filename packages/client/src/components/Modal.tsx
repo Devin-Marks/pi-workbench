@@ -40,6 +40,25 @@ export function Modal({
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
 
+  // Stash the latest `onClose` and `initialFocusRef` in refs so the
+  // mount-time effect doesn't depend on them. Without this, callers
+  // who pass an inline arrow (`onClose={() => setOpen(false)}`) — the
+  // common case — give us a NEW function reference every render. With
+  // those props in the dep array, every keystroke that re-renders
+  // the parent retriggers our effect: cleanup steals focus back to
+  // the trigger, then setTimeout re-focuses the first focusable
+  // (the header X), so the user types one char then loses focus to
+  // the close button. Refs let us read the latest callback inside
+  // the handler without forcing the effect to re-run.
+  const onCloseRef = useRef(onClose);
+  const initialFocusRefRef = useRef(initialFocusRef);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+  useEffect(() => {
+    initialFocusRefRef.current = initialFocusRef;
+  });
+
   useEffect(() => {
     if (!open) return undefined;
     // Capture the trigger so we can restore focus to it on close —
@@ -52,7 +71,7 @@ export function Modal({
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key === "Tab" && dialogRef.current !== null) {
@@ -79,8 +98,9 @@ export function Modal({
     // PromptDialog) over "first focusable" — which would land on the
     // header X button and require Tab before the user could type.
     const id = window.setTimeout(() => {
-      if (initialFocusRef?.current !== undefined && initialFocusRef.current !== null) {
-        initialFocusRef.current.focus();
+      const focusTarget = initialFocusRefRef.current?.current;
+      if (focusTarget !== undefined && focusTarget !== null) {
+        focusTarget.focus();
         return;
       }
       const first = dialogRef.current?.querySelector<HTMLElement>(
@@ -103,7 +123,7 @@ export function Modal({
         previouslyFocused.focus();
       }
     };
-  }, [open, onClose, initialFocusRef]);
+  }, [open]);
 
   if (!open) return null;
   return (
