@@ -8,6 +8,7 @@ import fastifyStatic from "@fastify/static";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import websocket from "@fastify/websocket";
+import multipart from "@fastify/multipart";
 import { config, authEnabled } from "./config.js";
 import { extractBearer, verifyApiKey, verifyToken } from "./auth.js";
 import { healthRoutes } from "./routes/health.js";
@@ -62,6 +63,20 @@ export async function buildServer(): Promise<FastifyInstance> {
     },
     disableRequestLogging: config.isTest,
     trustProxy: config.trustProxy,
+    // Phase 14 attachment uploads can be up to 8 × 10 MB = 80 MB per
+    // request before the per-file `fileSize` cap fires per-part. Lift
+    // Fastify's default 1 MB bodyLimit so the request reaches the
+    // multipart parser, which then enforces the per-file limit and
+    // marks oversize files via `file.truncated`. Pad with a little
+    // headroom for boundary + field overhead.
+    //
+    // Memory worst case: a single request hits ~80 MB of file bytes
+    // PLUS ~107 MB of base64-expanded image strings held in memory
+    // before they pass to the SDK — call it ~190 MB resident. Single-
+    // tenant assumption keeps this acceptable; do NOT raise the
+    // bodyLimit further without revisiting `parseMultipart` to stream
+    // attachments to disk instead of buffering.
+    bodyLimit: 100 * 1024 * 1024,
   });
 
   await fastify.register(cors, {
@@ -81,6 +96,26 @@ export async function buildServer(): Promise<FastifyInstance> {
   // registered before any route uses `{ websocket: true }`. Inherits
   // the same listening server as Fastify; no extra port needed.
   await fastify.register(websocket);
+
+  // Multipart support for the prompt route's attachment handling
+  // (Phase 14). Per-file cap is enforced via `limits.fileSize`; routes
+  // that don't expect attachments will reject multipart with a typed
+  // 415 from Fastify's content-type matching, so this register is
+  // safe to apply globally.
+  await fastify.register(multipart, {
+    limits: {
+      fileSize: 10 * 1024 * 1024, // 10 MB / file (matches dev plan)
+      files: 8, // 4 image cap × 2 headroom for mixed image+text uploads
+      fields: 8,
+    },
+    attachFieldsToBody: false,
+    // Default `throwFileSizeLimit: true` makes the plugin throw
+    // RequestFileTooLargeError → Fastify renders a generic 413 with
+    // "Payload Too Large", losing our typed error code. Set false so
+    // the plugin instead marks `file.truncated: true` and lets our
+    // route handler decide the response shape.
+    throwFileSizeLimit: false,
+  });
 
   await fastify.register(swagger, {
     openapi: {

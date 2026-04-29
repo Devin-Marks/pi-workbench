@@ -455,6 +455,16 @@ async function main(): Promise<void> {
       // entries were appended. The fire-and-forget prompt() rejected without
       // ever writing an assistant message → no JSONL → 404 from disk lookup.
       assert("GET after delete returns 404 (no on-disk entries written)", after.status === 404);
+
+      // Second DELETE on the same id: the live entry is gone and there's
+      // no JSONL on disk, so the cold-delete fallback also returns
+      // not_found → route emits 404.
+      const del2 = await jsend("DELETE", `${base}/api/v1/sessions/${sessionId}`, undefined, auth);
+      assert(
+        "DELETE on already-deleted session → 404",
+        del2.status === 404,
+        `status=${del2.status}`,
+      );
     }
 
     // 6. Health reflects post-test registry state.
