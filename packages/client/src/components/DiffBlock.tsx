@@ -1,6 +1,24 @@
-import { Diff, Hunk, parseDiff, type FileData, type RenderGutter } from "react-diff-view";
+import { useState } from "react";
+import {
+  Diff,
+  Hunk,
+  parseDiff,
+  type FileData,
+  type HunkData,
+  type RenderGutter,
+} from "react-diff-view";
 import "react-diff-view/style/index.css";
 import { highlightHunks, languageForFile } from "../lib/diff-highlight";
+
+/**
+ * Soft cap on rendered changes per file before we collapse the rest
+ * behind a "show all" affordance. parseDiff is already done by the
+ * time we reach this point, so the cost we're avoiding is in
+ * react-diff-view's per-row React work + the layout + the optional
+ * tokenize call. ~800 visible lines is about the limit before scroll
+ * + paint becomes noticeable on a mid-range laptop.
+ */
+const LARGE_FILE_LINE_THRESHOLD = 800;
 
 /**
  * Gutter renderer for unified-mode diffs. `react-diff-view`'s
@@ -120,31 +138,89 @@ export function DiffBlock({
   } overflow-auto px-2 pb-2 text-[11px]`;
   return (
     <div className={wrapperClass}>
-      {files.map((file) => {
-        // Filename for syntax-highlighter selection. The diff header
-        // uses `a/<path>` and `b/<path>` conventionally; strip the
-        // `b/` prefix when present so `.tsx` etc. resolves correctly.
-        // Falls back to oldPath for pure deletions.
-        const filename = (file.newPath ?? file.oldPath ?? "").replace(/^[ab]\//, "");
-        const language = languageForFile(filename);
-        const tokens = highlightHunks(file.hunks, language);
-        return (
-          <Diff
-            key={`${file.oldPath ?? ""}:${file.newPath ?? ""}`}
-            viewType={viewType}
-            diffType={file.type}
-            hunks={file.hunks}
-            renderGutter={renderGutter}
-            // Diff's prop accepts `HunkTokens | null`, not `| undefined`.
-            // Coerce so unhighlighted languages still render plainly.
-            tokens={tokens ?? null}
-          >
-            {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
-          </Diff>
-        );
-      })}
+      {files.map((file) => (
+        <FileDiff
+          key={`${file.oldPath ?? ""}:${file.newPath ?? ""}`}
+          file={file}
+          viewType={viewType}
+          renderGutter={renderGutter}
+        />
+      ))}
     </div>
   );
+}
+
+/**
+ * One file's worth of diff. Lifted into its own component so the
+ * "expand large diff" toggle can hold local state per file (multiple
+ * files in the same diff each get their own collapsed/expanded
+ * state).
+ */
+function FileDiff({
+  file,
+  viewType,
+  renderGutter,
+}: {
+  file: FileData;
+  viewType: "unified" | "split";
+  renderGutter: RenderGutter;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  // Filename for syntax-highlighter selection. The diff header
+  // uses `a/<path>` and `b/<path>` conventionally; strip the
+  // `b/` prefix when present so `.tsx` etc. resolves correctly.
+  // Falls back to oldPath for pure deletions.
+  const filename = (file.newPath ?? file.oldPath ?? "").replace(/^[ab]\//, "");
+  const language = languageForFile(filename);
+  const totalChanges = file.hunks.reduce((acc, h) => acc + h.changes.length, 0);
+  const isLarge = totalChanges > LARGE_FILE_LINE_THRESHOLD && !expanded;
+  const visibleHunks = isLarge
+    ? truncateHunksToBudget(file.hunks, LARGE_FILE_LINE_THRESHOLD)
+    : file.hunks;
+  const tokens = highlightHunks(visibleHunks, language);
+  return (
+    <>
+      <Diff
+        viewType={viewType}
+        diffType={file.type}
+        hunks={visibleHunks}
+        renderGutter={renderGutter}
+        // Diff's prop accepts `HunkTokens | null`, not `| undefined`.
+        // Coerce so unhighlighted languages still render plainly.
+        tokens={tokens ?? null}
+      >
+        {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
+      </Diff>
+      {isLarge && (
+        <button
+          onClick={() => setExpanded(true)}
+          className="my-1 w-full rounded border border-neutral-700 bg-neutral-900/60 px-3 py-1 text-[11px] text-neutral-300 hover:border-neutral-500 hover:bg-neutral-900"
+          title={`Showing ~${LARGE_FILE_LINE_THRESHOLD} of ${totalChanges} lines — large diffs slow the renderer; click to render the rest.`}
+        >
+          Show all ({totalChanges} lines, {file.hunks.length} hunks)
+        </button>
+      )}
+    </>
+  );
+}
+
+/**
+ * Slice `hunks` so the cumulative `changes.length` stays under
+ * `budget`. Keeps whole hunks (no mid-hunk truncation) so the
+ * rendered region is always a valid diff. If the first hunk alone
+ * blows the budget we still emit it — better to over-render than
+ * to render nothing.
+ */
+function truncateHunksToBudget(hunks: HunkData[], budget: number): HunkData[] {
+  const out: HunkData[] = [];
+  let used = 0;
+  for (const h of hunks) {
+    if (out.length > 0 && used + h.changes.length > budget) break;
+    out.push(h);
+    used += h.changes.length;
+    if (used >= budget) break;
+  }
+  return out;
 }
 
 /**
