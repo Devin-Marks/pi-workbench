@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Plus, ChevronDown, ChevronRight } from "lucide-react";
 import { useProjectStore } from "../store/project-store";
 import { useSessionStore } from "../store/session-store";
 import { ProjectPicker } from "./ProjectPicker";
@@ -13,6 +14,22 @@ export function ProjectSidebar() {
   const remove = useProjectStore((s) => s.remove);
   const rename = useProjectStore((s) => s.rename);
   const sessionsByProject = useSessionStore((s) => s.byProject);
+  const createSession = useSessionStore((s) => s.createSession);
+
+  /**
+   * Create a new session under `projectId`. Mirrors the project-
+   * switch-then-create dance that lived in SessionList: switching
+   * the active project FIRST so the right pane (Files / Changes /
+   * Git) lines up by the time the session is selected.
+   */
+  const handleNewSession = async (projectId: string): Promise<void> => {
+    if (activeProjectId !== projectId) setActive(projectId);
+    try {
+      await createSession(projectId);
+    } catch {
+      // store.error surfaces — no UI noise here
+    }
+  };
   const [showPicker, setShowPicker] = useState(false);
   const [renamingId, setRenamingId] = useState<string | undefined>();
   const [renameValue, setRenameValue] = useState("");
@@ -74,7 +91,7 @@ export function ProjectSidebar() {
           const isActive = p.id === activeProjectId;
           const isCollapsed = collapsed[p.id] ?? false;
           return (
-            <div key={p.id} className="px-1">
+            <div key={p.id} className="mt-1 px-1">
               <div
                 className={`group flex items-center gap-1 rounded-md px-2 py-1 text-sm ${
                   isActive
@@ -84,10 +101,10 @@ export function ProjectSidebar() {
               >
                 <button
                   onClick={() => toggleCollapsed(p.id)}
-                  className="text-neutral-500"
+                  className="flex items-center text-neutral-500 hover:text-neutral-300"
                   title={isCollapsed ? "Expand" : "Collapse"}
                 >
-                  {isCollapsed ? "▸" : "▾"}
+                  {isCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
                 </button>
                 {renamingId === p.id ? (
                   <input
@@ -114,6 +131,13 @@ export function ProjectSidebar() {
                     {p.name}
                   </button>
                 )}
+                <button
+                  onClick={() => void handleNewSession(p.id)}
+                  className="hidden p-0.5 text-neutral-500 hover:text-neutral-200 group-hover:inline-flex"
+                  title="New session in this project"
+                >
+                  <Plus size={12} />
+                </button>
                 <button
                   onClick={() => handleDelete(p.id, p.name)}
                   className="hidden text-xs text-neutral-500 hover:text-red-400 group-hover:inline"

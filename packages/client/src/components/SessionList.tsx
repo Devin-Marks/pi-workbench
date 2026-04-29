@@ -1,5 +1,6 @@
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { EMPTY_SESSIONS, useSessionStore } from "../store/session-store";
+import { useProjectStore } from "../store/project-store";
 
 interface Props {
   projectId: string;
@@ -8,7 +9,9 @@ interface Props {
 /**
  * Per-project session list. Replaces the "No sessions yet" placeholder that
  * lived under the project rows in Phases 3-7. Loads on mount, click selects,
- * "+ New" creates and selects a fresh live session, double-click renames.
+ * double-click renames. The "new session" affordance lives on the parent
+ * project row (a `+` button next to the delete `×`), so this component is
+ * read-only for the create path.
  */
 export function SessionList({ projectId }: Props) {
   // EMPTY_SESSIONS (stable module-level reference) — see session-store.ts
@@ -16,10 +19,24 @@ export function SessionList({ projectId }: Props) {
   const sessions = useSessionStore((s) => s.byProject[projectId] ?? EMPTY_SESSIONS);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const loadSessionsForProject = useSessionStore((s) => s.loadSessionsForProject);
-  const createSession = useSessionStore((s) => s.createSession);
   const setActiveSession = useSessionStore((s) => s.setActiveSession);
   const disposeSession = useSessionStore((s) => s.disposeSession);
   const renameSession = useSessionStore((s) => s.renameSession);
+  const setActiveProject = useProjectStore((s) => s.setActive);
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
+
+  /**
+   * Selecting a session also pulls the active-project pointer along
+   * to that session's project. Without this, clicking a session
+   * under project B while project A was active would set the
+   * session pointer (so chat would show that session) but leave
+   * the rest of the UI — Files / Changes / Git tabs, project
+   * dropdown — pinned to A. The two pointers should always agree.
+   */
+  const selectSession = (sessionId: string): void => {
+    if (activeProjectId !== projectId) setActiveProject(projectId);
+    setActiveSession(sessionId);
+  };
 
   // Inline rename state — only one row at a time.
   const [renamingId, setRenamingId] = useState<string | undefined>(undefined);
@@ -28,14 +45,6 @@ export function SessionList({ projectId }: Props) {
   useEffect(() => {
     void loadSessionsForProject(projectId);
   }, [projectId, loadSessionsForProject]);
-
-  const onNew = async (): Promise<void> => {
-    try {
-      await createSession(projectId);
-    } catch {
-      // error already in store.error; sidebar surfaces via App banner
-    }
-  };
 
   const startRename = (sessionId: string, current: string): void => {
     setRenamingId(sessionId);
@@ -72,13 +81,13 @@ export function SessionList({ projectId }: Props) {
   };
 
   return (
-    <div className="ml-6 space-y-0.5">
-      <button
-        onClick={() => void onNew()}
-        className="w-full rounded px-2 py-0.5 text-left text-xs text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
-      >
-        + New session
-      </button>
+    // `mt-1` separates the first session row from the project row
+    // above; without it, the active-row highlight backgrounds (both
+    // are `bg-neutral-800`) touch and read as one continuous block.
+    <div className="ml-6 mt-1 space-y-0.5">
+      {/* "New session" lives on the parent project row in
+          ProjectSidebar (the + button on hover). Avoids stacking
+          a second action button per project. */}
       {sessions.length === 0 && (
         <p className="px-2 py-1 text-xs italic text-neutral-600">No sessions yet.</p>
       )}
@@ -112,7 +121,7 @@ export function SessionList({ projectId }: Props) {
               />
             ) : (
               <button
-                onClick={() => setActiveSession(s.sessionId)}
+                onClick={() => selectSession(s.sessionId)}
                 onDoubleClick={() => startRename(s.sessionId, s.name ?? "")}
                 className="flex-1 truncate text-left"
                 title={`${s.sessionId} — double-click to rename`}
