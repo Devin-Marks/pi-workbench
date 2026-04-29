@@ -253,13 +253,15 @@ function TerminalHost({
 
     live.set(tab.id, { term, fit, ws, observer, lastSize: initialSize });
 
-    return () => {
-      dataDisposable.dispose();
-      // We do NOT teardown on unmount-from-render-toggle — the host
-      // div re-mounts when the panel re-opens, and we want to keep
-      // the WS alive. Teardown is explicit (closeTab) via the
-      // module-level `teardown()` helper.
-    };
+    // Reference the data listener so its handle survives remounts.
+    // The early-return guard above (`if (live.has(tab.id))`) means
+    // we don't re-attach on remount — so we MUST NOT dispose here
+    // either, or HMR/parent-rerender would leave the WS open with
+    // no keystroke listener and typing would silently break.
+    // Cleanup is the responsibility of `teardown()` below, which
+    // calls `term.dispose()` to remove every listener at once.
+    void dataDisposable;
+    return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id]);
 
@@ -279,9 +281,19 @@ function TerminalHost({
     });
   }, [visible, tab.id]);
 
+  // Click-to-focus safety net. xterm normally handles its own focus
+  // on click via its internal textarea, but the click can land on
+  // empty space below the cursor (especially in a freshly-opened
+  // shell with little output). Forwarding clicks to `term.focus()`
+  // guarantees keystrokes go to the right place.
+  const onHostClick = (): void => {
+    live.get(tab.id)?.term.focus();
+  };
+
   return (
     <div
       ref={hostRef}
+      onClick={onHostClick}
       className="absolute inset-0"
       style={{ display: visible ? "block" : "none" }}
       title={projectPath}
