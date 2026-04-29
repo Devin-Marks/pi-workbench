@@ -20,7 +20,10 @@ export function LoginScreen() {
         className="w-full max-w-sm space-y-4 rounded-lg border border-neutral-800 bg-neutral-900 p-6 shadow-lg"
       >
         <header className="space-y-1">
-          <h1 className="text-xl font-semibold tracking-tight">pi-workbench</h1>
+          <div className="flex items-center gap-2">
+            <img src="/icons/icon.svg" alt="" className="h-6 w-6" aria-hidden="true" />
+            <h1 className="text-xl font-semibold tracking-tight">pi-workbench</h1>
+          </div>
           <p className="text-sm text-neutral-400">Enter the workbench password to continue.</p>
         </header>
         <label className="block space-y-1.5">
