@@ -13,7 +13,13 @@ import { api, ApiError, type FileTreeNode } from "../lib/api-client";
  * over zero bytes).
  */
 export interface OpenFile {
-  /** Absolute path on the server's filesystem. The single source of truth — paths are NOT normalised, so the same path string is used for read/write. */
+  /**
+   * Stable per-tab identity. Assigned at open time and NEVER changes —
+   * survives renames and moves so the CodeMirror instance keyed on it
+   * keeps cursor / scroll / undo / selection across path changes.
+   */
+  tabId: string;
+  /** Absolute path on the server's filesystem. Mutates on rename / move. */
   path: string;
   saved: string;
   draft: string;
@@ -121,6 +127,7 @@ export const useFileStore = create<FileState>((set, get) => ({
     try {
       const r = await api.filesRead(projectId, absPath);
       const tab: OpenFile = {
+        tabId: newTabId(),
         path: absPath,
         saved: r.content,
         draft: r.content,
@@ -310,6 +317,13 @@ export const useFileStore = create<FileState>((set, get) => ({
     }
   },
 }));
+
+function newTabId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 function omitKey<V>(record: Record<string, V>, key: string): Record<string, V> {
   if (record[key] === undefined) return record;

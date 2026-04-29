@@ -73,7 +73,7 @@ export function EditorPanel() {
             </div>
           ) : (
             <Editor
-              key={active.path}
+              key={active.tabId}
               file={active}
               onChange={(v) => updateDraft(active.path, v)}
               onSaveShortcut={() => {
@@ -107,7 +107,7 @@ function Tabs({
         const active = f.path === activePath;
         return (
           <div
-            key={f.path}
+            key={f.tabId}
             className={`group flex items-center gap-1 border-r border-neutral-800 px-3 py-1.5 text-xs ${
               active
                 ? "bg-neutral-950 text-neutral-100"
@@ -192,10 +192,9 @@ function StatusBar({ file }: { file: OpenFile }) {
 }
 
 /**
- * CodeMirror host. Uses a stable `key` (the file path) on the wrapper
- * so React unmounts + remounts when the user switches tabs — that's
- * cheaper to reason about than diffing the EditorState in place, and
- * the editor cost is tiny (single textarea).
+ * CodeMirror host. Keyed on the tab's stable `tabId` (assigned at open
+ * time) — switching tabs unmounts + remounts, but RENAMING the file
+ * keeps the same tabId so cursor / scroll / undo / selection survive.
  */
 function Editor({
   file,
