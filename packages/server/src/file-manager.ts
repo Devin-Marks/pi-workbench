@@ -390,6 +390,29 @@ export async function renameEntry(absPath: string, root: string, newName: string
   const st = await stat(resolved).catch(() => undefined);
   if (st === undefined) throw new NotFoundError(resolved);
   if (resolved === target) return target;
+  // Case-only rename on a case-insensitive filesystem (macOS HFS+/APFS,
+  // Windows NTFS in default mode): `Foo.ts` → `foo.ts` resolves to the
+  // SAME inode, so a stat on the target still finds the source file
+  // and we'd 409 with "target_exists" even though the user is just
+  // rewriting the casing of their own file. Detect this — same path,
+  // different case — and route through a tmp-name two-step rename.
+  if (resolved.toLowerCase() === target.toLowerCase()) {
+    const tmp = `${resolved}.casefix-${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    await fsRename(resolved, tmp);
+    try {
+      await fsRename(tmp, target);
+    } catch (err) {
+      // Best-effort rollback: if the second rename fails, try to put
+      // the file back under its original name. If THAT fails too,
+      // surface the original error — the file is at `tmp` and the
+      // user can recover via the file browser.
+      await fsRename(tmp, resolved).catch(() => undefined);
+      throw err;
+    }
+    return target;
+  }
   const exists = await stat(target).catch(() => undefined);
   if (exists !== undefined) throw new TargetExistsError(target);
   await fsRename(resolved, target);
