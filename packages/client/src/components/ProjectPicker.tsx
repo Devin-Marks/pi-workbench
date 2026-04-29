@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, type BrowseEntry } from "../lib/api-client";
 import { useProjectStore } from "../store/project-store";
+import { useUiConfigStore } from "../store/ui-config-store";
 
 interface Props {
   onClose: () => void;
@@ -12,6 +13,8 @@ type Step = "name" | "browse";
 
 export function ProjectPicker({ onClose, required = false }: Props) {
   const create = useProjectStore((s) => s.create);
+  const minimal = useUiConfigStore((s) => s.minimal);
+  const workspaceRoot = useUiConfigStore((s) => s.workspaceRoot);
   const [step, setStep] = useState<Step>("name");
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -49,9 +52,37 @@ export function ProjectPicker({ onClose, required = false }: Props) {
     };
   }, [step, path]);
 
-  const goBrowse = (): void => {
-    if (name.trim().length === 0) return;
-    setStep("browse");
+  /**
+   * Default flow: take the typed name, advance to the folder
+   * browser, let the user pick or create a destination dir.
+   * Minimal flow (`MINIMAL_UI=1`): skip browsing entirely — mkdir
+   * `<workspaceRoot>/<name>` and use it as the project path. The
+   * server's mkdir route already 409s on conflict, which we surface
+   * as a normal error code on the form.
+   */
+  const onSubmitName = async (): Promise<void> => {
+    const trimmed = name.trim();
+    if (trimmed.length === 0) return;
+    if (!minimal) {
+      setStep("browse");
+      return;
+    }
+    if (workspaceRoot.length === 0) {
+      // ui-config hasn't loaded yet (rare — load fires in App).
+      // Surface the error rather than silently doing nothing.
+      setError("workspace_not_loaded");
+      return;
+    }
+    setSubmitting(true);
+    setError(undefined);
+    try {
+      const { path: created } = await api.mkdir(workspaceRoot, trimmed);
+      await create(trimmed, created);
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.code : (err as Error).message);
+      setSubmitting(false);
+    }
   };
 
   const select = async (selected: string): Promise<void> => {
@@ -105,7 +136,7 @@ export function ProjectPicker({ onClose, required = false }: Props) {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              goBrowse();
+              void onSubmitName();
             }}
             className="space-y-4"
           >
@@ -117,13 +148,19 @@ export function ProjectPicker({ onClose, required = false }: Props) {
                 autoFocus
                 className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-500"
               />
+              {minimal && workspaceRoot.length > 0 && (
+                <span className="block font-mono text-[11px] text-neutral-500">
+                  Will create {workspaceRoot}/{name.trim().length > 0 ? name.trim() : "<name>"}
+                </span>
+              )}
             </label>
+            {error !== undefined && <p className="text-xs text-red-400">Error: {error}</p>}
             <button
               type="submit"
-              disabled={name.trim().length === 0}
+              disabled={name.trim().length === 0 || submitting}
               className="w-full rounded-md bg-neutral-100 px-3 py-2 text-sm font-medium text-neutral-900 disabled:opacity-50"
             >
-              Next: pick folder
+              {minimal ? (submitting ? "Creating…" : "Create project") : "Next: pick folder"}
             </button>
           </form>
         )}

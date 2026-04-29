@@ -4,6 +4,7 @@ import { useAuthStore } from "./store/auth-store";
 import { useActiveProject, useProjectStore } from "./store/project-store";
 import { useSessionStore } from "./store/session-store";
 import { useFileStore } from "./store/file-store";
+import { useUiConfigStore } from "./store/ui-config-store";
 import { LoginScreen } from "./components/LoginScreen";
 import { ProjectSidebar } from "./components/ProjectSidebar";
 import { ProjectPicker } from "./components/ProjectPicker";
@@ -16,10 +17,11 @@ import { EditorPanel } from "./components/EditorPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { TurnDiffPanel } from "./components/TurnDiffPanel";
 import { GitPanel } from "./components/GitPanel";
+import { SearchPanel } from "./components/SearchPanel";
 import { ResizableDivider } from "./components/ResizableDivider";
 import { useGitStatus } from "./hooks/useGitStatus";
 
-type RightPaneTab = "files" | "changes" | "git";
+type RightPaneTab = "files" | "search" | "changes" | "git";
 
 /* Persisted pane widths. Stored in localStorage so the user-tuned
    layout survives reloads. Defaults err on the side of "the chat is the
@@ -74,10 +76,8 @@ export function App() {
   const logout = useAuthStore((s) => s.logout);
 
   const projects = useProjectStore((s) => s.projects);
-  const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const projectsLoaded = useProjectStore((s) => !s.loading);
   const loadProjects = useProjectStore((s) => s.load);
-  const setActive = useProjectStore((s) => s.setActive);
   const active = useActiveProject();
 
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
@@ -94,9 +94,12 @@ export function App() {
     localStorage.setItem("pi-workbench/files-open", v ? "true" : "false");
   };
 
-  const [rightTab, setRightTab] = useState<RightPaneTab>(
-    () => (localStorage.getItem("pi-workbench/right-tab") as RightPaneTab | null) ?? "files",
-  );
+  const [rightTab, setRightTab] = useState<RightPaneTab>(() => {
+    const raw = localStorage.getItem("pi-workbench/right-tab");
+    return raw === "files" || raw === "search" || raw === "changes" || raw === "git"
+      ? raw
+      : "files";
+  });
   const setRightTabPersisted = (next: RightPaneTab): void => {
     setRightTab(next);
     localStorage.setItem("pi-workbench/right-tab", next);
@@ -227,6 +230,17 @@ export function App() {
     void bootstrap();
   }, [bootstrap]);
 
+  // ui-config has no auth requirement and gates which surfaces
+  // we render — load it in parallel with auth bootstrap so the
+  // first render after login already knows whether we're in
+  // minimal mode (avoids a flash of full-UI elements that then
+  // disappear).
+  const loadUiConfig = useUiConfigStore((s) => s.load);
+  const minimal = useUiConfigStore((s) => s.minimal);
+  useEffect(() => {
+    void loadUiConfig();
+  }, [loadUiConfig]);
+
   useEffect(() => {
     if (isAuthenticated) void loadProjects();
   }, [isAuthenticated, loadProjects]);
@@ -245,20 +259,14 @@ export function App() {
     <div className="flex h-screen flex-col bg-neutral-950 text-neutral-100">
       <header className="flex items-center justify-between border-b border-neutral-800 px-4 py-2">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold tracking-tight">pi-workbench</span>
-          {projects.length > 0 && (
-            <select
-              value={activeProjectId ?? ""}
-              onChange={(e) => setActive(e.target.value || undefined)}
-              className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs text-neutral-200"
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
+          {/* Header brand: same SVG as the favicon / PWA icon, served
+              from /icons/icon.svg via the public dir. The inner gap-1.5
+              keeps the logo + wordmark visually paired (tighter than
+              the parent gap-3 used between brand and project picker). */}
+          <div className="flex items-center gap-1.5">
+            <img src="/icons/icon.svg" alt="" className="h-8 w-8" aria-hidden="true" />
+            <span className="text-sm font-semibold tracking-tight">pi-workbench</span>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -273,18 +281,20 @@ export function App() {
             <FolderTree size={13} />
             Files
           </button>
-          <button
-            onClick={() => setTerminalOpenPersisted(!terminalOpen)}
-            className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
-              terminalOpen
-                ? "border-neutral-500 bg-neutral-800 text-neutral-100"
-                : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
-            }`}
-            title="Toggle the integrated terminal"
-          >
-            <TerminalIcon size={13} />
-            Terminal
-          </button>
+          {!minimal && (
+            <button
+              onClick={() => setTerminalOpenPersisted(!terminalOpen)}
+              className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
+                terminalOpen
+                  ? "border-neutral-500 bg-neutral-800 text-neutral-100"
+                  : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+              }`}
+              title="Toggle the integrated terminal"
+            >
+              <TerminalIcon size={13} />
+              Terminal
+            </button>
+          )}
           <button
             onClick={() => setSettingsOpen(true)}
             className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-500"
@@ -321,14 +331,16 @@ export function App() {
               ) : activeSessionId !== undefined ? (
                 <>
                   <ChatView sessionId={activeSessionId} />
-                  <ChangedFilesBadge
-                    sessionId={activeSessionId}
-                    alreadyOnChangesTab={filesOpen && rightTab === "changes"}
-                    onOpen={() => {
-                      if (!filesOpen) setFilesOpenPersisted(true);
-                      setRightTabPersisted("changes");
-                    }}
-                  />
+                  {!minimal && (
+                    <ChangedFilesBadge
+                      sessionId={activeSessionId}
+                      alreadyOnChangesTab={filesOpen && rightTab === "changes"}
+                      onOpen={() => {
+                        if (!filesOpen) setFilesOpenPersisted(true);
+                        setRightTabPersisted("changes");
+                      }}
+                    />
+                  )}
                   <ChatInput sessionId={activeSessionId} />
                 </>
               ) : active ? (
@@ -392,7 +404,10 @@ export function App() {
                       "Changes" view. Both share width + position so
                       they don't compete for screen real estate. */}
                   <div className="flex border-b border-neutral-800 bg-neutral-900/40">
-                    {(["files", "changes", "git"] as const).map((t) => (
+                    {(minimal
+                      ? (["files", "search"] as const)
+                      : (["files", "search", "changes", "git"] as const)
+                    ).map((t) => (
                       <button
                         key={t}
                         onClick={() => setRightTabPersisted(t)}
@@ -402,7 +417,16 @@ export function App() {
                             : "text-neutral-500 hover:text-neutral-300"
                         }`}
                       >
-                        {t === "files" ? "Files" : t === "changes" ? "Changes" : "Git"}
+                        {/* Internal key stays "changes" for backwards-compat with
+                            persisted localStorage; user-visible label is "Last turn"
+                            so it's distinct from the Git tab's working-tree changes. */}
+                        {t === "files"
+                          ? "Files"
+                          : t === "search"
+                            ? "Search"
+                            : t === "changes"
+                              ? "Last turn"
+                              : "Git"}
                         {t === "git" && gitChangedCount > 0 && (
                           <span className="rounded bg-amber-900/40 px-1 py-0.5 text-[9px] text-amber-300">
                             {gitChangedCount}
@@ -414,10 +438,17 @@ export function App() {
                   <div className="flex-1 overflow-hidden">
                     {rightTab === "files" ? (
                       <FileBrowserPanel />
-                    ) : rightTab === "changes" ? (
+                    ) : rightTab === "search" ? (
+                      <SearchPanel />
+                    ) : !minimal && rightTab === "changes" ? (
                       <TurnDiffPanel />
-                    ) : (
+                    ) : !minimal && rightTab === "git" ? (
                       <GitPanel />
+                    ) : (
+                      // minimal mode: stale persisted "changes"/"git" falls
+                      // back to the file browser rather than rendering a
+                      // tab the user can't even see.
+                      <FileBrowserPanel />
                     )}
                   </div>
                 </div>
@@ -426,7 +457,7 @@ export function App() {
           </main>
         </div>
 
-        {terminalOpen && (
+        {!minimal && terminalOpen && (
           <>
             <ResizableDivider
               orientation="horizontal"

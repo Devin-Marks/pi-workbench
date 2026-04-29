@@ -55,6 +55,12 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TRUST_PROXY=${TRUST_PROXY:-false}
       - CORS_ORIGIN=${CORS_ORIGIN:-}
+      # Frontend "minimal" mode — hides terminal, git pane, last-turn
+      # pane, and providers/agent settings; project create asks for a
+      # name only and auto-mkdirs under WORKSPACE_PATH. Server routes
+      # are unchanged. Use for locked-down deployments where provider
+      # config is managed at the deploy level.
+      - MINIMAL_UI=${MINIMAL_UI:-false}
     healthcheck:
       test:
         [

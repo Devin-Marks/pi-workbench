@@ -105,6 +105,16 @@ export const config = Object.freeze({
   sessionDir: SESSION_DIR,
   clientDistPath: CLIENT_DIST_PATH,
   serveClient: readBool("SERVE_CLIENT", true),
+  /**
+   * Frontend "minimal" mode. When true, the client UI hides the
+   * terminal, git pane, last-turn pane, and the providers/agent
+   * settings sections, and replaces the project folder picker with
+   * a name-only form that creates `<workspacePath>/<name>`. Server
+   * routes are unchanged — this is purely a frontend gate exposed
+   * via `GET /api/v1/ui-config`. Use case: locked-down deployments
+   * where provider config is managed at the deploy level.
+   */
+  minimalUi: readBool("MINIMAL_UI", false),
   auth: Object.freeze({
     uiPassword: UI_PASSWORD,
     jwtSecret: JWT_SECRET,
