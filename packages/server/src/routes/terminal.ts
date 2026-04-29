@@ -38,6 +38,15 @@ type ClientMessage = InputMessage | ResizeMessage;
 
 function parseClientMessage(raw: unknown): ClientMessage | undefined {
   if (typeof raw !== "string" && !(raw instanceof Buffer)) return undefined;
+  // Sanity cap: a single keystroke (or paste) over 1 MB is almost
+  // certainly a misuse of the channel; refuse rather than block the
+  // event loop on a node-pty `write()` of a huge buffer. The server-
+  // side ws frame limit is much higher (`@fastify/websocket` defaults
+  // to 100 MB), so this is the meaningful guard.
+  const MAX_INPUT_BYTES = 1 * 1024 * 1024;
+  if (typeof raw === "string" ? raw.length > MAX_INPUT_BYTES : raw.byteLength > MAX_INPUT_BYTES) {
+    return undefined;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(typeof raw === "string" ? raw : raw.toString("utf8"));

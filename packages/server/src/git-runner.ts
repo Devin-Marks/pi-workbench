@@ -550,11 +550,17 @@ export async function push(cwd: string, opts: PushOptions = {}): Promise<{ stdou
 }
 
 /**
- * git remote names share most of git ref-name's restrictions but in
- * practice users only ever name them `origin`, `upstream`, `fork`,
- * etc. — short alphanumeric tokens. Same `assertBranchName` rules
- * are conservative enough; alias it for clarity at call sites.
+ * Validate a git remote name. Rules are looser than branch names:
+ * remotes don't reserve `HEAD`/`FETCH_HEAD`/etc., and the `.lock`
+ * suffix only matters for ref files. We keep the same character
+ * set + leading-dash + traversal guards (the security-relevant
+ * ones), but skip the ref-reserved-word and `.lock`/dot-segment
+ * checks. A user with a remote literally named `HEAD` (unusual but
+ * legal) won't get a 400.
  */
 function assertRemoteName(name: string): void {
-  assertBranchName(name);
+  if (name.length === 0 || name.length > 200) throw new InvalidBranchNameError(name);
+  if (!/^[A-Za-z0-9._/-]+$/.test(name)) throw new InvalidBranchNameError(name);
+  if (name.startsWith("-")) throw new InvalidBranchNameError(name);
+  if (name.includes("..") || name.includes("@{")) throw new InvalidBranchNameError(name);
 }

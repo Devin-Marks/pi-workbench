@@ -328,6 +328,10 @@ export function GitPanel() {
       setOpResult(
         output.trim().length > 0 ? (output.trim().split("\n").pop() ?? "Pushed") : "Pushed",
       );
+      // Set-upstream is a one-shot: the remote ref is now tracked,
+      // so future pushes don't need the flag. Auto-clear so the
+      // user doesn't keep re-sending --set-upstream by accident.
+      if (pushSetUpstream) setPushSetUpstream(false);
     } catch (err) {
       setOpError(err instanceof ApiError ? err.message : (err as Error).message);
     } finally {

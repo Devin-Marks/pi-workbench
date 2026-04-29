@@ -366,7 +366,16 @@ function attachWebSocket(
     const entry = live.get(tabId);
     if (entry === undefined || entry.disposed) return;
     if (isTerminalCloseCode(e.code)) {
-      term.write(`\r\n[connection closed: ${String(e.code)}]\r\n`);
+      // Custom messages for the specific terminal codes — without
+      // these the user sees a bare numeric code with no clear path.
+      let msg = `[connection closed: ${String(e.code)}]`;
+      if (e.code === 4401) {
+        msg =
+          "[connection closed (4401): your session expired — refresh the page after logging back in]";
+      } else if (e.code === 4404) {
+        msg = "[connection closed (4404): project no longer exists]";
+      }
+      term.write(`\r\n${msg}\r\n`);
       return;
     }
     // Schedule a reconnect with exponential backoff. The keystroke +
