@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { Columns2, Rows2 } from "lucide-react";
 import {
   EMPTY_MESSAGES,
   EMPTY_STRING,
@@ -7,6 +8,35 @@ import {
   type AgentMessageLike,
 } from "../store/session-store";
 import { DiffBlock } from "./DiffBlock";
+
+/**
+ * Per-ChatView diff view-type preference. Each diff-rendering surface
+ * has its own setting (TurnDiffPanel uses `pi.turnDiff.viewType`,
+ * GitPanel uses `pi.gitPanel.viewType`); chat inline edit-tool diffs
+ * use `pi.chat.viewType`. Toggling one panel doesn't affect the
+ * others — different mental contexts often want different layouts.
+ *
+ * The hover-revealed toggle on each `<details>` summary updates the
+ * chat-wide pref via Context, so one click flips every other chat
+ * diff currently rendered without remounting.
+ */
+type ChatViewType = "unified" | "split";
+const ChatDiffViewContext = createContext<{
+  viewType: ChatViewType;
+  setViewType: (next: ChatViewType) => void;
+}>({
+  viewType: "unified",
+  setViewType: () => undefined,
+});
+
+const CHAT_VIEW_TYPE_KEY = "pi.chat.viewType";
+function readChatViewType(): ChatViewType {
+  try {
+    return localStorage.getItem(CHAT_VIEW_TYPE_KEY) === "split" ? "split" : "unified";
+  } catch {
+    return "unified";
+  }
+}
 
 interface Props {
   sessionId: string;
@@ -34,6 +64,16 @@ export function ChatView({ sessionId }: Props) {
   const queued = useSessionStore((s) => s.queuedBySession[sessionId]);
   const openStream = useSessionStore((s) => s.openStream);
   const closeStream = useSessionStore((s) => s.closeStream);
+
+  const [chatViewType, setChatViewType] = useState<ChatViewType>(readChatViewType);
+  const setAndPersistChatViewType = (next: ChatViewType): void => {
+    setChatViewType(next);
+    try {
+      localStorage.setItem(CHAT_VIEW_TYPE_KEY, next);
+    } catch {
+      // ignore — choice still applies for this session
+    }
+  };
 
   // Open SSE on mount, close on unmount/session change. The store ensures
   // openStream is idempotent for the same id.
@@ -71,43 +111,49 @@ export function ChatView({ sessionId }: Props) {
   }, [messages, streamingText, isStreaming]);
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
-      {/* Banner sits ABOVE the scroll container so it stays pinned to the top
-          of the chat view regardless of how far the user has scrolled into a
-          long session. Earlier we rendered it inside the scroll container,
-          which meant a long-running streaming session pushed the
-          "Reconnecting…" / compaction banners off-screen. */}
-      {banner !== undefined && (
-        <div className="border-b border-amber-700/40 bg-amber-900/20 px-6 py-2 text-xs text-amber-200">
-          {banner}
-        </div>
-      )}
-      <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto px-6 py-4">
-        {messages.length === 0 && streamingText.length === 0 && !isStreaming && (
-          <p className="mt-12 text-center text-sm text-neutral-500">
-            No messages yet. Send a prompt to get started.
-          </p>
+    <ChatDiffViewContext.Provider
+      value={{ viewType: chatViewType, setViewType: setAndPersistChatViewType }}
+    >
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {/* Banner sits ABOVE the scroll container so it stays pinned to the top
+            of the chat view regardless of how far the user has scrolled into a
+            long session. Earlier we rendered it inside the scroll container,
+            which meant a long-running streaming session pushed the
+            "Reconnecting…" / compaction banners off-screen. */}
+        {banner !== undefined && (
+          <div className="border-b border-amber-700/40 bg-amber-900/20 px-6 py-2 text-xs text-amber-200">
+            {banner}
+          </div>
         )}
-        <div className="mx-auto max-w-3xl space-y-4">
-          {messages.map((m, i) => (
-            <Message key={i} message={m} />
-          ))}
-          {streamingText.length > 0 && (
-            <div className="rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3">
-              <div className="mb-1 text-[10px] uppercase tracking-wider text-neutral-500">
-                assistant (streaming)
-              </div>
-              <pre className="whitespace-pre-wrap break-words font-sans text-sm text-neutral-100">
-                {streamingText}
-                <span className="ml-1 inline-block h-3 w-1.5 animate-pulse bg-neutral-300" />
-              </pre>
-            </div>
+        <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto px-6 py-4">
+          {messages.length === 0 && streamingText.length === 0 && !isStreaming && (
+            <p className="mt-12 text-center text-sm text-neutral-500">
+              No messages yet. Send a prompt to get started.
+            </p>
           )}
-          {isStreaming && streamingText.length === 0 && <ActiveToolPlaceholder tool={activeTool} />}
-          {queued !== undefined && <QueuedMessages queued={queued} />}
+          <div className="mx-auto max-w-3xl space-y-4">
+            {messages.map((m, i) => (
+              <Message key={i} message={m} />
+            ))}
+            {streamingText.length > 0 && (
+              <div className="rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3">
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-neutral-500">
+                  assistant (streaming)
+                </div>
+                <pre className="whitespace-pre-wrap break-words font-sans text-sm text-neutral-100">
+                  {streamingText}
+                  <span className="ml-1 inline-block h-3 w-1.5 animate-pulse bg-neutral-300" />
+                </pre>
+              </div>
+            )}
+            {isStreaming && streamingText.length === 0 && (
+              <ActiveToolPlaceholder tool={activeTool} />
+            )}
+            {queued !== undefined && <QueuedMessages queued={queued} />}
+          </div>
         </div>
       </div>
-    </div>
+    </ChatDiffViewContext.Provider>
   );
 }
 
@@ -190,16 +236,129 @@ function ActiveToolPlaceholder({ tool }: { tool: ActiveTool | undefined }) {
   );
 }
 
+/**
+ * Wrapper for the inline edit-tool diff in chat. Reads the chat-wide
+ * view-type pref via Context and renders a hover-revealed toggle on
+ * the right side of the `<details>` summary so the user can flip
+ * unified ↔ split without leaving the chat surface. Toggle is the
+ * same Columns2/Rows2 icon pair the panels use, so muscle memory
+ * carries.
+ */
+function ChatEditDiff({
+  diff,
+  filename,
+  adds,
+  dels,
+}: {
+  diff: string;
+  filename: string | undefined;
+  adds: number;
+  dels: number;
+}) {
+  const { viewType, setViewType } = useContext(ChatDiffViewContext);
+  return (
+    <details className="group rounded border border-neutral-800 bg-neutral-950 text-xs">
+      <summary className="flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-neutral-300">
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="text-neutral-500">edit{filename !== undefined ? " " : ""}</span>
+          {filename !== undefined && <span className="truncate font-mono">{filename}</span>}
+          <span className="ml-2 text-emerald-400">+{adds}</span>
+          <span className="ml-1 text-red-400">−{dels}</span>
+        </span>
+        <button
+          onClick={(e) => {
+            // The summary's default click toggles the <details>; stop
+            // propagation so flipping the view doesn't also collapse
+            // the diff the user just opened.
+            e.preventDefault();
+            e.stopPropagation();
+            setViewType(viewType === "split" ? "unified" : "split");
+          }}
+          className="rounded p-0.5 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200"
+          title={
+            viewType === "split"
+              ? "Switch chat diffs to unified view"
+              : "Switch chat diffs to side-by-side view"
+          }
+        >
+          {viewType === "split" ? <Rows2 size={11} /> : <Columns2 size={11} />}
+        </button>
+      </summary>
+      <DiffBlock diff={diff} viewType={viewType} />
+    </details>
+  );
+}
+
 function Message({ message }: { message: AgentMessageLike }) {
-  // User text messages
+  // User text messages — may include image + file attachments per
+  // Phase 14. Optimistic shape uses a blob URL on the image block;
+  // canonical refetched shape uses raw base64 with a mimeType, which
+  // we render via a data URL.
   if (message.role === "user") {
     const text = extractText(message);
+    const blocks = Array.isArray(message.content) ? message.content : [];
+    const images: Array<{ src: string; key: string }> = [];
+    const files: Array<{ name: string; size?: number; key: string }> = [];
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i] as Record<string, unknown>;
+      if (b.type === "image") {
+        const data = typeof b.data === "string" ? b.data : "";
+        const mime = typeof b.mimeType === "string" ? b.mimeType : "image/png";
+        // Optimistic blocks set `__blobUrl`; treat `data` as a
+        // direct blob URL. Canonical blocks store raw base64; build
+        // a data URL on the fly.
+        const isBlob = b.__blobUrl === true;
+        const src = isBlob ? data : `data:${mime};base64,${data}`;
+        if (data.length > 0) images.push({ src, key: `img-${i}` });
+      } else if (b.type === "file") {
+        const name = typeof b.filename === "string" ? b.filename : "attachment";
+        const file: { name: string; size?: number; key: string } = { name, key: `file-${i}` };
+        if (typeof b.size === "number") file.size = b.size;
+        files.push(file);
+      }
+    }
     return (
       <div className="rounded-lg bg-neutral-800 px-4 py-3">
         <div className="mb-1 text-[10px] uppercase tracking-wider text-neutral-400">you</div>
-        <pre className="whitespace-pre-wrap break-words font-sans text-sm text-neutral-100">
-          {text}
-        </pre>
+        {text.length > 0 && (
+          <pre className="whitespace-pre-wrap break-words font-sans text-sm text-neutral-100">
+            {text}
+          </pre>
+        )}
+        {images.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {images.map((img) => (
+              <img
+                key={img.key}
+                src={img.src}
+                alt=""
+                className="max-h-48 max-w-full rounded border border-neutral-700"
+              />
+            ))}
+          </div>
+        )}
+        {files.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {files.map((f) => (
+              <span
+                key={f.key}
+                className="inline-flex items-center gap-1 rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-[11px] text-neutral-300"
+                title={f.name}
+              >
+                <span className="font-mono">{f.name}</span>
+                {f.size !== undefined && (
+                  <span className="text-[10px] text-neutral-500">
+                    {f.size < 1024
+                      ? `${f.size} B`
+                      : f.size < 1024 * 1024
+                        ? `${(f.size / 1024).toFixed(1)} KB`
+                        : `${(f.size / (1024 * 1024)).toFixed(1)} MB`}
+                  </span>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
@@ -304,17 +463,7 @@ function ToolResult({ message }: { message: AgentMessageLike }) {
     const diff = typeof details?.diff === "string" ? details.diff : text;
     const fn = extractFilename(message);
     const { adds, dels } = countDiffLines(diff);
-    return (
-      <details className="rounded border border-neutral-800 bg-neutral-950 text-xs">
-        <summary className="cursor-pointer px-3 py-2 text-neutral-300">
-          <span className="text-neutral-500">edit{fn !== undefined ? " " : ""}</span>
-          {fn !== undefined && <span className="font-mono">{fn}</span>}
-          <span className="ml-2 text-emerald-400">+{adds}</span>
-          <span className="ml-1 text-red-400">−{dels}</span>
-        </summary>
-        <DiffBlock diff={diff} />
-      </details>
-    );
+    return <ChatEditDiff diff={diff} filename={fn} adds={adds} dels={dels} />;
   }
 
   if (toolName === "read") {

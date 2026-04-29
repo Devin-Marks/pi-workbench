@@ -4,12 +4,12 @@ import { api, ApiError } from "../lib/api-client";
 import { useSessionStore } from "../store/session-store";
 
 /**
- * Inline button under ChatView showing "N changed file(s)" whenever
+ * Inline button under ChatView showing "N file(s) edited" whenever
  * the latest turn touched files. Clicking opens the right pane on
- * the Changes tab. The badge unmounts when:
+ * the Last turn tab. The badge unmounts when:
  *   - the count is 0 (nothing to review), OR
- *   - the user is already viewing the Changes pane (no point nudging
- *     to open what they're already on).
+ *   - the user is already viewing the Last turn pane (no point
+ *     nudging to open what they're already on).
  *
  * Refreshes once per `agent_end` via the session-store's counter,
  * matching how TurnDiffPanel and useGitStatus react to the same
@@ -66,15 +66,15 @@ export function ChangedFilesBadge({
   if (count === 0 || alreadyOnChangesTab) return null;
 
   return (
-    <div className="border-t border-neutral-800 bg-neutral-950 px-6 pt-2">
+    <div className="border-t border-neutral-800 bg-neutral-950 px-6 py-2">
       <div className="mx-auto max-w-3xl">
         <button
           onClick={onOpen}
           className="flex items-center gap-2 rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 hover:border-neutral-500 hover:bg-neutral-800"
-          title="Open the Changes pane to review what the agent just wrote"
+          title="Open the Last turn pane to review what the agent just wrote"
         >
           <FileDiff size={12} />
-          {count === 1 ? "1 changed file" : `${count} changed files`}
+          {count === 1 ? "1 file edited" : `${count} files edited`}
           <span className="text-[10px] text-neutral-500">— review</span>
         </button>
       </div>

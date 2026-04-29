@@ -85,6 +85,13 @@ export function DiffBlock({
   viewType = "unified",
 }: {
   diff: string;
+  /**
+   * Caller's chosen rendering mode. Each panel that hosts diffs owns
+   * its own view-type preference (TurnDiffPanel uses
+   * `pi.turnDiff.viewType`, GitPanel uses `pi.gitPanel.viewType`,
+   * ChatView uses `pi.chat.viewType`) — DiffBlock is purely
+   * controlled and never reads the prefs itself.
+   */
   viewType?: "unified" | "split";
 }) {
   let files: FileData[] = [];

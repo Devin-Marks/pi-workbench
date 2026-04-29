@@ -8,8 +8,6 @@ type ViewType = "unified" | "split";
 const VIEW_TYPE_KEY = "pi.turnDiff.viewType";
 
 function readPersistedViewType(): ViewType {
-  // localStorage can throw in private browsing on some browsers — fall
-  // back silently to the default rather than crashing the panel.
   try {
     const v = localStorage.getItem(VIEW_TYPE_KEY);
     return v === "split" ? "split" : "unified";
@@ -64,8 +62,7 @@ export function TurnDiffPanel() {
     try {
       localStorage.setItem(VIEW_TYPE_KEY, next);
     } catch {
-      // Private-mode storage failure: choice still applies for this
-      // session, just won't survive a reload.
+      // Private-mode storage failure — choice still applies for this session.
     }
   };
 
@@ -122,7 +119,7 @@ export function TurnDiffPanel() {
       <div className="flex items-center justify-between border-b border-neutral-800 px-3 py-2">
         <div className="flex items-center gap-2 font-medium text-neutral-200">
           <FileDiff size={13} />
-          Changes
+          Last turn
           {entries.length > 0 && (
             <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400">
               {entries.length}
