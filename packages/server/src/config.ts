@@ -39,13 +39,22 @@ function readBool(key: string, fallback: boolean): boolean {
  * have on disk). Docker compose sets both explicitly so the container
  * layout is unchanged.
  */
-const WORKBENCH_HOME = join(homedir(), ".pi-workbench");
+const HOME = homedir();
+if (HOME === "/" || HOME === "") {
+  throw new Error(
+    `config: os.homedir() returned ${JSON.stringify(HOME)}. ` +
+      "This usually means HOME / USERPROFILE is unset. " +
+      "Set WORKSPACE_PATH, PI_CONFIG_DIR, and WORKBENCH_DATA_DIR explicitly, " +
+      "or run the server with a real user account.",
+  );
+}
+const WORKBENCH_HOME = join(HOME, ".pi-workbench");
 const WORKSPACE_PATH = resolve(readEnv("WORKSPACE_PATH") ?? join(WORKBENCH_HOME, "workspace"));
 // Default to the current user's home so local dev on macOS/Linux just works.
 // In the documented Docker setup this still resolves to `/root/.pi/agent`
 // (root's homedir IS `/root` inside the container), so the production target
 // is unchanged. Override explicitly via PI_CONFIG_DIR if needed.
-const PI_CONFIG_DIR = resolve(readEnv("PI_CONFIG_DIR") ?? join(homedir(), ".pi", "agent"));
+const PI_CONFIG_DIR = resolve(readEnv("PI_CONFIG_DIR") ?? join(HOME, ".pi", "agent"));
 const SESSION_DIR = resolve(readEnv("SESSION_DIR") ?? `${WORKSPACE_PATH}/.pi/sessions`);
 /**
  * Workbench-owned data dir. Holds `projects.json` (the project registry

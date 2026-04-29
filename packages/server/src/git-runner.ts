@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
+import { assertInsideRoot } from "./file-manager.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -189,30 +191,37 @@ export async function isGitRepo(cwd: string): Promise<boolean> {
 /* ----------------------------- status ----------------------------- */
 
 /**
- * `git status --porcelain=v1 -uall` output. Each line is `XY <path>`,
- * with renames as `XY <orig> -> <new>` and possibly NUL-terminated
- * via `-z` (we deliberately use newline-terminated v1 for
- * line-by-line parsing simplicity; paths with newlines are rare in
- * practice and would require `-z`).
+ * `git status --porcelain=v1 -uall -z` output. Records are NUL-
+ * terminated (no quoting / escaping), so paths containing literal
+ * newlines, quotes, or other special chars round-trip cleanly.
+ *
+ * Each record is `XY <path>` (length ≥ 4 with the leading XY + space).
+ * Renames and copies are special: `XY <newpath>` is followed by a
+ * SECOND NUL-terminated record containing only the original path. We
+ * peek at the next token in that case rather than splitting on " -> ".
  */
 function parseStatus(stdout: string): FileStatusEntry[] {
   const out: FileStatusEntry[] = [];
-  for (const line of stdout.split("\n")) {
-    // Minimum well-formed porcelain line: 2 status chars + space +
-    // at least 1-char path = 4. Length 3 sneaks past the old check
-    // and produces an empty path.
-    if (line.length < 4) continue;
-    const code = line.slice(0, 2);
-    const rest = line.slice(3);
-    let path = rest;
-    let originalPath: string | undefined;
-    const arrow = rest.indexOf(" -> ");
-    if (arrow !== -1) {
-      originalPath = rest.slice(0, arrow);
-      path = rest.slice(arrow + 4);
-    }
+  // Trailing NUL produces an empty final element — drop it.
+  const records = stdout.split("\0").filter((r) => r.length > 0);
+  for (let i = 0; i < records.length; i++) {
+    const rec = records[i] ?? "";
+    if (rec.length < 4) continue;
+    const code = rec.slice(0, 2);
+    const path = rec.slice(3);
     const x = code[0] ?? " ";
     const y = code[1] ?? " ";
+    let originalPath: string | undefined;
+    // For renames/copies, the next record is the ORIGINAL path. Peek
+    // and consume.
+    if (x === "R" || x === "C" || y === "R" || y === "C") {
+      const next = records[i + 1];
+      if (next !== undefined) {
+        originalPath = next;
+        i++;
+      }
+    }
+    if (path.length === 0) continue;
     const staged = x !== " " && x !== "?";
     const unstaged = y !== " " && y !== "?";
     const entry: FileStatusEntry = {
@@ -223,7 +232,6 @@ function parseStatus(stdout: string): FileStatusEntry[] {
       code,
     };
     if (originalPath !== undefined) entry.originalPath = originalPath;
-    if (path.length === 0) continue; // defensive — see length filter above
     out.push(entry);
   }
   return out;
@@ -260,7 +268,7 @@ export async function getStatus(cwd: string): Promise<StatusResult> {
   }
   const [branchRes, statusRes] = await Promise.all([
     runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => undefined),
-    runGit(cwd, ["status", "--porcelain=v1", "-uall"]),
+    runGit(cwd, ["status", "--porcelain=v1", "-uall", "-z"]),
   ]);
   // `--abbrev-ref HEAD` returns "HEAD" on a detached checkout; surface
   // that verbatim so the UI can render it.
@@ -296,6 +304,12 @@ export function getStagedDiff(cwd: string): Promise<string> {
 
 export async function getFileDiff(cwd: string, path: string, staged: boolean): Promise<string> {
   if (!(await isGitRepo(cwd))) return "";
+  // Belt-and-suspenders lexical guard. git itself rejects paths outside
+  // the working tree, but routing every path through the same check
+  // file-manager uses keeps the boundary obvious in one place. `path`
+  // arrives relative-to-project from the route, so resolve against cwd
+  // before checking.
+  assertInsideRoot(resolve(cwd, path), cwd);
   const args = ["diff", "--no-color", "--no-ext-diff"];
   if (staged) args.push("--cached");
   args.push("--", path);

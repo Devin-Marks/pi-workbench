@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
@@ -38,7 +38,28 @@ declare module "fastify" {
 
 export async function buildServer(): Promise<FastifyInstance> {
   const fastify = Fastify({
-    logger: { level: config.logLevel },
+    logger: {
+      level: config.logLevel,
+      // Scrub the `?token=...` query param from logged URLs. Browsers can't
+      // attach Authorization headers to a WebSocket upgrade, so the terminal
+      // route ferries its short-TTL JWT in the query string. Without this
+      // serializer Fastify's default "incoming request" line logs the URL
+      // verbatim, which puts the token into stdout / journald / log shippers.
+      serializers: {
+        req(req: FastifyRequest) {
+          const url = req.url ?? "";
+          const safeUrl = url.includes("token=")
+            ? url.replace(/([?&])token=[^&]*/g, "$1token=REDACTED")
+            : url;
+          return {
+            method: req.method,
+            url: safeUrl,
+            hostname: req.hostname,
+            remoteAddress: req.ip,
+          };
+        },
+      },
+    },
     disableRequestLogging: config.isTest,
     trustProxy: config.trustProxy,
   });
@@ -162,6 +183,9 @@ export async function buildServer(): Promise<FastifyInstance> {
     // lands on the next reload.
     fastify.addHook("onSend", async (req, reply) => {
       const path = req.url.split("?")[0] ?? req.url;
+      // API responses already control their own caching headers (or
+      // intentionally don't); skip the static-asset branching for them.
+      if (path.startsWith("/api/")) return;
       if (path.startsWith("/assets/")) {
         reply.header("Cache-Control", "public, max-age=31536000, immutable");
       } else if (reply.getHeader("content-type")?.toString().startsWith("text/html") === true) {
