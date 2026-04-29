@@ -3,6 +3,14 @@ import { createRoot } from "react-dom/client";
 import { registerSW } from "virtual:pwa-register";
 import { App } from "./App";
 import "./index.css";
+import { bootTheme } from "./lib/theme";
+
+// Apply the persisted theme BEFORE React mounts so the first paint
+// uses the correct palette (no dark→light flash on a Light theme
+// reload). `bootTheme` reads localStorage synchronously and sets
+// `<html data-theme>`; CSS rules in index.css then provide the
+// matching neutral palette to every Tailwind class.
+bootTheme();
 
 // Auto-register the service worker (vite-plugin-pwa). `autoUpdate` mode
 // silently swaps in new shells on the next reload — no banner needed.
