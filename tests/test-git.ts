@@ -3,9 +3,10 @@
  *
  * Boots the server, creates a project pointing at a freshly-init'd
  * tmp git repo with one commit, then drives every /git/* route. No
- * LLM, no remote — push isn't tested for round-trip success
- * (requires a remote), only that the route exists and surfaces git's
- * error sensibly when push fails.
+ * LLM. Push round-trip uses a local bare repo (`git init --bare`
+ * under the test workspace) as origin — no network, no auth, but
+ * exercises the actual push path and verifies the upstream HEAD
+ * advances via `git ls-remote`.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
@@ -455,6 +456,64 @@ async function main(): Promise<void> {
         "push error message references upstream/no remote",
         typeof body.message === "string" && body.message.length > 0,
         `message: ${body.message ?? "(none)"}`,
+      );
+    }
+
+    // ---- push round-trip: set up a local bare repo as origin ----
+    // Round-trip exercises the actual push wire path, not just the
+    // "no upstream" error case. We host a bare repo on the local
+    // filesystem; git treats a `file://` URL the same as a remote
+    // for push/fetch purposes, no network or auth needed.
+    const upstreamPath = join(workspacePath, "upstream.git");
+    await mkdir(upstreamPath, { recursive: true });
+    await execFileAsync("git", ["init", "-q", "--bare", upstreamPath]);
+    await git(projectPath, ["remote", "add", "origin", upstreamPath]);
+    {
+      const r = await jsend(
+        "POST",
+        `${base}/api/v1/git/push`,
+        { projectId: gitProjectId, remote: "origin", branch: "main", setUpstream: true },
+        auth,
+      );
+      assert("push with --set-upstream → 200", r.status === 200);
+      const body = r.body as { output?: string };
+      assert(
+        "push output mentions main or main->main",
+        typeof body.output === "string" && body.output.length > 0,
+        `output: ${body.output ?? "(none)"}`,
+      );
+      // Verify the upstream actually received the commit by reading
+      // the bare repo's refs directly (no extra HTTP call needed).
+      const lsRemote = await execFileAsync("git", ["ls-remote", upstreamPath, "refs/heads/main"]);
+      assert(
+        "upstream main ref exists post-push",
+        /[0-9a-f]{40}\s+refs\/heads\/main/.test(lsRemote.stdout),
+        `ls-remote: ${lsRemote.stdout.slice(0, 200)}`,
+      );
+    }
+    {
+      // Second commit; bare push (the upstream is now tracked, so
+      // no remote/branch args needed) should succeed and the
+      // upstream HEAD should advance.
+      await fsWrite(join(projectPath, "second.txt"), "second\n", "utf8");
+      await git(projectPath, ["add", "."]);
+      await git(projectPath, ["commit", "-q", "-m", "second"]);
+      const headBefore = (
+        await execFileAsync("git", ["ls-remote", upstreamPath, "refs/heads/main"])
+      ).stdout
+        .trim()
+        .split(/\s+/)[0];
+      const r = await jsend("POST", `${base}/api/v1/git/push`, { projectId: gitProjectId }, auth);
+      assert("plain push to tracked upstream → 200", r.status === 200);
+      const headAfter = (
+        await execFileAsync("git", ["ls-remote", upstreamPath, "refs/heads/main"])
+      ).stdout
+        .trim()
+        .split(/\s+/)[0];
+      assert(
+        "upstream main HEAD advanced",
+        typeof headBefore === "string" && typeof headAfter === "string" && headBefore !== headAfter,
+        `before=${headBefore ?? ""} after=${headAfter ?? ""}`,
       );
     }
 
