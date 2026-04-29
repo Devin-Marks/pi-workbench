@@ -11,6 +11,18 @@ import {
 import { useFileStore } from "../store/file-store";
 import { useActiveProject } from "../store/project-store";
 import type { FileTreeNode } from "../lib/api-client";
+import { ConfirmDialog, PromptDialog } from "./Modal";
+
+/**
+ * Discriminated union of the active dialog. `undefined` means no
+ * dialog is open. The state lives on the panel rather than as
+ * imperative `await dialog.prompt()` calls so we don't need a global
+ * provider — keeps the dialog primitives purely declarative.
+ */
+type DialogState =
+  | { kind: "create"; entryKind: "file" | "folder" }
+  | { kind: "delete"; absPath: string; name: string; isDir: boolean }
+  | undefined;
 
 /**
  * Phase 10 file browser. A recursive tree of the active project's source
@@ -45,6 +57,7 @@ export function FileBrowserPanel() {
   // Path of the directory currently being hovered as a drop target,
   // used to highlight the row. Cleared on dragleave/drop.
   const [dropTarget, setDropTarget] = useState<string | undefined>(undefined);
+  const [dialog, setDialog] = useState<DialogState>(undefined);
 
   useEffect(() => {
     if (project !== undefined) void loadTree(project.id);
@@ -59,16 +72,15 @@ export function FileBrowserPanel() {
     );
   }
 
-  const promptCreate = async (kind: "file" | "folder"): Promise<void> => {
-    const name = window.prompt(`New ${kind} name (relative to project root):`);
-    if (name === null || name.trim().length === 0) return;
+  const submitCreate = async (entryKind: "file" | "folder", name: string): Promise<void> => {
+    setDialog(undefined);
     try {
-      if (kind === "file") {
-        const path = await createFile(project.id, project.path, name.trim());
+      if (entryKind === "file") {
+        const path = await createFile(project.id, project.path, name);
         // Open the new file immediately so the user can start editing.
         await openFile(project.id, path);
       } else {
-        await createFolder(project.id, project.path, name.trim());
+        await createFolder(project.id, project.path, name);
       }
     } catch {
       // Error already in store; banner renders below.
@@ -91,9 +103,14 @@ export function FileBrowserPanel() {
     }
   };
 
-  const handleDelete = async (absPath: string, name: string, isDir: boolean): Promise<void> => {
-    const what = isDir ? "directory" : "file";
-    if (!window.confirm(`Delete ${what} "${name}"? This cannot be undone.`)) return;
+  const requestDelete = (absPath: string, name: string, isDir: boolean): void => {
+    setDialog({ kind: "delete", absPath, name, isDir });
+  };
+
+  const submitDelete = async (): Promise<void> => {
+    if (dialog?.kind !== "delete") return;
+    const { absPath } = dialog;
+    setDialog(undefined);
     try {
       await deleteEntry(project.id, absPath);
     } catch {
@@ -145,14 +162,14 @@ export function FileBrowserPanel() {
         </span>
         <div className="flex gap-1">
           <button
-            onClick={() => void promptCreate("file")}
+            onClick={() => setDialog({ kind: "create", entryKind: "file" })}
             className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
             title="New file"
           >
             <FilePlus2 size={14} />
           </button>
           <button
-            onClick={() => void promptCreate("folder")}
+            onClick={() => setDialog({ kind: "create", entryKind: "folder" })}
             className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
             title="New folder"
           >
@@ -201,13 +218,46 @@ export function FileBrowserPanel() {
             onRenameDraftChange={setRenameDraft}
             onRenameCommit={(absPath) => void commitRename(absPath)}
             onRenameStart={startRename}
-            onDelete={(absPath, name, isDir) => void handleDelete(absPath, name, isDir)}
+            onDelete={(absPath, name, isDir) => requestDelete(absPath, name, isDir)}
             dropTarget={dropTarget}
             onDropTargetChange={setDropTarget}
             onDrop={(e, dir) => void handleDrop(e, dir)}
           />
         )}
       </div>
+      <PromptDialog
+        open={dialog?.kind === "create"}
+        onClose={() => setDialog(undefined)}
+        onSubmit={(name) => {
+          if (dialog?.kind !== "create") return;
+          void submitCreate(dialog.entryKind, name);
+        }}
+        title={
+          dialog?.kind === "create" && dialog.entryKind === "folder" ? "New folder" : "New file"
+        }
+        label={
+          dialog?.kind === "create" && dialog.entryKind === "folder"
+            ? "Folder name (relative to project root)"
+            : "File name (relative to project root)"
+        }
+        placeholder={
+          dialog?.kind === "create" && dialog.entryKind === "folder" ? "src/utils" : "src/index.ts"
+        }
+        primaryLabel="Create"
+      />
+      <ConfirmDialog
+        open={dialog?.kind === "delete"}
+        onClose={() => setDialog(undefined)}
+        onConfirm={() => void submitDelete()}
+        title={dialog?.kind === "delete" && dialog.isDir ? "Delete directory" : "Delete file"}
+        message={
+          dialog?.kind === "delete"
+            ? `Delete ${dialog.isDir ? "directory" : "file"} "${dialog.name}"? This cannot be undone.`
+            : ""
+        }
+        primaryLabel="Delete"
+        tone="danger"
+      />
     </div>
   );
 }
