@@ -7,6 +7,7 @@ import {
   findSessionLocation,
   getSession,
   listSessionsForProject,
+  resumeSessionById,
   type UnifiedSession,
 } from "../session-registry.js";
 import { errorSchema, liveSummaryBody, liveSummarySchema } from "./_schemas.js";
@@ -52,6 +53,34 @@ function unifiedFromUnified(u: UnifiedSession): Record<string, unknown> {
   };
   if (u.name !== undefined) out.name = u.name;
   return out;
+}
+
+/**
+ * Truncated text preview of a message's content for the session
+ * tree. Mirrors the SDK's `_extractUserMessageText` shape: strings
+ * pass through; arrays of content blocks join the `text` parts.
+ * Returns undefined when the content has no extractable text (e.g.
+ * an image-only message), so the caller can omit the field.
+ */
+const PREVIEW_MAX_CHARS = 200;
+function previewOfMessageContent(content: unknown): string | undefined {
+  let text: string;
+  if (typeof content === "string") {
+    text = content;
+  } else if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const c of content) {
+      const o = c as { type?: unknown; text?: unknown };
+      if (o.type === "text" && typeof o.text === "string") parts.push(o.text);
+    }
+    text = parts.join("\n");
+  } else {
+    return undefined;
+  }
+  text = text.trim();
+  if (text.length === 0) return undefined;
+  if (text.length <= PREVIEW_MAX_CHARS) return text;
+  return text.slice(0, PREVIEW_MAX_CHARS - 1) + "…";
 }
 
 function notFound(reply: FastifyReply): FastifyReply {
@@ -299,6 +328,100 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
         live.lastAgentStartIndex,
       );
       return { entries };
+    },
+  );
+
+  // Phase 15 — session tree. Returns the full branching history of a
+  // session so the client can render a SessionTreePanel and let the
+  // user navigate or fork from any prior entry. Cold sessions get
+  // lazy-resumed via resumeSessionById so the SDK can read the JSONL
+  // and build the tree in memory.
+  fastify.get<{ Params: { id: string } }>(
+    "/sessions/:id/tree",
+    {
+      schema: {
+        description:
+          "Branching history of the session. Returns every entry on the " +
+          "tree (across all branches) plus the current leaf id and the " +
+          "set of entry ids on the active branch path. Message entries " +
+          "include a truncated `preview` (first 200 chars of the text " +
+          "content); other entry types carry just the type + timestamp. " +
+          "Lazy-resumes cold sessions on demand so the route works " +
+          "without a prior SSE connect.",
+        tags: ["sessions"],
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string" } },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["leafId", "branchIds", "entries"],
+            properties: {
+              leafId: { type: ["string", "null"] },
+              branchIds: { type: "array", items: { type: "string" } },
+              entries: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["id", "parentId", "type", "timestamp"],
+                  properties: {
+                    id: { type: "string" },
+                    parentId: { type: ["string", "null"] },
+                    type: { type: "string" },
+                    timestamp: { type: "string" },
+                    role: { type: "string" },
+                    preview: { type: "string" },
+                    label: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          404: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      let live = getSession(req.params.id);
+      if (live === undefined) {
+        try {
+          live = await resumeSessionById(req.params.id);
+        } catch {
+          return notFound(reply);
+        }
+      }
+      const sm = live.session.sessionManager;
+      const all = sm.getEntries();
+      const leafId = sm.getLeafId();
+      // The "active branch path" — every entry from the leaf back to
+      // the root. Used by the client to dim off-path nodes.
+      const branchIds = sm.getBranch().map((e) => e.id);
+      const entries = all.map((e) => {
+        const out: Record<string, unknown> = {
+          id: e.id,
+          parentId: e.parentId,
+          type: e.type,
+          timestamp: e.timestamp,
+        };
+        const label = sm.getLabel(e.id);
+        if (label !== undefined) out.label = label;
+        if (e.type === "message") {
+          // BashExecutionMessage and CustomMessage variants share
+          // `role` but differ on the content field — narrow via a
+          // generic record-shape probe so we don't have to import
+          // the union and discriminate. Bash entries fall through
+          // with no preview, which is the right outcome (they're a
+          // tool invocation, not user-authored prose).
+          const m = e.message as { role?: unknown; content?: unknown };
+          if (typeof m.role === "string") out.role = m.role;
+          const preview = previewOfMessageContent(m.content);
+          if (preview !== undefined) out.preview = preview;
+        }
+        return out;
+      });
+      return { leafId, branchIds, entries };
     },
   );
 

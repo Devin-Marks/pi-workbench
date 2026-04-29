@@ -236,6 +236,29 @@ export interface SearchOptions {
   limit?: number;
 }
 
+export interface SessionTreeEntry {
+  id: string;
+  parentId: string | null;
+  /** SDK entry type — "message", "thinking_level_change", "compaction", "branch_summary", etc. */
+  type: string;
+  timestamp: string;
+  /** Set on `type === "message"` entries. */
+  role?: string;
+  /** Truncated text preview (≤200 chars). Set on text-bearing message entries. */
+  preview?: string;
+  /** User-supplied bookmark label, if present. */
+  label?: string;
+}
+
+export interface SessionTreeResponse {
+  /** Current leaf id of the session — the active branch tip. */
+  leafId: string | null;
+  /** Entry ids on the active branch path, root → leaf. Used for highlighting. */
+  branchIds: string[];
+  /** Every entry across every branch. Build the tree client-side via parentId. */
+  entries: SessionTreeEntry[];
+}
+
 export interface UploadedFile {
   /** Absolute path the file was written to. */
   path: string;
@@ -681,6 +704,40 @@ function vGitBranches(value: unknown, status: number): GitBranchesResponse {
   return out;
 }
 
+function vSessionTree(value: unknown, status: number): SessionTreeResponse {
+  if (
+    !isObject(value) ||
+    !(value.leafId === null || typeof value.leafId === "string") ||
+    !Array.isArray(value.branchIds) ||
+    !Array.isArray(value.entries)
+  ) {
+    fail(status, "expected SessionTreeResponse");
+  }
+  const branchIds = value.branchIds.filter((b): b is string => typeof b === "string");
+  const entries = value.entries.map((e): SessionTreeEntry => {
+    if (
+      !isObject(e) ||
+      typeof e.id !== "string" ||
+      !(e.parentId === null || typeof e.parentId === "string") ||
+      typeof e.type !== "string" ||
+      typeof e.timestamp !== "string"
+    ) {
+      fail(status, "expected SessionTreeEntry");
+    }
+    const out: SessionTreeEntry = {
+      id: e.id,
+      parentId: e.parentId,
+      type: e.type,
+      timestamp: e.timestamp,
+    };
+    if (typeof e.role === "string") out.role = e.role;
+    if (typeof e.preview === "string") out.preview = e.preview;
+    if (typeof e.label === "string") out.label = e.label;
+    return out;
+  });
+  return { leafId: value.leafId, branchIds, entries };
+}
+
 function vUploadResponse(value: unknown, status: number): UploadResponse {
   if (!isObject(value) || !Array.isArray(value.files)) {
     fail(status, "expected { files: UploadedFile[] }");
@@ -941,6 +998,31 @@ export const api = {
     request(`/api/v1/sessions/${encodeURIComponent(id)}/name`, vSessionSummary, {
       method: "POST",
       body: { name },
+    }),
+  getSessionTree: (id: string) =>
+    request(`/api/v1/sessions/${encodeURIComponent(id)}/tree`, vSessionTree),
+  navigateSession: (
+    id: string,
+    entryId: string,
+    opts?: { summarize?: boolean; customInstructions?: string; label?: string },
+  ) => {
+    const body: Record<string, unknown> = { entryId };
+    if (opts?.summarize !== undefined) body.summarize = opts.summarize;
+    if (opts?.customInstructions !== undefined) body.customInstructions = opts.customInstructions;
+    if (opts?.label !== undefined) body.label = opts.label;
+    return request(
+      `/api/v1/sessions/${encodeURIComponent(id)}/navigate`,
+      (v, s) => {
+        if (!isObject(v)) fail(s, "expected navigate result");
+        return v;
+      },
+      { method: "POST", body },
+    );
+  },
+  forkSession: (id: string, entryId: string) =>
+    request(`/api/v1/sessions/${encodeURIComponent(id)}/fork`, vSessionSummary, {
+      method: "POST",
+      body: { entryId },
     }),
   getTurnDiff: (id: string) =>
     request(`/api/v1/sessions/${encodeURIComponent(id)}/turn-diff`, vTurnDiff),

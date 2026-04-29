@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
-import { Columns2, Rows2 } from "lucide-react";
+import { Columns2, GitBranch, Rows2 } from "lucide-react";
 import {
   EMPTY_MESSAGES,
   EMPTY_STRING,
@@ -7,7 +7,9 @@ import {
   type ActiveTool,
   type AgentMessageLike,
 } from "../store/session-store";
+import { useActiveProject } from "../store/project-store";
 import { DiffBlock } from "./DiffBlock";
+import { SessionTreePanel } from "./SessionTreePanel";
 
 /**
  * Per-ChatView diff view-type preference. Each diff-rendering surface
@@ -75,6 +77,12 @@ export function ChatView({ sessionId }: Props) {
     }
   };
 
+  // Phase 15 — session tree overlay. The button lives in a tiny
+  // toolbar above the scroll container so it's always visible
+  // regardless of how far the user has scrolled.
+  const project = useActiveProject();
+  const [treeOpen, setTreeOpen] = useState(false);
+
   // Open SSE on mount, close on unmount/session change. The store ensures
   // openStream is idempotent for the same id.
   useEffect(() => {
@@ -115,6 +123,20 @@ export function ChatView({ sessionId }: Props) {
       value={{ viewType: chatViewType, setViewType: setAndPersistChatViewType }}
     >
       <div className="flex flex-1 flex-col overflow-hidden">
+        {/* Chat-level toolbar. Single button today (session tree); add
+            future per-session controls (export, copy session id, etc.)
+            here. Pinned above the scroll container so the affordance
+            stays reachable from any scroll position. */}
+        <div className="flex items-center justify-end gap-1 border-b border-neutral-800 bg-neutral-900/30 px-3 py-1">
+          <button
+            onClick={() => setTreeOpen(true)}
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+            title="Open session tree (navigate / fork from any prior point)"
+          >
+            <GitBranch size={11} />
+            Tree
+          </button>
+        </div>
         {/* Banner sits ABOVE the scroll container so it stays pinned to the top
             of the chat view regardless of how far the user has scrolled into a
             long session. Earlier we rendered it inside the scroll container,
@@ -153,6 +175,13 @@ export function ChatView({ sessionId }: Props) {
           </div>
         </div>
       </div>
+      {treeOpen && project !== undefined && (
+        <SessionTreePanel
+          sessionId={sessionId}
+          projectId={project.id}
+          onClose={() => setTreeOpen(false)}
+        />
+      )}
     </ChatDiffViewContext.Provider>
   );
 }
