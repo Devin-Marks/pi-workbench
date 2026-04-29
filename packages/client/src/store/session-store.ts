@@ -359,6 +359,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         delete nextStreamingText[sessionId];
         const nextActiveTool = { ...s.activeToolBySession };
         delete nextActiveTool[sessionId];
+        const nextAgentEndCount = { ...s.agentEndCountBySession };
+        delete nextAgentEndCount[sessionId];
+        const nextQueued = { ...s.queuedBySession };
+        delete nextQueued[sessionId];
         // Drop the session from any project's list it may live in.
         const byProject: Record<string, UnifiedSession[]> = {};
         for (const [pid, list] of Object.entries(s.byProject)) {
@@ -370,6 +374,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           bannerBySession: nextBanner,
           streamingTextBySession: nextStreamingText,
           activeToolBySession: nextActiveTool,
+          agentEndCountBySession: nextAgentEndCount,
+          queuedBySession: nextQueued,
           byProject,
           activeSessionId: s.activeSessionId === sessionId ? undefined : s.activeSessionId,
         };

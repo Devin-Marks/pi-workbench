@@ -44,10 +44,18 @@ export function ChangedFilesBadge({
         if (!cancelled) setCount(r.entries.length);
       })
       .catch((err: unknown) => {
-        // 404 → cold session with no live turn-diff; treat as 0.
-        if (!cancelled) {
-          if (err instanceof ApiError && err.status === 404) setCount(0);
-          else setCount(0);
+        if (cancelled) return;
+        // 404 → cold session with no live turn-diff; treat as 0
+        // silently. Other errors (500, network drops) shouldn't be
+        // mistaken for "no changes" — log so a server regression
+        // doesn't silently hide the badge.
+        if (err instanceof ApiError && err.status === 404) {
+          setCount(0);
+        } else {
+          if (typeof console !== "undefined") {
+            console.warn("[ChangedFilesBadge] turn-diff fetch failed:", err);
+          }
+          setCount(0);
         }
       });
     return () => {

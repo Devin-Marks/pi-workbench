@@ -215,6 +215,12 @@ function truncateHunksToBudget(hunks: HunkData[], budget: number): HunkData[] {
   const out: HunkData[] = [];
   let used = 0;
   for (const h of hunks) {
+    // First check guards "would adding this exceed budget?" but only
+    // after we've already emitted at least one hunk (so the
+    // first-hunk-blows-budget case still gets rendered, matching the
+    // doc-comment promise). Second check exits early once we're at
+    // or above budget on the way out — saves walking through any
+    // remaining tiny hunks.
     if (out.length > 0 && used + h.changes.length > budget) break;
     out.push(h);
     used += h.changes.length;

@@ -233,7 +233,10 @@ services:
               // ignore
             }
             resolveFn({ ok: false, reason: "timeout waiting for echo output" });
-          }, 8_000);
+            // 15s is generous — local round-trip is well under a second,
+            // but a CI runner spinning up node-pty in a freshly-built
+            // container can spike on the first PTY allocation.
+          }, 15_000);
           ws.addEventListener("open", () => {
             ws.send(JSON.stringify({ type: "resize", cols: 80, rows: 24 }));
             ws.send(JSON.stringify({ type: "input", data: "echo HELLO_FROM_DOCKER_TEST\n" }));

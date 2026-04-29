@@ -129,8 +129,16 @@ function QueuedMessages({ queued }: { queued: { steering: string[]; followUp: st
         queued ({all.length})
       </div>
       <ul className="space-y-1">
-        {all.map((q, i) => (
-          <li key={i} className="flex items-baseline gap-2 text-xs text-neutral-300">
+        {all.map((q) => (
+          // Key on (kind, text). Pi clears delivered queue items by
+          // emitting a smaller queue_update; index would shift and
+          // index-based keys would remount items into different DOM
+          // slots. Even with text duplicates the visual is identical
+          // — a re-mount is harmless.
+          <li
+            key={`${q.kind}:${q.text}`}
+            className="flex items-baseline gap-2 text-xs text-neutral-300"
+          >
             <span
               className={
                 q.kind === "steer"
