@@ -9,6 +9,7 @@ import { ProjectSidebar } from "./components/ProjectSidebar";
 import { ProjectPicker } from "./components/ProjectPicker";
 import { ChatView } from "./components/ChatView";
 import { ChatInput } from "./components/ChatInput";
+import { ChangedFilesBadge } from "./components/ChangedFilesBadge";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { FileBrowserPanel } from "./components/FileBrowserPanel";
 import { EditorPanel } from "./components/EditorPanel";
@@ -320,6 +321,14 @@ export function App() {
               ) : activeSessionId !== undefined ? (
                 <>
                   <ChatView sessionId={activeSessionId} />
+                  <ChangedFilesBadge
+                    sessionId={activeSessionId}
+                    alreadyOnChangesTab={filesOpen && rightTab === "changes"}
+                    onOpen={() => {
+                      if (!filesOpen) setFilesOpenPersisted(true);
+                      setRightTabPersisted("changes");
+                    }}
+                  />
                   <ChatInput sessionId={activeSessionId} />
                 </>
               ) : active ? (
