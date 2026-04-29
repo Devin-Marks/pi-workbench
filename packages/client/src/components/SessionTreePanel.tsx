@@ -37,10 +37,14 @@ interface NodeView extends SessionTreeEntry {
   siblings: number;
 }
 
+const MODEL_KEY_PREFIX = "pi-workbench/model/";
+
 export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
   const isStreaming = useSessionStore((s) => s.streamingBySession[sessionId] ?? false);
   const setActiveSession = useSessionStore((s) => s.setActiveSession);
   const loadSessionsForProject = useSessionStore((s) => s.loadSessionsForProject);
+  const reloadMessages = useSessionStore((s) => s.reloadMessages);
+  const setPendingDraft = useSessionStore((s) => s.setPendingDraft);
 
   const [tree, setTree] = useState<SessionTreeResponse | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -89,9 +93,14 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
     setError(undefined);
     try {
       await api.navigateSession(sessionId, entryId);
-      // SSE will replay the new branch as messages, but the tree
-      // panel needs a fresh fetch to update leafId / branchIds.
+      // Two refetches needed:
+      //   1. Tree panel — leafId / branchIds change, repaint highlight
+      //   2. Chat surface — messagesBySession is keyed by sessionId
+      //      and there's no SSE event for navigate, so without this
+      //      the chat stays stuck on the pre-navigate message list
+      //      and the user thinks the button did nothing.
       await refresh();
+      reloadMessages(sessionId);
     } catch (err) {
       setError(err instanceof ApiError ? err.code : (err as Error).message);
     } finally {
@@ -100,23 +109,60 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
   };
 
   /**
-   * Fork from the given entry: server writes a new .jsonl containing
-   * everything from the root to this entry, registers it as a fresh
-   * live session, and returns its summary. Switch the workbench to
-   * the new session and close the panel — the user then continues
-   * the conversation from the forked branch.
+   * Fork from the given entry. Two semantics depending on which kind
+   * of row it's called from:
+   *
+   *   - "branch from here" (assistant + non-message rows): server
+   *     forks AT entryId; the new session contains everything up to
+   *     and including this entry. Useful for "let me try something
+   *     different from this point in the assistant's reply."
+   *
+   *   - "edit & resubmit" (user-message rows, the common case):
+   *     server forks at the user message's PARENT, so the user
+   *     message is NOT in the new session's history. We then prefill
+   *     the chat input with the user message text via
+   *     setPendingDraft, so the user lands in an editable textarea
+   *     pre-populated with what they originally said. This matches
+   *     the ChatGPT-style "edit my message" flow most users expect.
+   *
+   * Either way we copy the source session's per-session model
+   * preference into the new session's localStorage key so the fork
+   * inherits the model the user picked on the source.
    */
-  const fork = async (entryId: string): Promise<void> => {
+  const fork = async (
+    entryId: string,
+    opts: { editDraft?: string; parentId?: string | null } = {},
+  ): Promise<void> => {
     if (busy) return;
     setBusy(true);
     setError(undefined);
     try {
-      const forked = await api.forkSession(sessionId, entryId);
-      // Refresh the project's session list so the new fork shows up
-      // in the sidebar before we set it active. Without this the
-      // active id points at a session the sidebar doesn't yet know
-      // about, which causes a flash of "no such session" until the
-      // next list poll.
+      // For the edit-and-resubmit flow, fork from the parent so the
+      // user message is excluded. parentId === null means "no parent"
+      // (root user message) — fall back to forking AT the message;
+      // empty session is the next-best landing.
+      const forkAt =
+        opts.parentId !== undefined && opts.parentId !== null ? opts.parentId : entryId;
+      const forked = await api.forkSession(sessionId, forkAt);
+      // Carry the per-session model choice across the fork. ChatInput
+      // re-applies whatever's in localStorage on session change, so
+      // copying the value before setActiveSession means the new
+      // session inherits the model without an extra API call.
+      try {
+        const sourceModel = localStorage.getItem(MODEL_KEY_PREFIX + sessionId);
+        if (sourceModel !== null && sourceModel.length > 0) {
+          localStorage.setItem(MODEL_KEY_PREFIX + forked.sessionId, sourceModel);
+        }
+      } catch {
+        // private-mode storage failure — non-fatal, user can pick
+        // the model again on the new session.
+      }
+      if (opts.editDraft !== undefined && opts.editDraft.length > 0) {
+        setPendingDraft(forked.sessionId, opts.editDraft);
+      }
+      // Refresh the sidebar's session list before switching so the
+      // new id is known by the time the active-id flip happens —
+      // otherwise the sidebar briefly shows "no such session."
       await loadSessionsForProject(projectId);
       setActiveSession(forked.sessionId);
       onClose();
@@ -184,7 +230,16 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
                 node={n}
                 disabled={busy}
                 onNavigate={() => void navigate(n.id)}
-                onFork={() => void fork(n.id)}
+                onFork={() =>
+                  void fork(n.id, {
+                    // User-message rows: fork BEFORE the message and
+                    // prefill the input with its text. Other rows
+                    // fork AT the entry — pass nothing.
+                    ...(n.type === "message" && n.role === "user"
+                      ? { editDraft: n.preview ?? "", parentId: n.parentId }
+                      : {}),
+                  })
+                }
               />
             ))}
           </ul>
@@ -205,6 +260,12 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
   );
 }
 
+// Indent is capped so deeply-nested branches don't eat the entire
+// horizontal width of the modal. Past the cap, depth is conveyed by
+// the row prefix ("⤷N" badge) instead of further indent.
+const MAX_INDENT_DEPTH = 6;
+const INDENT_PX = 14;
+
 function TreeRow({
   node,
   disabled,
@@ -216,14 +277,18 @@ function TreeRow({
   onNavigate: () => void;
   onFork: () => void;
 }) {
-  const indent = node.depth * 16;
+  const indent = Math.min(node.depth, MAX_INDENT_DEPTH) * INDENT_PX;
   const isUserMessage = node.type === "message" && node.role === "user";
   const dim = !node.onActivePath;
   const labelText = entryTypeLabel(node);
+  const overflowDepth = node.depth > MAX_INDENT_DEPTH ? node.depth - MAX_INDENT_DEPTH : 0;
   return (
-    <li className="group" style={{ paddingLeft: `${indent}px` }}>
+    // min-w-0 on the wrapper so flex children inside (the row's
+    // content column with `truncate`) actually shrink below their
+    // content width instead of overflowing the modal.
+    <li className="group min-w-0" style={{ paddingLeft: `${indent}px` }}>
       <div
-        className={`flex items-start gap-2 rounded border px-2 py-1.5 ${
+        className={`flex min-w-0 items-start gap-1.5 rounded border px-2 py-1.5 ${
           node.isLeaf
             ? "border-emerald-700/60 bg-emerald-900/10"
             : node.onActivePath
@@ -231,13 +296,46 @@ function TreeRow({
               : "border-neutral-800/50 bg-transparent"
         } ${dim ? "opacity-60" : ""}`}
       >
+        {/* Action buttons on the LEFT so they're predictably reachable
+            regardless of preview length, and so deeply-nested rows
+            don't shove them off the right edge. Always visible —
+            previously hidden behind group-hover, which made
+            discoverability rough on touch + small screens. */}
+        <div className="flex shrink-0 items-center gap-0.5 pt-0.5">
+          {!node.isLeaf ? (
+            <button
+              onClick={onNavigate}
+              disabled={disabled}
+              className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-40"
+              title="Navigate the session leaf to this entry"
+            >
+              <Navigation size={11} />
+            </button>
+          ) : (
+            // Placeholder keeps row heights consistent when the leaf
+            // hides its navigate button.
+            <span className="inline-block w-[22px]" aria-hidden="true" />
+          )}
+          {isUserMessage ? (
+            <button
+              onClick={onFork}
+              disabled={disabled}
+              className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-emerald-300 disabled:opacity-40"
+              title="Fork BEFORE this message — opens a new session with the message text loaded into the input for editing."
+            >
+              <GitBranch size={11} />
+            </button>
+          ) : (
+            <span className="inline-block w-[22px]" aria-hidden="true" />
+          )}
+        </div>
         <button
           onClick={onNavigate}
           disabled={disabled || node.isLeaf}
-          className="flex flex-1 flex-col items-start gap-0.5 text-left disabled:cursor-default"
+          className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left disabled:cursor-default"
           title={node.isLeaf ? "Current leaf" : "Navigate the session leaf to this entry"}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <span
               className={`rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider ${
                 node.role === "user"
@@ -253,6 +351,14 @@ function TreeRow({
             >
               {labelText}
             </span>
+            {overflowDepth > 0 && (
+              <span
+                className="rounded bg-neutral-900 px-1.5 py-0.5 text-[9px] text-neutral-500"
+                title={`Nesting depth ${node.depth} (indent capped at ${MAX_INDENT_DEPTH})`}
+              >
+                ⤷{overflowDepth}
+              </span>
+            )}
             {node.label !== undefined && node.label.length > 0 && (
               <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[9px] text-neutral-300">
                 ★ {node.label}
@@ -276,31 +382,13 @@ function TreeRow({
             </span>
           </div>
           {node.preview !== undefined && (
-            <p className="truncate text-[11px] text-neutral-300">{node.preview}</p>
+            // w-full + min-w-0 on the parent button is what lets
+            // `truncate` actually clip — without min-w-0 the flex
+            // child stretches to its content width and pushes the
+            // row past the modal edge.
+            <p className="w-full truncate text-[11px] text-neutral-300">{node.preview}</p>
           )}
         </button>
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
-          {!node.isLeaf && (
-            <button
-              onClick={onNavigate}
-              disabled={disabled}
-              className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200 disabled:opacity-40"
-              title="Navigate to this entry"
-            >
-              <Navigation size={11} />
-            </button>
-          )}
-          {isUserMessage && (
-            <button
-              onClick={onFork}
-              disabled={disabled}
-              className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-emerald-300 disabled:opacity-40"
-              title="Fork from this user message into a new session"
-            >
-              <GitBranch size={11} />
-            </button>
-          )}
-        </div>
       </div>
     </li>
   );

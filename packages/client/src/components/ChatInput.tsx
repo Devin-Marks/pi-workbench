@@ -279,6 +279,17 @@ export function ChatInput({ sessionId }: Props) {
     });
   }, [sessionId]);
 
+  // Consume any pending input draft set by the session-tree's
+  // edit-and-resubmit fork flow. One-shot: clear on the store side
+  // so a remount of ChatInput doesn't re-apply it.
+  const pendingDraft = useSessionStore((s) => s.pendingDraftBySession[sessionId]);
+  const consumePendingDraft = useSessionStore((s) => s.consumePendingDraft);
+  useEffect(() => {
+    if (pendingDraft === undefined) return;
+    setText(pendingDraft);
+    consumePendingDraft(sessionId);
+  }, [pendingDraft, sessionId, consumePendingDraft]);
+
   const onModelChange = async (value: string): Promise<void> => {
     setModelChoice(value);
     if (value === "") {

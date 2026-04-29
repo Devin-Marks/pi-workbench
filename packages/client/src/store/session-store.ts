@@ -120,6 +120,13 @@ interface SessionState {
   activeSessionId: string | undefined;
   /** Per-session SSE-fed message arrays, keyed by sessionId. */
   messagesBySession: Record<string, AgentMessageLike[]>;
+  /**
+   * Per-session pending input draft set by setPendingDraft and
+   * consumed by ChatInput's session-change effect (one-shot). Used
+   * to seed the input after fork-with-edit so the user message
+   * being retried lands in the textarea ready to mutate.
+   */
+  pendingDraftBySession: Record<string, string>;
   /** Per-session streaming state from snapshot/agent_start/agent_end. */
   streamingBySession: Record<string, boolean>;
   /** Per-session last-known toolEvent + retry banners (lightly modelled). */
@@ -168,6 +175,25 @@ interface SessionState {
   setActiveSession: (sessionId: string | undefined) => void;
   openStream: (sessionId: string) => void;
   closeStream: (sessionId: string) => void;
+  /**
+   * Force a one-shot messages refetch for a session, independent of
+   * the SSE event loop. Used after operations that change the
+   * server-side leaf without firing an agent event (e.g. tree
+   * navigation) — without this, the chat surface stays stuck on the
+   * pre-navigate message list until the next agent_end.
+   */
+  reloadMessages: (sessionId: string) => void;
+  /**
+   * Pre-fill the chat input on next render for `sessionId`. Used by
+   * the session tree's "edit & resubmit" fork flow: we fork from a
+   * user message's parent (so the user message is NOT in the new
+   * session's history) then prefill the input with the original
+   * text so the user can edit and send. Consumed once by
+   * ChatInput's session-change effect and cleared via
+   * `consumePendingDraft`.
+   */
+  setPendingDraft: (sessionId: string, draft: string) => void;
+  consumePendingDraft: (sessionId: string) => void;
   sendPrompt: (sessionId: string, text: string, attachments?: File[]) => Promise<void>;
   sendSteer: (sessionId: string, text: string, mode?: "steer" | "followUp") => Promise<void>;
   abortSession: (sessionId: string) => Promise<void>;
@@ -178,6 +204,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   byProject: {},
   activeSessionId: localStorage.getItem(ACTIVE_SESSION_KEY) ?? undefined,
   messagesBySession: {},
+  pendingDraftBySession: {},
   streamingBySession: {},
   bannerBySession: {},
   streamingTextBySession: {},
@@ -261,6 +288,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       throw err;
     }
   },
+
+  reloadMessages: (sessionId) => {
+    // Goes through the same coalesced refetch path the SSE event
+    // loop uses, so a navigate-then-stream race can't double-fetch.
+    scheduleMessagesRefetch(set, sessionId);
+  },
+
+  setPendingDraft: (sessionId, draft) =>
+    set((s) => ({
+      pendingDraftBySession: { ...s.pendingDraftBySession, [sessionId]: draft },
+    })),
+
+  consumePendingDraft: (sessionId) =>
+    set((s) => {
+      if (s.pendingDraftBySession[sessionId] === undefined) return {};
+      const next = { ...s.pendingDraftBySession };
+      delete next[sessionId];
+      return { pendingDraftBySession: next };
+    }),
 
   setActiveSession: (sessionId) => {
     if (sessionId !== undefined) localStorage.setItem(ACTIVE_SESSION_KEY, sessionId);
