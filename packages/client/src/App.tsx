@@ -244,7 +244,7 @@ export function App() {
     <div className="flex h-screen flex-col bg-neutral-950 text-neutral-100">
       <header className="flex items-center justify-between border-b border-neutral-800 px-4 py-2">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold tracking-tight">pi web ui</span>
+          <span className="text-sm font-semibold tracking-tight">pi-workbench</span>
           {projects.length > 0 && (
             <select
               value={activeProjectId ?? ""}

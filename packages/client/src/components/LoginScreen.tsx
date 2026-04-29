@@ -20,7 +20,7 @@ export function LoginScreen() {
         className="w-full max-w-sm space-y-4 rounded-lg border border-neutral-800 bg-neutral-900 p-6 shadow-lg"
       >
         <header className="space-y-1">
-          <h1 className="text-xl font-semibold tracking-tight">pi web ui</h1>
+          <h1 className="text-xl font-semibold tracking-tight">pi-workbench</h1>
           <p className="text-sm text-neutral-400">Enter the workbench password to continue.</p>
         </header>
         <label className="block space-y-1.5">
