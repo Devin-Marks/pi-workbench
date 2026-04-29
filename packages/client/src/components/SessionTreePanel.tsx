@@ -260,11 +260,13 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
   );
 }
 
-// Indent is capped so deeply-nested branches don't eat the entire
-// horizontal width of the modal. Past the cap, depth is conveyed by
-// the row prefix ("⤷N" badge) instead of further indent.
-const MAX_INDENT_DEPTH = 6;
-const INDENT_PX = 14;
+// Indent is role-based (see depthForEntry): user=0, assistant=1,
+// tool=2. The cap is defensive in case a future SDK entry type
+// reports a deeper role, but in practice depth never exceeds 2.
+// 18 px per step gives enough visual hierarchy at 3 levels without
+// crowding the modal.
+const MAX_INDENT_DEPTH = 4;
+const INDENT_PX = 18;
 
 function TreeRow({
   node,
@@ -281,7 +283,6 @@ function TreeRow({
   const isUserMessage = node.type === "message" && node.role === "user";
   const dim = !node.onActivePath;
   const labelText = entryTypeLabel(node);
-  const overflowDepth = node.depth > MAX_INDENT_DEPTH ? node.depth - MAX_INDENT_DEPTH : 0;
   return (
     // min-w-0 on the wrapper so flex children inside (the row's
     // content column with `truncate`) actually shrink below their
@@ -351,14 +352,6 @@ function TreeRow({
             >
               {labelText}
             </span>
-            {overflowDepth > 0 && (
-              <span
-                className="rounded bg-neutral-900 px-1.5 py-0.5 text-[9px] text-neutral-500"
-                title={`Nesting depth ${node.depth} (indent capped at ${MAX_INDENT_DEPTH})`}
-              >
-                ⤷{overflowDepth}
-              </span>
-            )}
             {node.label !== undefined && node.label.length > 0 && (
               <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[9px] text-neutral-300">
                 ★ {node.label}
@@ -399,7 +392,33 @@ function TreeRow({
  * order suitable for a flat indented list. Tracks which entries are
  * on the active branch path (for highlighting) and how many siblings
  * each branchpoint has (so we can hint at divergences).
+ *
+ * Indent depth is **role-based, not parent-chain-based**. The
+ * conversation flow we want users to see is:
+ *
+ *   user (0) ────────── flush left
+ *     assistant (1) ── one step in
+ *       tool (2) ──── two steps in
+ *
+ * Using the literal parentId chain depth would push every later
+ * message progressively further right (depth grows monotonically
+ * with conversation length) which is meaningless visually. Branches
+ * are still visible via the `⑂ N` siblings badge on the diverging
+ * parent — repeated user messages at depth 0 read as "different
+ * attempts at the same turn", which is exactly what they are.
+ *
+ * Non-message entries (compaction, branch_summary, model_change,
+ * etc.) are pinned at depth 0 — they're meta events, not part of
+ * the user/assistant exchange.
  */
+function depthForEntry(entry: SessionTreeEntry): number {
+  if (entry.type !== "message") return 0;
+  if (entry.role === "user") return 0;
+  if (entry.role === "tool") return 2;
+  // assistant + system + anything else the SDK might add later
+  return 1;
+}
+
 function flattenTree(tree: SessionTreeResponse): NodeView[] {
   const childrenByParent = new Map<string | null, SessionTreeEntry[]>();
   for (const e of tree.entries) {
@@ -415,22 +434,24 @@ function flattenTree(tree: SessionTreeResponse): NodeView[] {
   }
   const onPath = new Set(tree.branchIds);
   const out: NodeView[] = [];
-  const visit = (parentId: string | null, depth: number): void => {
+  // DFS traversal preserves parent → child order while
+  // `depthForEntry` decouples visual indent from chain depth.
+  const visit = (parentId: string | null): void => {
     const list = childrenByParent.get(parentId);
     if (list === undefined) return;
     const siblings = list.length;
     for (const e of list) {
       out.push({
         ...e,
-        depth,
+        depth: depthForEntry(e),
         onActivePath: onPath.has(e.id),
         isLeaf: tree.leafId === e.id,
         siblings,
       });
-      visit(e.id, depth + 1);
+      visit(e.id);
     }
   };
-  visit(null, 0);
+  visit(null);
   return out;
 }
 
