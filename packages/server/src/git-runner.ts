@@ -572,13 +572,20 @@ export interface PullOptions {
  * stderr is surfaced verbatim (e.g. "CONFLICT (content): Merge
  * conflict in foo.ts") so the user can drop to the integrated
  * terminal to fix.
+ *
+ * Argument grammar: the second positional is a branch ONLY when the
+ * first positional is also given. `git pull <name>` is interpreted
+ * as a remote, not a branch — so when the caller passes only `branch`
+ * we default `remote` to `"origin"` rather than producing a
+ * misleading "remote not found" error.
  */
 export async function pull(cwd: string, opts: PullOptions = {}): Promise<{ stdout: string }> {
   const args = ["pull"];
   if (opts.rebase === true) args.push("--rebase");
-  if (opts.remote !== undefined) {
-    assertRemoteName(opts.remote);
-    args.push(opts.remote);
+  const remote = opts.remote ?? (opts.branch !== undefined ? "origin" : undefined);
+  if (remote !== undefined) {
+    assertRemoteName(remote);
+    args.push(remote);
   }
   if (opts.branch !== undefined) {
     assertBranchName(opts.branch);

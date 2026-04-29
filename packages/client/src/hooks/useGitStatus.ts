@@ -95,12 +95,17 @@ export function useGitStatus(projectId: string | undefined): {
   // during streaming and only fires once when isStreaming flips back
   // — this catches the same edge but reacts to the explicit signal,
   // closing the worst-case 5s lag right after the agent stops.
+  // Include `activeSessionId` in the deps: when the user switches
+  // active sessions inside the same project, `agentEndCount` may
+  // happen to be the same number for both sessions and React would
+  // skip the effect — losing the refresh that should fire because
+  // the new session has a different (post-agent-end) state.
   useEffect(() => {
     if (projectId === undefined) return;
     if (agentEndCount === 0) return; // initial value, no agent_end yet
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, agentEndCount]);
+  }, [projectId, activeSessionId, agentEndCount]);
 
   return { status, error, refresh };
 }

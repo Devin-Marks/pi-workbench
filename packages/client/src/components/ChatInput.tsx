@@ -91,6 +91,13 @@ export function ChatInput({ sessionId }: Props) {
   // doesn't force a re-render on every Esc.
   const lastEscRef = useRef<number>(0);
 
+  // Reset the double-Esc latch on session change so a stray Esc
+  // logged against session A can't combine with a fresh Esc on
+  // session B and abort the wrong run.
+  useEffect(() => {
+    lastEscRef.current = 0;
+  }, [sessionId]);
+
   // Model selector state. We only know the user's chosen model client-side
   // (the SDK doesn't expose "current model" over REST), so persist the
   // last-applied selection in localStorage per session and re-apply on
@@ -157,15 +164,17 @@ export function ChatInput({ sessionId }: Props) {
       return;
     }
     if (e.key === "Escape") {
+      // Only intercept Esc while the agent is running. When idle, let
+      // it bubble — modals or other ancestors might want it. We also
+      // skip the timestamp update when idle so a stray Esc logged on
+      // an idle session can't combine with a fresh Esc moments later
+      // when the session starts streaming.
+      if (!isStreaming) return;
       e.preventDefault();
       const now = Date.now();
       const elapsed = now - lastEscRef.current;
       lastEscRef.current = now;
-      // Second Esc inside the window AND while the agent is running
-      // → abort. Esc-while-idle is harmless (no run to abort) and
-      // doesn't stash a "pending double-Esc" that could surprise the
-      // user later.
-      if (elapsed < DOUBLE_ESC_WINDOW_MS && isStreaming) {
+      if (elapsed < DOUBLE_ESC_WINDOW_MS) {
         lastEscRef.current = 0;
         void abortSession(sessionId);
       }
