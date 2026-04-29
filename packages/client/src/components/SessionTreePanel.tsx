@@ -28,13 +28,29 @@ interface Props {
 }
 
 interface NodeView extends SessionTreeEntry {
+  /** Role-based indent step (user=0, assistant=1, tool=2). */
   depth: number;
+  /**
+   * Branch nesting level — 0 for the original conversation, 1 for
+   * its first divergence, 2 for a divergence within that, etc. Adds
+   * a small base offset to the visual indent so re-asks at the same
+   * role-depth (e.g. two `user` messages from the same parent) sit
+   * at visibly different x-positions instead of collapsing into the
+   * same column.
+   */
+  branchLevel: number;
   /** True when this entry sits on the path from root → leaf. */
   onActivePath: boolean;
   /** True when this entry IS the leaf. */
   isLeaf: boolean;
   /** Number of sibling branches at this point (for the divider hint). */
   siblings: number;
+  /**
+   * True when this row is the FIRST entry of a branch with
+   * branchLevel > 0 — used to render a "branch N" badge so the
+   * divergence is explicit, not just inferred from the offset.
+   */
+  isBranchHead: boolean;
 }
 
 const MODEL_KEY_PREFIX = "pi-workbench/model/";
@@ -260,13 +276,18 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
   );
 }
 
-// Indent is role-based (see depthForEntry): user=0, assistant=1,
-// tool=2. The cap is defensive in case a future SDK entry type
-// reports a deeper role, but in practice depth never exceeds 2.
-// 18 px per step gives enough visual hierarchy at 3 levels without
-// crowding the modal.
+// Role-based indent (depthForEntry): user=0, assistant=1, tool=2.
+// 18 px per step is room enough for 3 levels without crowding.
 const MAX_INDENT_DEPTH = 4;
 const INDENT_PX = 18;
+// Per-branch base offset added on top of the role indent so two
+// re-asks at the same role level (both depth 0) sit at different
+// x-positions when they belong to different branches. 10 px is
+// small enough not to consume the modal width even with 6+
+// branches, but visible at a glance. Capped to keep the deepest
+// branches from running off the right edge.
+const BRANCH_OFFSET_PX = 10;
+const MAX_BRANCH_LEVEL = 8;
 
 function TreeRow({
   node,
@@ -279,7 +300,9 @@ function TreeRow({
   onNavigate: () => void;
   onFork: () => void;
 }) {
-  const indent = Math.min(node.depth, MAX_INDENT_DEPTH) * INDENT_PX;
+  const indent =
+    Math.min(node.depth, MAX_INDENT_DEPTH) * INDENT_PX +
+    Math.min(node.branchLevel, MAX_BRANCH_LEVEL) * BRANCH_OFFSET_PX;
   const isUserMessage = node.type === "message" && node.role === "user";
   const dim = !node.onActivePath;
   const labelText = entryTypeLabel(node);
@@ -296,6 +319,16 @@ function TreeRow({
               ? "border-neutral-700 bg-neutral-900/40"
               : "border-neutral-800/50 bg-transparent"
         } ${dim ? "opacity-60" : ""}`}
+        // Coloured left-border for non-original branches so the
+        // divergence is visible even when scrolled past the branch
+        // head. `branchLevel` cycles through a small palette so
+        // sibling branches at the same level are distinguishable
+        // at a glance.
+        style={
+          node.branchLevel > 0
+            ? { boxShadow: `inset 3px 0 0 ${branchAccent(node.branchLevel)}` }
+            : undefined
+        }
       >
         {/* Action buttons on the LEFT so they're predictably reachable
             regardless of preview length, and so deeply-nested rows
@@ -352,6 +385,18 @@ function TreeRow({
             >
               {labelText}
             </span>
+            {node.isBranchHead && (
+              <span
+                className="rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider"
+                style={{
+                  background: `${branchAccent(node.branchLevel)}33`,
+                  color: branchAccent(node.branchLevel),
+                }}
+                title="First entry of a divergent branch"
+              >
+                branch {node.branchLevel}
+              </span>
+            )}
             {node.label !== undefined && node.label.length > 0 && (
               <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[9px] text-neutral-300">
                 ★ {node.label}
@@ -434,25 +479,53 @@ function flattenTree(tree: SessionTreeResponse): NodeView[] {
   }
   const onPath = new Set(tree.branchIds);
   const out: NodeView[] = [];
-  // DFS traversal preserves parent → child order while
-  // `depthForEntry` decouples visual indent from chain depth.
-  const visit = (parentId: string | null): void => {
+  // DFS traversal: each subtree carries the branchLevel from its
+  // entry point. Within a parent's children, the FIRST child
+  // continues the parent's branch (same level); each subsequent
+  // child starts a new divergence (level + 1) and propagates that
+  // through its descendants.
+  const visit = (parentId: string | null, branchLevel: number): void => {
     const list = childrenByParent.get(parentId);
     if (list === undefined) return;
     const siblings = list.length;
-    for (const e of list) {
+    list.forEach((e, idx) => {
+      const childLevel = idx === 0 ? branchLevel : branchLevel + 1;
+      const isBranchHead = idx > 0 && childLevel > 0;
       out.push({
         ...e,
         depth: depthForEntry(e),
+        branchLevel: childLevel,
         onActivePath: onPath.has(e.id),
         isLeaf: tree.leafId === e.id,
         siblings,
+        isBranchHead,
       });
-      visit(e.id);
-    }
+      visit(e.id, childLevel);
+    });
   };
-  visit(null);
+  visit(null, 0);
   return out;
+}
+
+/**
+ * Stable per-branch accent color. Used for the left-border stripe
+ * and the "branch N" badge so sibling branches are colour-coded.
+ * Cycles through a small palette so the same level always renders
+ * the same color across re-fetches; reads on dark backgrounds.
+ * `branchLevel === 0` (the original conversation) doesn't get an
+ * accent — the row's normal border serves as its baseline.
+ */
+const BRANCH_PALETTE = [
+  "#f59e0b", // amber-500
+  "#0ea5e9", // sky-500
+  "#ec4899", // pink-500
+  "#10b981", // emerald-500
+  "#8b5cf6", // violet-500
+  "#f97316", // orange-500
+];
+function branchAccent(level: number): string {
+  if (level <= 0) return "transparent";
+  return BRANCH_PALETTE[(level - 1) % BRANCH_PALETTE.length]!;
 }
 
 function entryTypeLabel(node: SessionTreeEntry): string {
