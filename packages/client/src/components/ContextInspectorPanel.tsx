@@ -189,43 +189,35 @@ function TokenSummary({
           best-effort and may differ from the provider's true count. */}
       <ContextBreakdown breakdown={breakdown} contextWindow={cu.contextWindow} />
 
-      {/* Lifetime cost + token totals (per-turn sum, NOT current
-          context). Cache reads/writes are billing categories — they
-          don't represent context occupancy and live here so users
-          can reason about cost separately from context fill. */}
+      {/* Last turn + total cost. The earlier "lifetime input/output/
+          cacheRead/cacheWrite" grid was confusing because per-turn
+          input includes the entire re-sent context (LLMs are
+          stateless — every turn re-sends prior history). For a
+          5-turn session at 4.8k context, lifetime input compounds
+          to ~15-40k+ depending on caching, which read as a
+          contradiction next to "context window: 4.8k." We dropped
+          the grid; the per-turn table below has the same data with
+          the right per-row context. The two numbers worth showing
+          at a glance are: how big was the LAST turn (per-turn cost
+          intuition) and how much have we spent total. */}
       <div className="border-t border-neutral-800 pt-1.5">
-        <div className="mb-0.5 text-[10px] uppercase tracking-wider text-neutral-500">
-          Lifetime (per-turn sum)
-        </div>
-        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
-          <div className="flex justify-between">
-            <span className="text-neutral-500">Input</span>
-            <span className="font-mono text-neutral-200">
-              {formatTokens(data.totalInputTokens)}
+        {data.turns.length > 0 && (
+          <div className="mb-0.5 flex items-center justify-between text-[11px]">
+            <span className="text-neutral-500">Last turn</span>
+            <span
+              className="font-mono text-neutral-300"
+              title="Tokens consumed by the most recent assistant turn (in / out / cache-read)"
+            >
+              {(() => {
+                const last = data.turns[data.turns.length - 1]!;
+                return `${formatTokens(last.inputTokens)} in · ${formatTokens(last.outputTokens)} out · ${formatTokens(last.cacheReadTokens)} cache`;
+              })()}
             </span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-neutral-500">Output</span>
-            <span className="font-mono text-neutral-200">
-              {formatTokens(data.totalOutputTokens)}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-neutral-500">Cache read</span>
-            <span className="font-mono text-neutral-200">
-              {formatTokens(data.totalCacheReadTokens)}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-neutral-500">Cache write</span>
-            <span className="font-mono text-neutral-200">
-              {formatTokens(data.totalCacheWriteTokens)}
-            </span>
-          </div>
-          <div className="col-span-2 flex justify-between border-t border-neutral-800 pt-0.5 font-medium">
-            <span className="text-neutral-300">Cost</span>
-            <span className="font-mono text-emerald-400">{formatUsd(data.totalCost)}</span>
-          </div>
+        )}
+        <div className="flex items-center justify-between text-[11px] font-medium">
+          <span className="text-neutral-300">Total cost</span>
+          <span className="font-mono text-emerald-400">{formatUsd(data.totalCost)}</span>
         </div>
       </div>
 
