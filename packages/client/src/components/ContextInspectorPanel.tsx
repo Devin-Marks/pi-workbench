@@ -235,13 +235,25 @@ function TokenSummary({
         <div className="flex items-center justify-between text-[11px]">
           <span
             className="text-neutral-500"
-            title="Sum of usage.input across every turn — full prompts including re-sent prior context. Useful for billing analysis, not for understanding what the agent is doing."
+            title="Sum of every turn's full prompt (input + cacheRead + cacheWrite). Each turn re-sends prior context, so this grows ~quadratically with conversation length — that's normal LLM behavior, not a bug. Useful for billing analysis."
           >
             Prompt billed (lifetime)
           </span>
-          <span className="font-mono text-neutral-400">
-            {formatTokens(data.totalInputTokens)} in · {formatTokens(data.totalCacheReadTokens)} cR
-            · {formatTokens(data.totalCacheWriteTokens)} cW
+          {/* Single sum that matches the per-turn Prompt column's
+              formula, so the lifetime row equals sum-of-rows. Hover
+              for the input/cR/cW breakdown — same pattern as the
+              per-turn cell. The previous format showed the three
+              components separately and read as three independent
+              metrics, inviting mental-math errors. */}
+          <span
+            className="font-mono text-neutral-400"
+            title={`input ${formatTokens(data.totalInputTokens)} + cR ${formatTokens(
+              data.totalCacheReadTokens,
+            )} + cW ${formatTokens(data.totalCacheWriteTokens)}`}
+          >
+            {formatTokens(
+              data.totalInputTokens + data.totalCacheReadTokens + data.totalCacheWriteTokens,
+            )}
           </span>
         </div>
         <div className="flex items-center justify-between text-[11px]">
