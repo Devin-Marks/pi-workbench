@@ -56,7 +56,13 @@ ARG PGID=1000
 # `pi`, otherwise `addgroup -g 1000` fails with "gid '1000' in use".
 # `|| true` keeps the build green on any future base image that drops
 # the node user.
-RUN apk add --no-cache tini && \
+#
+# Runtime tools the agent needs:
+#   - git: status / diff / commit / push / etc. — the GitPanel routes
+#     and the agent's `bash` tool both expect git on PATH.
+#   - ripgrep: pi's `grep` tool delegates to ripgrep when present.
+#     Without it, code search inside the agent silently degrades.
+RUN apk add --no-cache tini git ripgrep && \
     (deluser node 2>/dev/null || true) && \
     (delgroup node 2>/dev/null || true) && \
     addgroup -g $PGID pi && \
