@@ -72,17 +72,17 @@
   color: #a3a3a3;
 }
 
-/* Single-column gutter. react-diff-view's unified mode renders TWO
-   `<col class="diff-gutter-col">` elements + two `<td.diff-gutter>`
-   per row (old + new line number). Our `renderGutter` callback in
-   `DiffBlock.tsx` returns null for the `side: "old"` slot, so the
-   first cell in each row is empty; we collapse the column entirely
-   to recover the visual real-estate. `:first-of-type` pinned to the
-   diff-gutter class so we only hide the first GUTTER column, not
-   any other first-of-type cell that happens to share an ancestor. */
-.pi-diff-block .diff-gutter-col:first-of-type {
+/* Single-column gutter (UNIFIED ONLY). react-diff-view's unified
+   mode renders TWO `<col class="diff-gutter-col">` elements + two
+   `<td.diff-gutter>` per row (old + new line number). Our
+   `renderUnifiedGutter` callback in `DiffBlock.tsx` returns null
+   for the `side: "old"` slot, so the first cell in each row is
+   empty; we collapse the column entirely to recover the visual
+   real-estate. Scope to `.pi-diff-unified` so split-mode diffs
+   keep both gutters visible. */
+.pi-diff-unified .diff-gutter-col:first-of-type {
   width: 0;
 }
-.pi-diff-block td.diff-gutter:first-of-type {
+.pi-diff-unified td.diff-gutter:first-of-type {
   display: none;
 }

@@ -1,8 +1,22 @@
 import { useEffect, useState } from "react";
-import { FileDiff, RefreshCw } from "lucide-react";
+import { Columns2, FileDiff, RefreshCw, Rows2 } from "lucide-react";
 import { api, ApiError, type TurnDiffEntry } from "../lib/api-client";
 import { useSessionStore } from "../store/session-store";
 import { DiffBlock } from "./DiffBlock";
+
+type ViewType = "unified" | "split";
+const VIEW_TYPE_KEY = "pi.turnDiff.viewType";
+
+function readPersistedViewType(): ViewType {
+  // localStorage can throw in private browsing on some browsers — fall
+  // back silently to the default rather than crashing the panel.
+  try {
+    const v = localStorage.getItem(VIEW_TYPE_KEY);
+    return v === "split" ? "split" : "unified";
+  } catch {
+    return "unified";
+  }
+}
 
 /**
  * Shows the aggregated set of file changes from the current session's
@@ -21,8 +35,13 @@ import { DiffBlock } from "./DiffBlock";
  */
 export function TurnDiffPanel() {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
-  const messagesLength = useSessionStore((s) =>
-    activeSessionId !== undefined ? (s.messagesBySession[activeSessionId]?.length ?? 0) : 0,
+  // Refresh the diff once per agent_end via the explicit counter the
+  // session-store bumps on every terminal event. Same signal App.tsx
+  // uses for the file-tree refresh — keeps both panels in lockstep
+  // and avoids the messages-length proxy's false positives from
+  // mid-turn refetches.
+  const agentEndCount = useSessionStore((s) =>
+    activeSessionId !== undefined ? (s.agentEndCountBySession[activeSessionId] ?? 0) : 0,
   );
   const isStreaming = useSessionStore((s) =>
     activeSessionId !== undefined ? (s.streamingBySession[activeSessionId] ?? false) : false,
@@ -38,6 +57,17 @@ export function TurnDiffPanel() {
   const [error, setError] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [viewType, setViewType] = useState<ViewType>(readPersistedViewType);
+
+  const setAndPersistViewType = (next: ViewType): void => {
+    setViewType(next);
+    try {
+      localStorage.setItem(VIEW_TYPE_KEY, next);
+    } catch {
+      // Private-mode storage failure: choice still applies for this
+      // session, just won't survive a reload.
+    }
+  };
 
   const refresh = async (): Promise<void> => {
     if (activeSessionId === undefined) return;
@@ -77,7 +107,7 @@ export function TurnDiffPanel() {
     if (activeSessionId === undefined || isStreaming) return;
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSessionId, messagesLength, isStreaming]);
+  }, [activeSessionId, agentEndCount, isStreaming]);
 
   if (activeSessionId === undefined) {
     return (
@@ -99,13 +129,22 @@ export function TurnDiffPanel() {
             </span>
           )}
         </div>
-        <button
-          onClick={() => void refresh()}
-          className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
-          title="Refresh diff"
-        >
-          <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setAndPersistViewType(viewType === "split" ? "unified" : "split")}
+            className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+            title={viewType === "split" ? "Switch to unified view" : "Switch to side-by-side view"}
+          >
+            {viewType === "split" ? <Rows2 size={13} /> : <Columns2 size={13} />}
+          </button>
+          <button
+            onClick={() => void refresh()}
+            className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+            title="Refresh diff"
+          >
+            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+          </button>
+        </div>
       </div>
       {error !== undefined && (
         <div className="border-b border-red-700/40 bg-red-900/20 px-3 py-1.5 text-[11px] text-red-300">
@@ -145,7 +184,7 @@ export function TurnDiffPanel() {
                   <span className="text-red-400">−{entry.deletions}</span>
                 </span>
               </button>
-              {open && <DiffBlock diff={entry.diff} />}
+              {open && <DiffBlock diff={entry.diff} viewType={viewType} />}
             </div>
           );
         })}

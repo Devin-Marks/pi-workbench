@@ -2,13 +2,12 @@ import { Diff, Hunk, parseDiff, type FileData, type RenderGutter } from "react-d
 import "react-diff-view/style/index.css";
 
 /**
- * Single-column gutter renderer. `react-diff-view`'s default
- * unified mode renders TWO gutter columns side-by-side (old +
- * new), which is noisy for our narrow chat / right-pane layouts.
- * We collapse to one column by:
- *   1. Returning `null` for the `side: "old"` slot so the cell is
- *      empty (CSS in `index.css` then hides the column entirely).
- *   2. Rendering ONE line number on the `side: "new"` slot per row.
+ * Gutter renderer for unified-mode diffs. `react-diff-view`'s
+ * default unified mode renders TWO gutter columns (old + new) on
+ * every row, which is noisy in our narrow layouts. We collapse to
+ * one column by returning `null` for `side: "old"` (CSS in
+ * `index.css`, scoped to `.pi-diff-unified`, then hides the column
+ * entirely) and rendering the line number on `side: "new"`.
  *
  * gitdiff-parser's `ChangeData` is a discriminated union with
  * different shapes per type:
@@ -16,16 +15,28 @@ import "react-diff-view/style/index.css";
  *     numbers; we show new since it matches the post-edit file).
  *   - `insert`: just `lineNumber` (the new file's line).
  *   - `delete`: just `lineNumber` (the old file's line).
- *
- * Picking the only number available per row keeps the gutter
- * meaningful for every line type — removed lines still get a
- * number so users can locate them in the original file.
  */
-const renderSingleGutter: RenderGutter = ({ change, side }) => {
+const renderUnifiedGutter: RenderGutter = ({ change, side }) => {
   if (side === "old") return null;
   const num = change.type === "normal" ? change.newLineNumber : change.lineNumber;
   if (num === undefined) return null;
   return <span>{num}</span>;
+};
+
+/**
+ * Gutter renderer for split-mode diffs. Both columns render — left
+ * gets the old line number, right gets the new. Context rows show
+ * both; insert rows leave the old gutter blank; delete rows leave
+ * the new gutter blank.
+ */
+const renderSplitGutter: RenderGutter = ({ change, side }) => {
+  if (change.type === "normal") {
+    const num = side === "old" ? change.oldLineNumber : change.newLineNumber;
+    return <span>{num}</span>;
+  }
+  if (change.type === "insert" && side === "new") return <span>{change.lineNumber}</span>;
+  if (change.type === "delete" && side === "old") return <span>{change.lineNumber}</span>;
+  return null;
 };
 
 /**
@@ -50,7 +61,13 @@ const renderSingleGutter: RenderGutter = ({ change, side }) => {
  * Syntax highlighting via `prism-react-renderer` is intentionally
  * deferred to a future polish pass — see `Dif1` in DEFERRED.md.
  */
-export function DiffBlock({ diff }: { diff: string }) {
+export function DiffBlock({
+  diff,
+  viewType = "unified",
+}: {
+  diff: string;
+  viewType?: "unified" | "split";
+}) {
   let files: FileData[] = [];
   let strategy: "pi" | "raw" | "synthetic" | "fallback" = "fallback";
 
@@ -94,15 +111,21 @@ export function DiffBlock({ diff }: { diff: string }) {
     return <FallbackDiff diff={diff} />;
   }
 
+  const renderGutter = viewType === "split" ? renderSplitGutter : renderUnifiedGutter;
+  // Wrapper class drives the CSS that hides the duplicate gutter
+  // column in unified mode. Split mode keeps both columns visible.
+  const wrapperClass = `pi-diff-block ${
+    viewType === "split" ? "pi-diff-split" : "pi-diff-unified"
+  } overflow-auto px-2 pb-2 text-[11px]`;
   return (
-    <div className="pi-diff-block overflow-auto px-2 pb-2 text-[11px]">
+    <div className={wrapperClass}>
       {files.map((file) => (
         <Diff
           key={`${file.oldPath ?? ""}:${file.newPath ?? ""}`}
-          viewType="unified"
+          viewType={viewType}
           diffType={file.type}
           hunks={file.hunks}
-          renderGutter={renderSingleGutter}
+          renderGutter={renderGutter}
         >
           {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
         </Diff>
