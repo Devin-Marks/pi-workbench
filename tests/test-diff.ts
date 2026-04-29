@@ -16,7 +16,7 @@
  *
  * No LLM required. Edit/write tool result shapes are synthesized from
  * the SDK's documented schemas (toolCall content blocks with
- * `name: "edit"|"write"` + `input: { path, ... }`, paired with
+ * `name: "edit"|"write"` + `arguments: { path, ... }`, paired with
  * toolResult messages by `toolCallId`).
  */
 import { spawn, type ChildProcess } from "node:child_process";
@@ -85,7 +85,7 @@ interface SynthAssistantBlock {
   type: "toolCall";
   id: string;
   name: "write" | "edit";
-  input: Record<string, unknown>;
+  arguments: Record<string, unknown>;
 }
 
 function makeUserMessage(text: string): unknown {
@@ -128,7 +128,7 @@ async function unitTests(): Promise<void> {
     const messages = [
       makeUserMessage("create fresh.ts"),
       makeAssistantWithCalls([
-        { type: "toolCall", id: callId, name: "write", input: { path: filePath, content: "" } },
+        { type: "toolCall", id: callId, name: "write", arguments: { path: filePath, content: "" } },
       ]),
       makeToolResult({ toolCallId: callId, toolName: "write" }),
     ];
@@ -174,7 +174,7 @@ async function unitTests(): Promise<void> {
           type: "toolCall",
           id: callId,
           name: "edit",
-          input: {
+          arguments: {
             path: trackedFile,
             edits: [{ oldText: "line2", newText: "LINE2-CHANGED" }],
           },
@@ -208,8 +208,8 @@ async function unitTests(): Promise<void> {
     const messages = [
       makeUserMessage("two edits"),
       makeAssistantWithCalls([
-        { type: "toolCall", id: id1, name: "edit", input: { path: filePath } },
-        { type: "toolCall", id: id2, name: "edit", input: { path: filePath } },
+        { type: "toolCall", id: id1, name: "edit", arguments: { path: filePath } },
+        { type: "toolCall", id: id2, name: "edit", arguments: { path: filePath } },
       ]),
       makeToolResult({
         toolCallId: id1,
@@ -237,12 +237,12 @@ async function unitTests(): Promise<void> {
     const messages = [
       makeUserMessage("turn 1"),
       makeAssistantWithCalls([
-        { type: "toolCall", id: oldId, name: "edit", input: { path: filePath } },
+        { type: "toolCall", id: oldId, name: "edit", arguments: { path: filePath } },
       ]),
       makeToolResult({ toolCallId: oldId, toolName: "edit", diff: "old diff" }),
       makeUserMessage("turn 2"),
       makeAssistantWithCalls([
-        { type: "toolCall", id: newId, name: "write", input: { path: newFile } },
+        { type: "toolCall", id: newId, name: "write", arguments: { path: newFile } },
       ]),
       makeToolResult({ toolCallId: newId, toolName: "write" }),
     ];

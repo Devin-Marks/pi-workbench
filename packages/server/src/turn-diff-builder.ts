@@ -88,6 +88,11 @@ export function collectTurnTouches(messages: ReadonlyArray<unknown>): ToolCallRe
   }
 
   // Build callId → ToolCallInfo from assistant messages first.
+  // The SDK's `ToolCall` block (defined in `@mariozechner/pi-ai`'s
+  // types.d.ts) uses `arguments` for the input object — NOT `input`.
+  // We accept either field as a defensive measure: `arguments` is
+  // canonical, `input` is the historical naming some other SDKs use
+  // and a sensible alias if the pi schema ever shifts.
   const callsById = new Map<string, ToolCallInfo>();
   for (let i = startIndex; i < messages.length; i++) {
     const m = messages[i] as { role?: unknown; content?: unknown };
@@ -97,14 +102,15 @@ export function collectTurnTouches(messages: ReadonlyArray<unknown>): ToolCallRe
         type?: unknown;
         name?: unknown;
         id?: unknown;
+        arguments?: unknown;
         input?: unknown;
       };
       if (b.type !== "toolCall") continue;
       const name = b.name;
       if (name !== "write" && name !== "edit") continue;
       const id = typeof b.id === "string" ? b.id : undefined;
-      const input = b.input as { path?: unknown } | undefined;
-      const path = typeof input?.path === "string" ? input.path : undefined;
+      const args = (b.arguments ?? b.input) as { path?: unknown } | undefined;
+      const path = typeof args?.path === "string" ? args.path : undefined;
       if (id === undefined || path === undefined) continue;
       callsById.set(id, { toolCallId: id, toolName: name, path });
     }
