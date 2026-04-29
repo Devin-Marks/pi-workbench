@@ -44,12 +44,14 @@ export function SessionList({ projectId }: Props) {
   const [renameDraft, setRenameDraft] = useState("");
 
   /**
-   * Delete-session dialog state. Live and cold rows hit the same
-   * × button but the underlying behavior differs:
-   *   - live: dispose-only (preserves the JSONL); session can be
-   *     resumed later by clicking it again.
-   *   - cold: actually deletes the JSONL from disk; the row goes
-   *     away forever. Presented in a danger-toned modal.
+   * Delete-session dialog state. The × button always means "delete
+   * forever" — same behavior for live and cold rows. Earlier we did
+   * dispose-only on live rows (preserving the JSONL) which forced a
+   * second click to actually remove the file: live → dispose →
+   * reappears as cold → hard delete → row vanishes. That two-step
+   * was confusing ("the row didn't go away") and inconsistent with
+   * how the project-delete flow already works. Single click +
+   * confirm = gone, end of story.
    */
   const [deleteDialog, setDeleteDialog] = useState<
     { sessionId: string; label: string; isLive: boolean } | undefined
@@ -58,20 +60,12 @@ export function SessionList({ projectId }: Props) {
   const submitDelete = async (): Promise<void> => {
     if (deleteDialog === undefined) return;
     const { sessionId } = deleteDialog;
-    // Re-read isLive from the store at submit time. The dialog state
-    // captures it at click time, but a session can transition live →
-    // cold between click and confirm (idle GC, server restart, etc.).
-    // If we trusted the captured flag and sent `hard: false` while the
-    // session is now cold, the route's "cold + no hard → 404" branch
-    // would surface — better than the older behavior where a stale
-    // flag could silently delete a file. But we can do one better:
-    // consult the freshest state and use the right `hard` flag.
-    const fresh = sessions.find((x) => x.sessionId === sessionId);
-    const isLiveNow = fresh?.isLive ?? deleteDialog.isLive;
     setDeleteDialog(undefined);
-    // Live path: dispose without hard delete. Cold path: hard delete
-    // (also removes the on-disk JSONL).
-    void disposeSession(sessionId, { hard: !isLiveNow });
+    // hard:true unconditionally — server's DELETE route handles the
+    // live + hard case by disposing the in-memory entry AND
+    // removing the on-disk JSONL atomically. The route's docs spell
+    // out the full matrix; we always pick the "actually delete" leg.
+    void disposeSession(sessionId, { hard: true });
   };
 
   useEffect(() => {
@@ -168,7 +162,7 @@ export function SessionList({ projectId }: Props) {
                 className="hidden text-neutral-500 hover:text-red-400 group-hover:inline"
                 title={
                   s.isLive
-                    ? "Dispose live session (file preserved)"
+                    ? "Delete session — also kills the live shell"
                     : "Delete session JSONL from disk"
                 }
               >
@@ -182,18 +176,14 @@ export function SessionList({ projectId }: Props) {
         open={deleteDialog !== undefined}
         onClose={() => setDeleteDialog(undefined)}
         onConfirm={() => void submitDelete()}
-        title={
-          deleteDialog?.isLive === false
-            ? `Delete session "${deleteDialog.label}"`
-            : `Dispose session "${deleteDialog?.label ?? ""}"`
-        }
+        title={`Delete session "${deleteDialog?.label ?? ""}"`}
         message={
-          deleteDialog?.isLive === false
-            ? `Permanently delete the on-disk JSONL for "${deleteDialog.label}"? This cannot be undone — the session is no longer in memory and the file is the only copy.`
-            : `Dispose the live session "${deleteDialog?.label ?? ""}"? The on-disk JSONL is preserved; you can resume the session later by clicking it.`
+          deleteDialog?.isLive === true
+            ? `Delete "${deleteDialog.label}"? This kills the live shell AND removes the on-disk JSONL. Cannot be undone.`
+            : `Delete the on-disk JSONL for "${deleteDialog?.label ?? ""}"? Cannot be undone — the file is the only copy.`
         }
-        primaryLabel={deleteDialog?.isLive === false ? "Delete from disk" : "Dispose"}
-        tone={deleteDialog?.isLive === false ? "danger" : "default"}
+        primaryLabel="Delete"
+        tone="danger"
       />
     </div>
   );
