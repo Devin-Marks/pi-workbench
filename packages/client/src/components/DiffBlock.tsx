@@ -1,5 +1,6 @@
 import { Diff, Hunk, parseDiff, type FileData, type RenderGutter } from "react-diff-view";
 import "react-diff-view/style/index.css";
+import { highlightHunks, languageForFile } from "../lib/diff-highlight";
 
 /**
  * Gutter renderer for unified-mode diffs. `react-diff-view`'s
@@ -119,17 +120,29 @@ export function DiffBlock({
   } overflow-auto px-2 pb-2 text-[11px]`;
   return (
     <div className={wrapperClass}>
-      {files.map((file) => (
-        <Diff
-          key={`${file.oldPath ?? ""}:${file.newPath ?? ""}`}
-          viewType={viewType}
-          diffType={file.type}
-          hunks={file.hunks}
-          renderGutter={renderGutter}
-        >
-          {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
-        </Diff>
-      ))}
+      {files.map((file) => {
+        // Filename for syntax-highlighter selection. The diff header
+        // uses `a/<path>` and `b/<path>` conventionally; strip the
+        // `b/` prefix when present so `.tsx` etc. resolves correctly.
+        // Falls back to oldPath for pure deletions.
+        const filename = (file.newPath ?? file.oldPath ?? "").replace(/^[ab]\//, "");
+        const language = languageForFile(filename);
+        const tokens = highlightHunks(file.hunks, language);
+        return (
+          <Diff
+            key={`${file.oldPath ?? ""}:${file.newPath ?? ""}`}
+            viewType={viewType}
+            diffType={file.type}
+            hunks={file.hunks}
+            renderGutter={renderGutter}
+            // Diff's prop accepts `HunkTokens | null`, not `| undefined`.
+            // Coerce so unhighlighted languages still render plainly.
+            tokens={tokens ?? null}
+          >
+            {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
+          </Diff>
+        );
+      })}
     </div>
   );
 }

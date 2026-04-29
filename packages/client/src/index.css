@@ -86,3 +86,69 @@
 .pi-diff-unified td.diff-gutter:first-of-type {
   display: none;
 }
+
+/* Syntax-highlighting palette for `react-diff-view`'s tokenized
+   output. We feed it Prism (via `refractor`) tokens; refractor emits
+   `<span className="token <kind>">` for each token, so the rules
+   below are scoped to `.pi-diff-block` to avoid bleeding into any
+   other code-block rendering on the page. Palette is hand-picked
+   to read well on the diff's existing red/green backgrounds —
+   mid-saturation, mid-luminance, no pure white/black. */
+.pi-diff-block .token.comment,
+.pi-diff-block .token.prolog,
+.pi-diff-block .token.doctype,
+.pi-diff-block .token.cdata {
+  color: #6b7280;
+  font-style: italic;
+}
+.pi-diff-block .token.punctuation {
+  color: #94a3b8;
+}
+.pi-diff-block .token.namespace {
+  opacity: 0.7;
+}
+.pi-diff-block .token.property,
+.pi-diff-block .token.tag,
+.pi-diff-block .token.boolean,
+.pi-diff-block .token.number,
+.pi-diff-block .token.constant,
+.pi-diff-block .token.symbol,
+.pi-diff-block .token.deleted {
+  color: #f59e0b;
+}
+.pi-diff-block .token.selector,
+.pi-diff-block .token.attr-name,
+.pi-diff-block .token.string,
+.pi-diff-block .token.char,
+.pi-diff-block .token.builtin,
+.pi-diff-block .token.inserted {
+  color: #a3e635;
+}
+.pi-diff-block .token.operator,
+.pi-diff-block .token.entity,
+.pi-diff-block .token.url,
+.pi-diff-block .language-css .token.string,
+.pi-diff-block .style .token.string {
+  color: #67e8f9;
+}
+.pi-diff-block .token.atrule,
+.pi-diff-block .token.attr-value,
+.pi-diff-block .token.keyword {
+  color: #f472b6;
+}
+.pi-diff-block .token.function,
+.pi-diff-block .token.class-name {
+  color: #a5b4fc;
+}
+.pi-diff-block .token.regex,
+.pi-diff-block .token.important,
+.pi-diff-block .token.variable {
+  color: #fde047;
+}
+.pi-diff-block .token.important,
+.pi-diff-block .token.bold {
+  font-weight: 600;
+}
+.pi-diff-block .token.italic {
+  font-style: italic;
+}

@@ -21,6 +21,7 @@
     "@codemirror/theme-one-dark": "^6.1.2",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
     "codemirror": "^6.0.1",
     "lucide-react": "^0.503.0",
     "prism-react-renderer": "^2.4.1",
@@ -28,8 +29,8 @@
     "react-diff-view": "^3.2.2",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
+    "refractor": "^5.0.0",
     "remark-gfm": "^4.0.1",
-    "@xterm/xterm": "^5.5.0",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
