@@ -60,15 +60,23 @@ function scoreOption(opt: ModelOption, query: string): number | undefined {
 }
 
 /**
- * Phase 8 chat input. Two modes:
- *   - idle  → textarea + Send button → POST /prompt
- *   - streaming → steer textarea + Steer / Abort buttons → POST /steer or /abort
+ * Phase 8 chat input. One Send button + (while streaming) Abort.
  *
- * Enter submits, Shift+Enter inserts a newline. The model selector,
- * attachment button, and token/cost display land alongside the
- * SettingsPanel in this same phase but are visually placeholdered
- * for now to keep the surface focused.
+ * - Idle: Send → POST /prompt.
+ * - Streaming: Send → POST /steer (Pi's SDK picks steer-vs-followUp
+ *   natively based on whether the agent is mid-tool-call or
+ *   mid-text; we don't try to second-guess it).
+ * - Abort is its own button so it can't be hit by accident from a
+ *   misclick on Send. Pressing Esc twice inside the textarea (within
+ *   600 ms) also fires Abort — keyboard-only path for users who
+ *   never leave the input.
+ *
+ * Enter submits, Shift+Enter inserts a newline. The model selector
+ * lives alongside in this same phase; attachments and token/cost
+ * display land in later phases.
  */
+const DOUBLE_ESC_WINDOW_MS = 600;
+
 export function ChatInput({ sessionId }: Props) {
   const isStreaming = useSessionStore((s) => s.streamingBySession[sessionId] ?? false);
   const sendPrompt = useSessionStore((s) => s.sendPrompt);
@@ -78,6 +86,10 @@ export function ChatInput({ sessionId }: Props) {
 
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Timestamp of the most recent Esc keystroke; second Esc within
+  // DOUBLE_ESC_WINDOW_MS triggers abort. Lives in a ref so it
+  // doesn't force a re-render on every Esc.
+  const lastEscRef = useRef<number>(0);
 
   // Model selector state. We only know the user's chosen model client-side
   // (the SDK doesn't expose "current model" over REST), so persist the
@@ -138,32 +150,25 @@ export function ChatInput({ sessionId }: Props) {
     }
   };
 
-  /**
-   * "Interrupt and replace": abort the current run, then send the textarea
-   * contents as a fresh prompt. This is what users usually mean by "steer"
-   * when the agent is mid-text-generation — the SDK's real `steer` only
-   * interrupts at a tool-call boundary, which during plain text output is
-   * effectively a follow-up. Two distinct buttons let users pick.
-   */
-  const interruptAndReplace = async (): Promise<void> => {
-    const value = text.trim();
-    if (value.length === 0 || submitting) return;
-    setSubmitting(true);
-    try {
-      await abortSession(sessionId);
-      await sendPrompt(sessionId, value);
-      setText("");
-    } catch {
-      // store.error renders below
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void submit();
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      const now = Date.now();
+      const elapsed = now - lastEscRef.current;
+      lastEscRef.current = now;
+      // Second Esc inside the window AND while the agent is running
+      // → abort. Esc-while-idle is harmless (no run to abort) and
+      // doesn't stash a "pending double-Esc" that could surprise the
+      // user later.
+      if (elapsed < DOUBLE_ESC_WINDOW_MS && isStreaming) {
+        lastEscRef.current = 0;
+        void abortSession(sessionId);
+      }
     }
   };
 
@@ -195,44 +200,39 @@ export function ChatInput({ sessionId }: Props) {
             className="flex-1 resize-none rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-neutral-500"
           />
           {/*
-            Buttons sit in a horizontal row, not a vertical stack. Stacking
-            three buttons (Queue / Interrupt / Abort) during streaming made
-            the whole input bar taller than it was idle, which shifted the
-            chat view up and cut off the bottom messages. A row keeps the
-            input bar at constant height regardless of streaming state.
+            Two buttons: Send (always) + Abort (streaming only). Pi's
+            SDK picks steer-vs-followUp natively when we POST /steer
+            during a run — we don't try to second-guess it. Abort is
+            its own button so it can't be hit by accident from a
+            misclick on Send.
           */}
           <div className="flex flex-row gap-1">
             <button
               onClick={() => void submit()}
               disabled={text.trim().length === 0 || submitting}
               className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 disabled:cursor-not-allowed disabled:opacity-50"
+              title={
+                isStreaming
+                  ? "Send (Pi queues at the next agent break — steer or follow-up depending on agent state)"
+                  : "Send (Enter)"
+              }
             >
-              {isStreaming ? "Queue" : "Send"}
+              Send
             </button>
             {isStreaming && (
-              <>
-                <button
-                  onClick={() => void interruptAndReplace()}
-                  disabled={text.trim().length === 0 || submitting}
-                  className="rounded-md border border-amber-700/50 px-3 py-2 text-sm text-amber-300 hover:bg-amber-900/20 disabled:cursor-not-allowed disabled:opacity-50"
-                  title="Abort the current run and send this as a fresh prompt"
-                >
-                  Interrupt
-                </button>
-                <button
-                  onClick={() => void abortSession(sessionId)}
-                  className="rounded-md border border-red-700/50 px-3 py-2 text-sm text-red-300 hover:bg-red-900/20"
-                  title="Stop the agent without queuing a new message"
-                >
-                  Abort
-                </button>
-              </>
+              <button
+                onClick={() => void abortSession(sessionId)}
+                className="rounded-md border border-red-700/50 px-3 py-2 text-sm text-red-300 hover:bg-red-900/20"
+                title="Stop the agent (or press Esc twice in the textbox)"
+              >
+                Abort
+              </button>
             )}
           </div>
         </div>
         <p className="text-[10px] text-neutral-600">
           {isStreaming
-            ? "Queue: SDK delivers your message at the next agent break (often after the current text finishes streaming, so it reads as a follow-up). Interrupt: abort and resend as a fresh prompt. Abort: stop without queuing."
+            ? "Send queues at the next agent break — Pi picks steer or follow-up. Abort: stop the agent (or press Esc twice in the textbox)."
             : "Attachments and token/cost display land in later phases."}
         </p>
       </div>
