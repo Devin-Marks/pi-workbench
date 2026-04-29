@@ -1,5 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
+import type { MultipartFile } from "@fastify/multipart";
 import {
+  ChecksumMismatchError,
   DirectoryNotEmptyError,
   FileTooLargeError,
   InvalidNameError,
@@ -8,15 +10,63 @@ import {
   PathOutsideRootError,
   TargetExistsError,
   deleteEntry,
+  downloadStream,
   getTree,
   makeDirectory,
   moveEntry,
   readFile,
   renameEntry,
   writeFile,
+  writeFileBytes,
 } from "../file-manager.js";
 import { getProject } from "../project-manager.js";
+import { searchFiles } from "../file-searcher.js";
 import { errorSchema } from "./_schemas.js";
+
+const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
+const MAX_UPLOAD_FILES = 16;
+// Aggregate cap across all files in a single upload request. The
+// per-file cap × file count gives 8 GB of theoretical headroom — the
+// aggregate cap puts a tighter ceiling on memory + disk pressure when
+// the user picks a folder full of medium files. Tracked in the parts
+// loop and surfaced as 413 with `aggregate_too_large` so the UI can
+// distinguish from per-file overflows.
+const MAX_TOTAL_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+
+class AggregateLimitError extends Error {
+  constructor(limit: number) {
+    super(`aggregate upload exceeds ${limit} bytes`);
+    this.name = "AggregateLimitError";
+  }
+}
+
+/**
+ * Wrap a multipart file stream so the running byte total is checked
+ * against {@link MAX_TOTAL_UPLOAD_BYTES} on every chunk. Throws
+ * {@link AggregateLimitError} the moment the aggregate crosses the
+ * cap; writeFileBytes catches the throw, unlinks its tmp file, and
+ * the route handler maps it to 413. We pass the running counter via
+ * getter/setter so the count is shared across files in the same
+ * request without leaking module state.
+ */
+function trackAggregate(
+  source: AsyncIterable<Buffer | Uint8Array>,
+  getTotal: () => number,
+  setTotal: (n: number) => void,
+): AsyncIterable<Buffer | Uint8Array> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for await (const chunk of source) {
+        const next = getTotal() + chunk.byteLength;
+        if (next > MAX_TOTAL_UPLOAD_BYTES) {
+          throw new AggregateLimitError(MAX_TOTAL_UPLOAD_BYTES);
+        }
+        setTotal(next);
+        yield chunk;
+      }
+    },
+  };
+}
 
 /* ----------------------------- schemas ----------------------------- */
 
@@ -80,6 +130,12 @@ function mapError(reply: FastifyReply, err: unknown): FastifyReply {
   if (err instanceof TargetExistsError) {
     return reply.code(409).send({ error: "target_exists" });
   }
+  if (err instanceof ChecksumMismatchError) {
+    return reply.code(422).send({
+      error: "checksum_mismatch",
+      message: `expected sha256 ${err.expected}, computed ${err.actual}`,
+    });
+  }
   reply.log.error({ err }, "unmapped file-manager error");
   return reply.code(500).send({ error: "internal_error" });
 }
@@ -141,6 +197,65 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
         }
         const tree = await getTree(project.path, maxDepth !== undefined ? { maxDepth } : {});
         return tree;
+      } catch (err) {
+        return mapError(reply, err);
+      }
+    },
+  );
+
+  fastify.get<{ Querystring: { projectId: string; path?: string } }>(
+    "/files/download",
+    {
+      schema: {
+        description:
+          "Download a file or directory from the project. Files stream " +
+          "verbatim with `Content-Disposition: attachment`; directories " +
+          "stream as a gzipped tar (`<dir>.tar.gz`) with the same exclusions " +
+          "as the file tree (node_modules, .git, dist, build, etc.). Omitting " +
+          "`path` downloads the whole project as a tar.gz.",
+        tags: ["files"],
+        querystring: {
+          type: "object",
+          required: ["projectId"],
+          properties: {
+            projectId: { type: "string", minLength: 1 },
+            path: { type: "string", minLength: 1 },
+          },
+        },
+        response: {
+          // Binary stream — OpenAPI describes it as `string` + `format: binary`.
+          200: { type: "string", format: "binary" },
+          400: errorSchema,
+          403: errorSchema,
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const project = await resolveProject(req.query.projectId, reply);
+      if (project === undefined) return;
+      const target = req.query.path ?? project.path;
+      try {
+        const result = await downloadStream(target, project.path);
+        // RFC 5987 filename* = UTF-8 + percent-encoded so non-ASCII
+        // names survive Chrome / Firefox / Safari. Keep the legacy
+        // `filename=` for older clients with the same name ASCII-
+        // sanitised — most filenames are ASCII anyway.
+        const asciiName = result.filename.replace(/[^\x20-\x7e]/g, "_");
+        const utfName = encodeURIComponent(result.filename);
+        reply.header(
+          "Content-Disposition",
+          `attachment; filename="${asciiName}"; filename*=UTF-8''${utfName}`,
+        );
+        if (result.kind === "file") {
+          reply.header("Content-Type", "application/octet-stream");
+          reply.header("Content-Length", String(result.size));
+        } else {
+          reply.header("Content-Type", "application/gzip");
+          // No Content-Length — we don't know the gzipped size up front.
+        }
+        return reply.send(result.stream);
       } catch (err) {
         return mapError(reply, err);
       }
@@ -380,6 +495,286 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
       try {
         await deleteEntry(req.query.path, project.path);
         return reply.code(204).send();
+      } catch (err) {
+        return mapError(reply, err);
+      }
+    },
+  );
+
+  fastify.get<{
+    Querystring: {
+      projectId: string;
+      q: string;
+      regex?: string;
+      caseSensitive?: string;
+      includeGitignored?: string;
+      include?: string;
+      exclude?: string;
+      limit?: string;
+    };
+  }>(
+    "/files/search",
+    {
+      schema: {
+        description:
+          "Cross-project text + regex search. Uses ripgrep when available " +
+          "(fast + gitignore-aware) and falls back to a Node walk on hosts " +
+          "without rg. Response includes `engine: 'ripgrep' | 'node'` so the " +
+          "UI can render a fallback-mode badge. Hard caps: 1000 matches max " +
+          "per request, 30s wall clock, 5 MB per file. Binary files are " +
+          "skipped via NUL-byte heuristic on the fallback path; ripgrep " +
+          "uses its own (better) binary detection.",
+        tags: ["files"],
+        querystring: {
+          type: "object",
+          required: ["projectId", "q"],
+          properties: {
+            projectId: { type: "string", minLength: 1 },
+            q: { type: "string", minLength: 1, maxLength: 1024 },
+            regex: { type: "string", enum: ["0", "1", "true", "false"] },
+            caseSensitive: { type: "string", enum: ["0", "1", "true", "false"] },
+            includeGitignored: { type: "string", enum: ["0", "1", "true", "false"] },
+            include: { type: "string", maxLength: 256 },
+            exclude: { type: "string", maxLength: 256 },
+            limit: { type: "string", pattern: "^[0-9]+$" },
+          },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["engine", "matches", "truncated"],
+            properties: {
+              engine: { type: "string", enum: ["ripgrep", "node"] },
+              truncated: { type: "boolean" },
+              matches: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["path", "line", "column", "length", "lineSnippet"],
+                  properties: {
+                    path: { type: "string" },
+                    line: { type: "integer", minimum: 1 },
+                    column: { type: "integer", minimum: 1 },
+                    length: { type: "integer", minimum: 0 },
+                    lineSnippet: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          400: errorSchema,
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const project = await resolveProject(req.query.projectId, reply);
+      if (project === undefined) return;
+      const { q } = req.query;
+      const regex = req.query.regex === "1" || req.query.regex === "true";
+      const caseSensitive = req.query.caseSensitive === "1" || req.query.caseSensitive === "true";
+      const includeGitignored =
+        req.query.includeGitignored === "1" || req.query.includeGitignored === "true";
+      const limit =
+        req.query.limit !== undefined
+          ? Math.min(1000, Math.max(1, Number.parseInt(req.query.limit, 10)))
+          : 200;
+      try {
+        const opts: Parameters<typeof searchFiles>[1] = {
+          query: q,
+          regex,
+          caseSensitive,
+          includeGitignored,
+          limit,
+          timeoutMs: 30_000,
+        };
+        if (req.query.include !== undefined && req.query.include.length > 0) {
+          opts.include = req.query.include;
+        }
+        if (req.query.exclude !== undefined && req.query.exclude.length > 0) {
+          opts.exclude = req.query.exclude;
+        }
+        const result = await searchFiles(project.path, opts);
+        return result;
+      } catch (err) {
+        return mapError(reply, err);
+      }
+    },
+  );
+
+  // ----------------------------- upload -----------------------------
+  // Multipart upload of one or more files into a chosen folder under
+  // the project. Each file is streamed to a tmp path, hashed with
+  // SHA-256 as bytes flow, and atomically renamed into place IFF the
+  // computed digest matches the one the client supplied (or the client
+  // declined to supply one — we still return the computed value so the
+  // caller can verify out-of-band). Per-file cap and file-count cap
+  // are enforced via the per-call multipart `limits` override.
+  //
+  // Field shape (FormData order matters — fields BEFORE files so we
+  // know `parentPath`/`overwrite`/`sha256:<name>` by the time the file
+  // part is parsed):
+  //   - projectId: string (required)
+  //   - parentPath: string — absolute, inside project (required)
+  //   - overwrite: "1"/"true" — replace existing files
+  //   - sha256:<filename>: 64-char lowercase hex (optional, per file)
+  //   - <any-field-name>: file part(s)
+  fastify.post<{
+    Body: unknown;
+  }>(
+    "/files/upload",
+    {
+      schema: {
+        description:
+          `Upload one or more files into a project folder via multipart/form-data. ` +
+          `Each file is streamed to disk, its SHA-256 is computed on the fly, and ` +
+          `the rename to the final name is performed only after a checksum match ` +
+          `(when the client supplied one via the \`sha256:<filename>\` text field). ` +
+          `Per-file cap: ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB. Aggregate cap: ` +
+          `${MAX_TOTAL_UPLOAD_BYTES / (1024 * 1024)} MB across all parts. Max ` +
+          `${MAX_UPLOAD_FILES} files per request. Existing targets return 409 unless ` +
+          `\`overwrite=1\` is sent. Per-file overflows return 413 \`file_too_large\`; ` +
+          `aggregate overflows return 413 \`aggregate_too_large\`.`,
+        tags: ["files"],
+        consumes: ["multipart/form-data"],
+        response: {
+          200: {
+            type: "object",
+            required: ["files"],
+            properties: {
+              files: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["path", "size", "sha256"],
+                  properties: {
+                    path: { type: "string" },
+                    size: { type: "integer", minimum: 0 },
+                    sha256: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          400: errorSchema,
+          403: errorSchema,
+          404: errorSchema,
+          409: errorSchema,
+          413: errorSchema,
+          415: errorSchema,
+          422: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      if (!req.isMultipart()) {
+        return reply.code(415).send({ error: "expected_multipart" });
+      }
+      let projectId: string | undefined;
+      let parentPath: string | undefined;
+      let overwrite = false;
+      let aggregateBytes = 0;
+      const expectedHashes = new Map<string, string>();
+      const written: Array<{ path: string; size: number; sha256: string }> = [];
+      try {
+        const parts = req.parts({
+          limits: {
+            fileSize: MAX_UPLOAD_BYTES,
+            files: MAX_UPLOAD_FILES,
+            fields: 64,
+          },
+        });
+        for await (const part of parts) {
+          if (part.type === "field") {
+            if (part.fieldname === "projectId" && typeof part.value === "string") {
+              projectId = part.value;
+            } else if (part.fieldname === "parentPath" && typeof part.value === "string") {
+              parentPath = part.value;
+            } else if (part.fieldname === "overwrite" && typeof part.value === "string") {
+              overwrite = part.value === "1" || part.value === "true";
+            } else if (part.fieldname.startsWith("sha256:") && typeof part.value === "string") {
+              const name = part.fieldname.slice("sha256:".length);
+              if (name.length > 0) expectedHashes.set(name, part.value.toLowerCase());
+            }
+            continue;
+          }
+          // File part. Project + parent must already be parsed — the
+          // FormData field-order contract is documented above.
+          const file = part as MultipartFile;
+          if (projectId === undefined) {
+            return reply.code(400).send({
+              error: "missing_field",
+              message: "projectId must precede file parts in the multipart body",
+            });
+          }
+          if (parentPath === undefined) {
+            return reply.code(400).send({
+              error: "missing_field",
+              message: "parentPath must precede file parts in the multipart body",
+            });
+          }
+          const project = await getProject(projectId);
+          if (project === undefined) {
+            return reply.code(404).send({ error: "project_not_found" });
+          }
+          const filename = file.filename;
+          if (filename === undefined || filename.length === 0) {
+            return reply.code(400).send({ error: "missing_filename" });
+          }
+          const expected = expectedHashes.get(filename);
+          // Stream the part body straight through writeFileBytes so we
+          // never buffer the whole file in memory. We wrap the part
+          // stream in an aggregate-tracking iterator so the request
+          // aborts as soon as the running total crosses
+          // MAX_TOTAL_UPLOAD_BYTES — without this, a user could send
+          // 16 × 500 MB and burn 8 GB of disk before the route layer
+          // noticed.
+          const trackedSource = trackAggregate(
+            file.file,
+            () => aggregateBytes,
+            (n) => {
+              aggregateBytes = n;
+            },
+          );
+          let result;
+          try {
+            result = await writeFileBytes(parentPath, filename, project.path, trackedSource, {
+              ...(expected !== undefined ? { expectedSha256: expected } : {}),
+              overwrite,
+            });
+          } catch (err) {
+            if (err instanceof AggregateLimitError) {
+              return reply.code(413).send({
+                error: "aggregate_too_large",
+                message: `Total upload size exceeds the ${MAX_TOTAL_UPLOAD_BYTES / (1024 * 1024)} MB aggregate limit.`,
+              });
+            }
+            throw err;
+          }
+          if (file.file.truncated) {
+            // The file exceeded the per-file cap; writeFileBytes already
+            // wrote whatever streamed through. Roll it back so we don't
+            // leave a partial upload visible.
+            await deleteEntry(result.path, project.path).catch(() => undefined);
+            return reply.code(413).send({
+              error: "file_too_large",
+              message: `Upload "${filename}" exceeds the ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB per-file limit.`,
+            });
+          }
+          written.push({
+            path: result.path,
+            size: result.size,
+            sha256: result.sha256,
+          });
+        }
+        if (written.length === 0) {
+          return reply
+            .code(400)
+            .send({ error: "no_files", message: "no file parts in the request" });
+        }
+        return { files: written };
       } catch (err) {
         return mapError(reply, err);
       }

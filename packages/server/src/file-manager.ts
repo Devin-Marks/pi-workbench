@@ -7,10 +7,15 @@ import {
   rm,
   rmdir,
   stat,
+  unlink,
   writeFile as fsWriteFile,
 } from "node:fs/promises";
-import { dirname, extname, join, relative, resolve, sep } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createReadStream, createWriteStream } from "node:fs";
+import { once } from "node:events";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { create as tarCreate } from "tar";
+import type { Readable } from "node:stream";
 
 /**
  * Filesystem operations bounded by a per-call project root.
@@ -74,6 +79,19 @@ export class InvalidNameError extends Error {
   }
 }
 
+export class ChecksumMismatchError extends Error {
+  readonly target: string;
+  readonly expected: string;
+  readonly actual: string;
+  constructor(target: string, expected: string, actual: string) {
+    super(`checksum mismatch at ${target} (expected ${expected}, got ${actual})`);
+    this.name = "ChecksumMismatchError";
+    this.target = target;
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
+
 export class TargetExistsError extends Error {
   constructor(path: string) {
     super(`target already exists: ${path}`);
@@ -111,6 +129,14 @@ const TREE_SKIP_DIRS = new Set([
   ".turbo",
   ".cache",
 ]);
+
+/**
+ * Re-export the directory exclusion list so file-searcher.ts can
+ * apply the same filter when ripgrep is unavailable. Keeping a
+ * single source of truth here avoids drift between the file-tree
+ * view and the in-process search results.
+ */
+export const SEARCH_SKIP_DIRS: ReadonlySet<string> = TREE_SKIP_DIRS;
 
 const DEFAULT_TREE_DEPTH = 6;
 
@@ -363,6 +389,118 @@ export async function writeFile(absPath: string, root: string, content: string):
   await fsRename(tmp, resolved);
 }
 
+/**
+ * Open a download stream for `absPath`. For a regular file: a plain
+ * read stream + the size for the Content-Length header. For a
+ * directory: a streamed gzip-tar of the directory contents (filename
+ * is `<dir>.tar.gz`, no Content-Length because we're streaming).
+ *
+ * Skips the same noise dirs as the file tree (node_modules, .git,
+ * dist, build, etc.) so a "download project" doesn't ship hundreds
+ * of MB of generated artefacts.
+ */
+export async function downloadStream(
+  absPath: string,
+  root: string,
+): Promise<
+  | { kind: "file"; filename: string; size: number; stream: Readable }
+  | { kind: "directory"; filename: string; stream: Readable }
+> {
+  const resolved = await verifyPathSafe(absPath, root);
+  const st = await stat(resolved).catch(() => undefined);
+  if (st === undefined) throw new NotFoundError(resolved);
+  if (st.isFile()) {
+    return {
+      kind: "file",
+      filename: basename(resolved),
+      size: st.size,
+      stream: createReadStream(resolved),
+    };
+  }
+  if (st.isDirectory()) {
+    const dirName = basename(resolved).length > 0 ? basename(resolved) : "project";
+    // tar's `cwd` is the parent — entries inside the archive are
+    // prefixed with `<dirName>/...` so unpacking creates a real
+    // top-level directory instead of dumping files into the user's
+    // Downloads folder.
+    const stream = tarCreate(
+      {
+        gzip: true,
+        cwd: dirname(resolved),
+        portable: true,
+        filter: (path: string) => {
+          for (const part of path.split(/[/\\]/)) {
+            if (TREE_SKIP_DIRS.has(part)) return false;
+          }
+          return true;
+        },
+      },
+      [dirName],
+    ) as unknown as Readable;
+    return { kind: "directory", filename: `${dirName}.tar.gz`, stream };
+  }
+  throw new NotFoundError(resolved);
+}
+
+/**
+ * Stream `source` into `<parentAbsPath>/<name>`, computing SHA-256 as
+ * bytes flow. Atomic via tmp-file + rename. The temp file lives in the
+ * same directory as the target so the rename is on the same filesystem
+ * (cross-fs renames silently fall back to copy+unlink and break the
+ * "either old or new — never half" invariant we rely on elsewhere).
+ *
+ * `expectedSha256` (lowercase hex) is verified BEFORE the swap-in:
+ * mismatched uploads never become visible under the target name. The
+ * tmp file is unlinked on any error path so we don't leak debris into
+ * the project tree.
+ *
+ * `name` must be a basename (no path separators, no `..`); use the
+ * caller's separate `parentAbsPath` to land in nested directories.
+ */
+export async function writeFileBytes(
+  parentAbsPath: string,
+  name: string,
+  root: string,
+  source: AsyncIterable<Buffer | Uint8Array>,
+  opts?: { expectedSha256?: string; overwrite?: boolean },
+): Promise<{ path: string; size: number; sha256: string }> {
+  const parent = await verifyPathSafe(parentAbsPath, root);
+  const trimmed = validateName(name);
+  const target = await verifyPathSafe(join(parent, trimmed), root);
+  const existing = await stat(target).catch(() => undefined);
+  if (existing !== undefined) {
+    if (opts?.overwrite !== true) throw new TargetExistsError(target);
+    if (!existing.isFile()) throw new InvalidNameError("target is a directory");
+  }
+  await mkdir(parent, { recursive: true });
+  const tmp = `${target}.${randomUUID()}.upload.tmp`;
+  const hash = createHash("sha256");
+  let size = 0;
+  const out = createWriteStream(tmp);
+  try {
+    for await (const chunk of source) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      hash.update(buf);
+      size += buf.byteLength;
+      if (!out.write(buf)) await once(out, "drain");
+    }
+    out.end();
+    await once(out, "close");
+  } catch (err) {
+    out.destroy();
+    await unlink(tmp).catch(() => undefined);
+    throw err;
+  }
+  const actual = hash.digest("hex");
+  const expected = opts?.expectedSha256?.toLowerCase();
+  if (expected !== undefined && expected !== actual) {
+    await unlink(tmp).catch(() => undefined);
+    throw new ChecksumMismatchError(target, expected, actual);
+  }
+  await fsRename(tmp, target);
+  return { path: target, size, sha256: actual };
+}
+
 /* ----------------------------- mkdir ----------------------------- */
 
 export async function makeDirectory(
@@ -494,6 +632,7 @@ const LANG_BY_EXT: Record<string, string> = {
   ".mjs": "javascript",
   ".cjs": "javascript",
   ".py": "python",
+  ".pyi": "python",
   ".rs": "rust",
   ".cpp": "cpp",
   ".cc": "cpp",
@@ -503,6 +642,7 @@ const LANG_BY_EXT: Record<string, string> = {
   ".hpp": "cpp",
   ".java": "java",
   ".kt": "kotlin",
+  ".kts": "kotlin",
   ".go": "go",
   ".rb": "ruby",
   ".php": "php",
@@ -510,10 +650,15 @@ const LANG_BY_EXT: Record<string, string> = {
   ".swift": "swift",
   ".css": "css",
   ".scss": "scss",
+  ".sass": "scss",
+  ".less": "css",
   ".html": "html",
   ".htm": "html",
   ".xml": "xml",
+  ".svg": "xml",
+  ".plist": "xml",
   ".json": "json",
+  ".jsonc": "json",
   ".yaml": "yaml",
   ".yml": "yaml",
   ".toml": "toml",
@@ -522,14 +667,69 @@ const LANG_BY_EXT: Record<string, string> = {
   ".sh": "shell",
   ".bash": "shell",
   ".zsh": "shell",
+  ".fish": "shell",
   ".sql": "sql",
   ".dockerfile": "dockerfile",
+  // Templating
+  ".jinja": "jinja2",
+  ".jinja2": "jinja2",
+  ".j2": "jinja2",
+  // Config / properties
+  ".env": "properties",
+  ".ini": "properties",
+  ".cfg": "properties",
+  ".conf": "properties",
+  ".properties": "properties",
+  ".toml.lock": "toml",
+  // Scripting / data
+  ".lua": "lua",
+  ".pl": "perl",
+  ".pm": "perl",
+  ".r": "r",
+  ".ps1": "powershell",
+  ".psm1": "powershell",
+  // Diff / patch
+  ".diff": "diff",
+  ".patch": "diff",
+  // JVM / functional
+  ".clj": "clojure",
+  ".cljs": "clojure",
+  ".cljc": "clojure",
+  ".edn": "clojure",
+  ".scala": "scala",
+  ".sc": "scala",
+  ".groovy": "groovy",
+  ".gradle": "groovy",
+  ".hs": "haskell",
+  ".ml": "ocaml",
+  ".mli": "ocaml",
+  // Schema / IDL
+  ".graphql": "graphql",
+  ".gql": "graphql",
+  ".proto": "protobuf",
+  // Build
+  ".cmake": "cmake",
+  ".mk": "makefile",
 };
 
 function detectLanguage(absPath: string): string {
   const base = absPath.split(sep).pop() ?? absPath;
+  // Basename-first checks: dotfiles and conventionally-named files
+  // don't carry a useful extension, so map them by exact name.
   if (base === "Dockerfile" || base.endsWith(".Dockerfile")) return "dockerfile";
-  if (base === "Makefile") return "makefile";
+  if (base === "Makefile" || base === "makefile" || base === "GNUmakefile") return "makefile";
+  if (base === "nginx.conf") return "nginx";
+  if (base === ".env" || base.startsWith(".env.")) return "properties";
+  if (
+    base === ".gitignore" ||
+    base === ".dockerignore" ||
+    base === ".npmignore" ||
+    base === ".prettierignore" ||
+    base === ".eslintignore"
+  ) {
+    return "properties";
+  }
+  if (base === "CMakeLists.txt") return "cmake";
   const ext = extname(base).toLowerCase();
   return LANG_BY_EXT[ext] ?? "plaintext";
 }

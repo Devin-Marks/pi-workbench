@@ -130,6 +130,7 @@ export function EditorPanel() {
                 onSaveShortcut={() => {
                   if (project !== undefined) void saveFile(project.id, active.path);
                 }}
+                onConsumePendingNav={(path) => useFileStore.getState().consumePendingNav(path)}
               />
             </Suspense>
           )}
