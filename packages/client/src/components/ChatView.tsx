@@ -31,6 +31,7 @@ export function ChatView({ sessionId }: Props) {
   const isStreaming = useSessionStore((s) => s.streamingBySession[sessionId] ?? false);
   const activeTool = useSessionStore((s) => s.activeToolBySession[sessionId]);
   const banner = useSessionStore((s) => s.bannerBySession[sessionId]);
+  const queued = useSessionStore((s) => s.queuedBySession[sessionId]);
   const openStream = useSessionStore((s) => s.openStream);
   const closeStream = useSessionStore((s) => s.closeStream);
 
@@ -103,8 +104,51 @@ export function ChatView({ sessionId }: Props) {
             </div>
           )}
           {isStreaming && streamingText.length === 0 && <ActiveToolPlaceholder tool={activeTool} />}
+          {queued !== undefined && <QueuedMessages queued={queued} />}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Inline badge listing messages the user has queued during the
+ * current run. Pi delivers `steering` at the next agent decision
+ * point (mid-tool boundary) and `followUp` once the agent goes idle.
+ * The SDK clears these on delivery, which fires another queue_update
+ * with the new (smaller) arrays — no need to pop locally.
+ */
+function QueuedMessages({ queued }: { queued: { steering: string[]; followUp: string[] } }) {
+  const all: { kind: "steer" | "followUp"; text: string }[] = [];
+  for (const text of queued.steering) all.push({ kind: "steer", text });
+  for (const text of queued.followUp) all.push({ kind: "followUp", text });
+  if (all.length === 0) return null;
+  return (
+    <div className="rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2">
+      <div className="mb-1 text-[10px] uppercase tracking-wider text-neutral-500">
+        queued ({all.length})
+      </div>
+      <ul className="space-y-1">
+        {all.map((q, i) => (
+          <li key={i} className="flex items-baseline gap-2 text-xs text-neutral-300">
+            <span
+              className={
+                q.kind === "steer"
+                  ? "shrink-0 rounded bg-amber-900/30 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-amber-300"
+                  : "shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-neutral-400"
+              }
+              title={
+                q.kind === "steer"
+                  ? "Delivered at the agent's next decision point (often mid-tool)"
+                  : "Delivered after the agent goes fully idle"
+              }
+            >
+              {q.kind === "steer" ? "steer" : "follow-up"}
+            </span>
+            <span className="truncate">{q.text}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

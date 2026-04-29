@@ -122,6 +122,15 @@ interface SessionState {
    * too. Cheap to compare; no allocations.
    */
   agentEndCountBySession: Record<string, number>;
+  /**
+   * Per-session queued-message snapshot from the SDK's `queue_update`
+   * event. `steering` and `followUp` arrays mirror the SDK's two
+   * queues — Pi delivers steering at the next agent decision point
+   * (mid-tool boundary), followUp once the agent goes fully idle.
+   * Cleared by an empty queue_update from the SDK; we don't try to
+   * pop entries optimistically.
+   */
+  queuedBySession: Record<string, { steering: string[]; followUp: string[] } | undefined>;
   /** Per-session abort controller for the open SSE stream, if any. */
   controllers: Map<string, AbortController>;
   /** Errors surfaced from API calls (sticky until next successful op). */
@@ -149,6 +158,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   streamingTextBySession: {},
   activeToolBySession: {},
   agentEndCountBySession: {},
+  queuedBySession: {},
   controllers: new Map(),
   error: undefined,
   loadingList: false,
@@ -460,6 +470,26 @@ function applyEvent(
           },
         }));
       });
+    return;
+  }
+
+  if (event.type === "queue_update") {
+    const ev = event as { steering?: unknown; followUp?: unknown };
+    const steering = Array.isArray(ev.steering)
+      ? (ev.steering as unknown[]).filter((v): v is string => typeof v === "string")
+      : [];
+    const followUp = Array.isArray(ev.followUp)
+      ? (ev.followUp as unknown[]).filter((v): v is string => typeof v === "string")
+      : [];
+    set((s) => ({
+      queuedBySession: {
+        ...s.queuedBySession,
+        // Drop the entry entirely when both queues are empty so the
+        // badge unmounts cleanly rather than rendering "queued: 0".
+        [sessionId]:
+          steering.length === 0 && followUp.length === 0 ? undefined : { steering, followUp },
+      },
+    }));
     return;
   }
 
