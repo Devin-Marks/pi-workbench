@@ -1,0 +1,225 @@
+# pi-workbench on Kubernetes / OpenShift
+
+Two flavors of manifests, side-by-side:
+
+```
+kubernetes/
+├── kube/         # vanilla Kubernetes (1.25+) with nginx-ingress
+│   ├── base.yaml          # Namespace + 3× PVC + Service + Ingress
+│   ├── deployment.yaml    # Deployment + initContainer for volume perms
+│   └── secret.sh          # Bootstrap script for pi-workbench-secret
+└── openshift/    # OpenShift 4.x (DeploymentConfig + Route)
+    ├── base.yaml          # Namespace + ServiceAccount + 3× PVC + Service + Route
+    ├── deployment.yaml
+    └── secret.sh
+```
+
+Pick one path. Both deploy a single replica that reads/writes three
+PersistentVolumes:
+
+| Mount | Purpose | PVC |
+|---|---|---|
+| `/workspace` | User code (projects live as subfolders) | `pi-workbench-workspace` (10 Gi) |
+| `/home/pi/.pi/agent` | pi SDK config (auth.json, models.json, settings.json) | `pi-workbench-pi-config` (1 Gi) |
+| `/home/pi/.pi-workbench` | Workbench state (projects.json) | `pi-workbench-data` (1 Gi) |
+
+All three are `ReadWriteMany` so OpenShift `DeploymentConfig` rolling
+updates can mount the volumes from the new pod before the old one
+detaches. If your storage class is RWO-only, change to `ReadWriteOnce`
+AND set `strategy.type: Recreate` on the workload to avoid lock
+contention during rollouts.
+
+---
+
+## Prerequisites
+
+1. **Build and push the image** to a registry your cluster can pull from:
+   ```bash
+   # From the repo root
+   docker build -t <registry>/pi-workbench:latest -f docker/Dockerfile .
+   docker push <registry>/pi-workbench:latest
+   ```
+   Then update `image:` in `kube/deployment.yaml` (or
+   `openshift/deployment.yaml`) to match. The shipped manifests use
+   placeholder image refs:
+   - **kube:** `pi-workbench:latest` — assumes the image is already on
+     every node. Fine for kind / minikube / k3s after `kind load
+     docker-image pi-workbench:latest` / `minikube image load
+     pi-workbench:latest`. For real clusters, swap in your registry path.
+   - **openshift:** `image-registry.openshift-image-registry.svc:5000/pi-workbench/pi-workbench:latest`
+     — uses the cluster's internal registry. Populate it via `oc
+     new-build --strategy=docker --binary --name=pi-workbench` then
+     `oc start-build pi-workbench --from-dir=. -F`.
+
+2. **kubectl / oc** configured against the target cluster.
+
+3. **A storage class that supports RWX** (NFS, CephFS, Longhorn, etc.).
+   Local-path storage on single-node dev clusters works too if you
+   downgrade the PVCs to `ReadWriteOnce` per the note above.
+
+---
+
+## Vanilla Kubernetes
+
+```bash
+# 1. Namespace + PVCs + Service + Ingress
+kubectl apply -f kubernetes/kube/base.yaml
+
+# 2. Bootstrap the secret (random JWT_SECRET, empty UI_PASSWORD/API_KEY).
+#    Edit the --from-literal lines in the script first if you want
+#    password / API-key auth enabled out of the gate.
+./kubernetes/kube/secret.sh
+
+# 3. Deployment
+kubectl apply -f kubernetes/kube/deployment.yaml
+
+# 4. Verify
+kubectl -n pi-workbench rollout status deploy/pi-workbench
+kubectl -n pi-workbench get pods,svc,ingress
+```
+
+Reach the UI:
+- **With ingress** — point `pi-workbench.local` (or your custom host;
+  edit `base.yaml` first) at your ingress controller's external IP.
+- **Without ingress** — `kubectl -n pi-workbench port-forward
+  svc/pi-workbench 3000:3000`, then open <http://localhost:3000>.
+
+---
+
+## OpenShift
+
+```bash
+# 1. Namespace + ServiceAccount + PVCs + Service + Route
+oc apply -f kubernetes/openshift/base.yaml
+
+# 2. Bootstrap the secret (same defaults as the kube/ script).
+./kubernetes/openshift/secret.sh
+
+# 3. DeploymentConfig
+oc apply -f kubernetes/openshift/deployment.yaml
+
+# 4. Allow the pod to run as UID 1000 (the image's `pi` user).
+#    OpenShift's default SCC assigns a random UID per namespace, which
+#    breaks the chown'd /workspace and /home/pi paths in the image.
+#    The `anyuid` SCC bypasses that for the project's ServiceAccount.
+oc adm policy add-scc-to-user anyuid -z pi-workbench -n pi-workbench
+
+# 5. Verify
+oc -n pi-workbench rollout status dc/pi-workbench
+oc -n pi-workbench get pods,svc,route
+```
+
+The Route auto-generates a hostname like
+`pi-workbench-pi-workbench.apps.<cluster-domain>`. Print the actual one
+with:
+```bash
+oc -n pi-workbench get route pi-workbench -o jsonpath='{.spec.host}{"\n"}'
+```
+
+> **Note:** `DeploymentConfig` is deprecated in OpenShift 4.x in favor
+> of standard Kubernetes `Deployment` + `BuildConfig` / Tekton
+> pipelines. The manifests still work, but if you're on a fresh 4.x
+> cluster consider migrating to `apps/v1` `Deployment` (the kube/
+> deployment.yaml is already that shape; the only OpenShift-specific
+> bits are `Route` and the SCC binding).
+
+---
+
+## Customization
+
+### Frontend "minimal" mode
+
+Set `MINIMAL_UI=true` in the deployment env to hide the integrated
+terminal, the Git and Last-turn right-pane tabs, and the
+Providers + Agent settings sections. Project create asks for a name
+only and auto-mkdirs `<WORKSPACE_PATH>/<name>`. Useful for locked-down
+deployments where provider config is managed at the deploy level.
+
+```yaml
+env:
+  - name: MINIMAL_UI
+    value: "true"
+```
+
+`kubectl rollout restart deploy/pi-workbench -n pi-workbench` (or `oc
+rollout restart dc/pi-workbench -n pi-workbench`) after editing.
+
+### Auth
+
+Two independent mechanisms, controlled by the `pi-workbench-secret`
+keys:
+
+- `UI_PASSWORD` (with `JWT_SECRET`) — enables browser password login
+  with JWT session tokens.
+- `API_KEY` — enables a static bearer token for programmatic clients
+  (`Authorization: Bearer <key>`).
+
+Set either or both. Empty values keep that mechanism disabled. If both
+are empty, **the server runs unauthenticated** — only sane behind a
+network policy or a private cluster.
+
+To rotate, edit the secret and restart the pod:
+```bash
+kubectl -n pi-workbench edit secret pi-workbench-secret
+kubectl -n pi-workbench rollout restart deploy/pi-workbench
+```
+
+### Behind a reverse proxy
+
+Set `TRUST_PROXY=true` in the deployment env so the login rate limit
+sees the real client IP from `X-Forwarded-For` instead of the proxy's
+IP. The shipped manifests default to `false` since pi-workbench
+clusters typically expose via ingress / route which already terminate
+TLS and set the header — but the flag stays opt-in to avoid trusting
+a header that hasn't been validated upstream.
+
+The nginx-ingress in `kube/base.yaml` is preconfigured with
+`proxy-body-size: 50m` (file uploads) and 1-hour read/send timeouts
+(long agent runs streaming over SSE). Tune those if your runs go
+longer or your uploads need more headroom — the server itself accepts
+up to 500 MB per file / 2 GB aggregate per upload request.
+
+### Resources
+
+Defaults (per pod):
+- Requests: 512 Mi memory, 250 m CPU
+- Limits: 2 Gi memory, 1 CPU
+
+Bump the limits if you're running large agent contexts or compiling
+projects inside the integrated terminal. Memory is the more likely
+ceiling.
+
+---
+
+## Verification
+
+Health endpoint is unauthenticated:
+```bash
+kubectl -n pi-workbench port-forward svc/pi-workbench 3000:3000 &
+curl -s http://localhost:3000/api/v1/health | jq
+# { "status": "ok", "activeSessions": 0, "activePtys": 0 }
+```
+
+Mode flag:
+```bash
+curl -s http://localhost:3000/api/v1/ui-config | jq
+# { "minimal": false, "workspaceRoot": "/workspace" }
+```
+
+---
+
+## Tear-down
+
+```bash
+# kube
+kubectl delete -f kubernetes/kube/deployment.yaml
+kubectl delete -f kubernetes/kube/base.yaml   # also drops the namespace + PVCs
+
+# openshift
+oc delete -f kubernetes/openshift/deployment.yaml
+oc delete -f kubernetes/openshift/base.yaml   # same
+```
+
+PVC deletion does NOT delete the underlying PV bytes on most storage
+classes (StorageClass `reclaimPolicy: Retain`). Confirm with `kubectl
+get pv` after teardown if you want the data actually gone.
