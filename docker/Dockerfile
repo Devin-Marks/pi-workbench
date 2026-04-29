@@ -51,7 +51,14 @@ FROM node:22-alpine AS runtime
 ARG PUID=1000
 ARG PGID=1000
 
+# `node:22-alpine` ships with a pre-baked `node` user/group at UID/GID
+# 1000 — the same default we want for `pi`. Drop it before creating
+# `pi`, otherwise `addgroup -g 1000` fails with "gid '1000' in use".
+# `|| true` keeps the build green on any future base image that drops
+# the node user.
 RUN apk add --no-cache tini && \
+    (deluser node 2>/dev/null || true) && \
+    (delgroup node 2>/dev/null || true) && \
     addgroup -g $PGID pi && \
     adduser -D -u $PUID -G pi pi
 
