@@ -313,11 +313,149 @@ async function main(): Promise<void> {
     await rm(dataDir, { recursive: true, force: true });
   }
 
+  // ---- Rate limit (own server instance to keep counter clean) ----
+  // The route's `rateLimit: { max: 10, timeWindow: "1 minute" }` config
+  // counts every WS upgrade attempt against the per-IP bucket. The
+  // earlier sections in this test already burned several slots, so
+  // we boot a fresh server here purely for the rate-limit assertion.
+  await runRateLimitTest();
+
   if (failures > 0) {
     console.log(`\n[test-terminal] FAIL — ${failures} assertion(s) failed`);
     process.exit(1);
   }
   console.log("\n[test-terminal] PASS");
+}
+
+/**
+ * Open 11 WS upgrades sequentially against a fresh server. The first
+ * 10 should succeed (open then close cleanly via our explicit close
+ * call); the 11th should be rejected by the per-IP rate-limit before
+ * the upgrade completes. Fastify's rate-limit on a WS upgrade route
+ * returns the limit response BEFORE the protocol switch, so the
+ * client sees a close-without-open with code 1006 (abnormal) or the
+ * non-1000 we get from a refused upgrade. Either is "not 1000" and
+ * "not preceded by an open event", which is what we assert.
+ */
+async function runRateLimitTest(): Promise<void> {
+  const workspacePath = await mkdtemp(join(tmpdir(), "pi-term-rl-ws-"));
+  const configDir = await mkdtemp(join(tmpdir(), "pi-term-rl-cfg-"));
+  const dataDir = await mkdtemp(join(tmpdir(), "pi-term-rl-data-"));
+  const projectPath = join(workspacePath, "demo");
+  await mkdir(projectPath, { recursive: true });
+
+  const apiKey = "test-api-key-" + randomBytes(8).toString("hex");
+  const port = await pickFreePort();
+
+  const child: ChildProcess = spawn(process.execPath, [serverEntry], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      PORT: String(port),
+      LOG_LEVEL: "warn",
+      NODE_ENV: "test",
+      WORKSPACE_PATH: workspacePath,
+      PI_CONFIG_DIR: configDir,
+      WORKBENCH_DATA_DIR: dataDir,
+      SESSION_DIR: join(workspacePath, ".pi", "sessions"),
+      API_KEY: apiKey,
+      UI_PASSWORD: undefined,
+      JWT_SECRET: undefined,
+      SERVE_CLIENT: "false",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stderr?.on("data", (b) => process.stderr.write(`[server stderr] ${String(b)}`));
+
+  const base = `http://127.0.0.1:${port}`;
+  const auth = { Authorization: `Bearer ${apiKey}` };
+  const stop = async (): Promise<void> => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    await new Promise<void>((res) => {
+      child.once("exit", () => res());
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 2000).unref();
+    });
+  };
+
+  try {
+    await waitFor(`${base}/api/v1/health`);
+    const cp = await fetch(`${base}/api/v1/projects`, {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "demo", path: projectPath }),
+    });
+    assert("rate-limit: POST /projects → 201", cp.status === 201);
+    const project = (await cp.json()) as { id: string };
+    const wsUrl = `${base.replace(/^http/, "ws")}/api/v1/terminal?projectId=${encodeURIComponent(project.id)}&token=${apiKey}`;
+
+    let openedCount = 0;
+    let lastCloseCode = -1;
+    // First 10 should succeed; close each immediately to keep PTY
+    // count down. Sequential (not concurrent) so the rate-limit
+    // counter sees ordered hits and we can attribute each result.
+    for (let i = 0; i < 10; i++) {
+      const ws = new WebSocket(wsUrl);
+      const opened = await new Promise<boolean>((resolveFn) => {
+        const timer = setTimeout(() => resolveFn(false), 5_000);
+        ws.once("open", () => {
+          clearTimeout(timer);
+          resolveFn(true);
+        });
+        ws.once("close", () => {
+          clearTimeout(timer);
+          resolveFn(false);
+        });
+        ws.once("error", () => undefined);
+      });
+      if (opened) {
+        openedCount += 1;
+        await new Promise<void>((res) => {
+          ws.once("close", () => res());
+          ws.close(1000, "rate_limit_test");
+        });
+      }
+    }
+    assert("first 10 WS upgrades succeeded", openedCount === 10, `opened=${openedCount}`);
+
+    // 11th attempt should be rejected by the rate-limit middleware
+    // before the upgrade completes — close fires without open.
+    {
+      const ws = new WebSocket(wsUrl);
+      const result = await new Promise<{ opened: boolean; code: number }>((resolveFn) => {
+        let didOpen = false;
+        const timer = setTimeout(() => resolveFn({ opened: didOpen, code: -1 }), 5_000);
+        ws.once("open", () => {
+          didOpen = true;
+        });
+        ws.once("close", (c) => {
+          clearTimeout(timer);
+          resolveFn({ opened: didOpen, code: c });
+        });
+        ws.once("error", () => undefined);
+      });
+      lastCloseCode = result.code;
+      assert(
+        "11th WS upgrade rejected by rate-limit (no open event)",
+        !result.opened,
+        `opened=${result.opened} code=${result.code}`,
+      );
+      // We don't pin the exact close code — Fastify's rate-limit
+      // response is HTTP 429 before the upgrade, so the WS client
+      // sees a close-without-open with code 1006 on most node-ws
+      // versions, but pinning would couple the test to ws's internals.
+      assert(
+        "11th close code != 1000 (not a normal close)",
+        lastCloseCode !== 1000,
+        `code=${lastCloseCode}`,
+      );
+    }
+  } finally {
+    await stop();
+    await rm(workspacePath, { recursive: true, force: true });
+    await rm(configDir, { recursive: true, force: true });
+    await rm(dataDir, { recursive: true, force: true });
+  }
 }
 
 main().catch((err: unknown) => {
