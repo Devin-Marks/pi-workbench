@@ -6,6 +6,7 @@ import {
   getSession,
   SessionNotFoundError,
 } from "../session-registry.js";
+import { readSettings, writeSettings } from "../config-manager.js";
 import { errorSchema, liveSummaryBody, liveSummarySchema } from "./_schemas.js";
 
 function notFound(reply: FastifyReply): FastifyReply {
@@ -361,6 +362,26 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
       if (model === undefined) {
         return reply.code(400).send({ error: "unknown_model" });
       }
+      // The SDK's `session.setModel(...)` has a side effect that's
+      // wrong for our use case: it calls
+      // `settingsManager.setDefaultModelAndProvider(...)` AND
+      // `setThinkingLevel(...)` which both write to
+      // PI_CONFIG_DIR/settings.json — picking a model for one session
+      // would otherwise mutate the global default for every NEW
+      // session and every other client. Model choice is per-session
+      // here, so we snapshot the ENTIRE settings.json before the
+      // call and atomically replace it afterwards. A previous
+      // version of this fix only restored defaultProvider/defaultModel,
+      // which left SDK-injected defaultThinkingLevel behind and
+      // visibly reset users' settings to a stub. The full-snapshot
+      // approach undoes every side effect cleanly.
+      let priorSettings: Awaited<ReturnType<typeof readSettings>> | undefined;
+      try {
+        priorSettings = await readSettings();
+      } catch {
+        // settings.json missing / unreadable — leave priorSettings
+        // undefined so we don't try to restore a phantom snapshot.
+      }
       try {
         await live.session.setModel(model as Parameters<typeof live.session.setModel>[0]);
       } catch (err) {
@@ -368,6 +389,18 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
           error: "set_model_failed",
           message: err instanceof Error ? err.message : String(err),
         });
+      }
+      // Best-effort restore. We don't fail the route on a settings
+      // write error — the per-session model change already succeeded
+      // and is the user-visible action; a stale default at worst
+      // surfaces on the NEXT new session, which the per-session
+      // override on each chat input then corrects.
+      if (priorSettings !== undefined) {
+        try {
+          await writeSettings(priorSettings);
+        } catch (err) {
+          req.log.warn({ err }, "failed to restore prior settings after per-session setModel");
+        }
       }
       return { provider: req.body.provider, modelId: req.body.modelId };
     },

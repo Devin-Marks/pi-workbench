@@ -88,6 +88,31 @@ export interface IncomingEvent {
   [k: string]: unknown;
 }
 
+/**
+ * Walk an optimistic user message and revoke any blob URLs it owns
+ * before discarding it. Optimistic image attachments are stored as
+ * `{ type: "image", data: <blob URL>, __blobUrl: true }`; without
+ * `URL.revokeObjectURL` the URL retains the entire `File` for the
+ * lifetime of the page. Called on rollback, on canonical refetch,
+ * and on dispose so the same URL never outlives its usefulness.
+ */
+function revokeOptimisticBlobUrls(messages: ReadonlyArray<AgentMessageLike>): void {
+  for (const m of messages) {
+    if (m.role !== "user") continue;
+    if (!Array.isArray(m.content)) continue;
+    for (const block of m.content) {
+      const b = block as { type?: unknown; data?: unknown; __blobUrl?: unknown };
+      if (b.type === "image" && b.__blobUrl === true && typeof b.data === "string") {
+        try {
+          URL.revokeObjectURL(b.data);
+        } catch {
+          // ignore — already revoked, or non-browser environment
+        }
+      }
+    }
+  }
+}
+
 interface SessionState {
   /** Sessions per project, deduped + recency-sorted (matches GET /sessions). */
   byProject: Record<string, UnifiedSession[]>;
@@ -143,10 +168,10 @@ interface SessionState {
   setActiveSession: (sessionId: string | undefined) => void;
   openStream: (sessionId: string) => void;
   closeStream: (sessionId: string) => void;
-  sendPrompt: (sessionId: string, text: string) => Promise<void>;
+  sendPrompt: (sessionId: string, text: string, attachments?: File[]) => Promise<void>;
   sendSteer: (sessionId: string, text: string, mode?: "steer" | "followUp") => Promise<void>;
   abortSession: (sessionId: string) => Promise<void>;
-  disposeSession: (sessionId: string) => Promise<void>;
+  disposeSession: (sessionId: string, opts?: { hard?: boolean }) => Promise<void>;
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -282,15 +307,45 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  sendPrompt: async (sessionId, text) => {
+  sendPrompt: async (sessionId, text, attachments) => {
     set({ error: undefined });
     // Optimistically append the user message so the chat reflects the input
     // immediately. If the server rejects (no API key, no model, etc.) the
     // catch below rolls it back. If it accepts, the eventual messages
     // refetch on agent_end will replace this with the canonical entry.
+    //
+    // For attachments, we render image thumbnails inline and chips for
+    // text files. The optimistic shape mirrors what the SDK produces
+    // for user messages with attachments — text content + image
+    // blocks — so the renderer doesn't have to special-case the
+    // pre-refetch state.
+    const optimisticContent: Array<Record<string, unknown>> = [{ type: "text", text }];
+    if (attachments !== undefined) {
+      for (const f of attachments) {
+        if (f.type.startsWith("image/")) {
+          // Use a blob URL for the optimistic preview — cheap to
+          // render and gets garbage-collected when the canonical
+          // refetch replaces this entry.
+          optimisticContent.push({
+            type: "image",
+            mimeType: f.type,
+            data: URL.createObjectURL(f),
+            // Mark this is a blob URL the renderer should treat as a
+            // direct src rather than re-prefixing with `data:...`.
+            __blobUrl: true,
+          });
+        } else {
+          optimisticContent.push({
+            type: "file",
+            filename: f.name,
+            size: f.size,
+          });
+        }
+      }
+    }
     const optimistic: AgentMessageLike = {
       role: "user",
-      content: text,
+      content: optimisticContent,
       timestamp: Date.now(),
     };
     set((s) => ({
@@ -300,9 +355,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       },
     }));
     try {
-      await api.prompt(sessionId, text);
+      const opts: Parameters<typeof api.prompt>[2] = {};
+      if (attachments !== undefined && attachments.length > 0) opts.attachments = attachments;
+      await api.prompt(sessionId, text, opts);
     } catch (err) {
-      // Roll back the optimistic append on failure.
+      // Roll back the optimistic append on failure. Revoke any blob
+      // URLs the optimistic message owns BEFORE we drop the
+      // reference, otherwise they stay alive forever.
+      revokeOptimisticBlobUrls([optimistic]);
       set((s) => {
         const cur = s.messagesBySession[sessionId] ?? [];
         return {
@@ -343,12 +403,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  disposeSession: async (sessionId) => {
+  disposeSession: async (sessionId, opts) => {
     set({ error: undefined });
     try {
       get().closeStream(sessionId);
-      await api.disposeSession(sessionId);
+      await api.disposeSession(sessionId, opts);
       set((s) => {
+        // Revoke any blob URLs the disposed session was holding —
+        // optimistic image attachments that never made it through a
+        // canonical refetch (e.g. dispose mid-prompt-flight).
+        const stale = s.messagesBySession[sessionId];
+        if (stale !== undefined) revokeOptimisticBlobUrls(stale);
         const nextMessages = { ...s.messagesBySession };
         delete nextMessages[sessionId];
         const nextStreaming = { ...s.streamingBySession };
@@ -450,16 +515,23 @@ function applyEvent(
     void api
       .getMessages(sessionId)
       .then(({ messages }) => {
-        set((s) => ({
-          messagesBySession: { ...s.messagesBySession, [sessionId]: messages },
-          streamingBySession: { ...s.streamingBySession, [sessionId]: false },
-          streamingTextBySession: { ...s.streamingTextBySession, [sessionId]: "" },
-          activeToolBySession: { ...s.activeToolBySession, [sessionId]: undefined },
-          agentEndCountBySession: {
-            ...s.agentEndCountBySession,
-            [sessionId]: (s.agentEndCountBySession[sessionId] ?? 0) + 1,
-          },
-        }));
+        set((s) => {
+          // Canonical refetch replaces the optimistic-shape messages
+          // with their final form. Walk the OLD array first to revoke
+          // any blob URLs the optimistic image attachments held.
+          const stale = s.messagesBySession[sessionId];
+          if (stale !== undefined) revokeOptimisticBlobUrls(stale);
+          return {
+            messagesBySession: { ...s.messagesBySession, [sessionId]: messages },
+            streamingBySession: { ...s.streamingBySession, [sessionId]: false },
+            streamingTextBySession: { ...s.streamingTextBySession, [sessionId]: "" },
+            activeToolBySession: { ...s.activeToolBySession, [sessionId]: undefined },
+            agentEndCountBySession: {
+              ...s.agentEndCountBySession,
+              [sessionId]: (s.agentEndCountBySession[sessionId] ?? 0) + 1,
+            },
+          };
+        });
       })
       .catch(() => {
         // If the refetch fails, at least flip streaming off so the

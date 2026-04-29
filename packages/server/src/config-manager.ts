@@ -168,6 +168,19 @@ export async function readSettings(): Promise<SettingsJson> {
 }
 
 /**
+ * Atomically replace settings.json with `settings`. Used by the
+ * per-session model route to roll back the SDK's side effects on
+ * `session.setModel(...)`. The SDK touches more keys than just
+ * defaultProvider/defaultModel (defaultThinkingLevel, etc.), so a
+ * key-by-key restore was leaking SDK-written values into the file
+ * and resetting users' manually-curated settings to whatever the
+ * SDK happened to write.
+ */
+export async function writeSettings(settings: SettingsJson): Promise<void> {
+  await atomicWriteJson(SETTINGS_FILE(), settings);
+}
+
+/**
  * Partial-merge update: shallow merge of `patch` over the existing settings.
  * Pass `null` for any key in `patch` to delete that key. Atomic write.
  */

@@ -1,6 +1,52 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Image as ImageIcon, Paperclip, X } from "lucide-react";
 import { api, ApiError, type ProvidersListing } from "../lib/api-client";
-import { useSessionStore } from "../store/session-store";
+import { EMPTY_MESSAGES, useSessionStore, type AgentMessageLike } from "../store/session-store";
+
+/**
+ * Pull the user's prior prompts out of the session message history,
+ * newest first. Used by the chat input's arrow-key history cycling.
+ *
+ * Mirrors `extractText` in ChatView (we can't share it without a
+ * circular import; the duplication is a few lines and the
+ * canonical-shape detection is identical). Drops empty strings and
+ * collapses consecutive duplicates so repeatedly pressing Up doesn't
+ * cycle through "yes\nyes\nyes" three times.
+ *
+ * Optimistic-vs-canonical convergence: `sendPrompt` appends an
+ * optimistic message with `content: text` (string form) before the
+ * SDK confirms; on `agent_end` the canonical refetch replaces it
+ * with the array-of-blocks form. Both shapes extract to the SAME
+ * trimmed string here, so the consecutive-duplicate dedupe collapses
+ * the brief overlap to a single history entry.
+ */
+function userHistory(messages: ReadonlyArray<AgentMessageLike>): string[] {
+  const out: string[] = [];
+  let last: string | undefined;
+  // Iterate newest-to-oldest so the resulting array is ordered for
+  // direct indexing: out[0] = most recent.
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m === undefined || m.role !== "user") continue;
+    let text = "";
+    if (typeof m.content === "string") {
+      text = m.content;
+    } else if (Array.isArray(m.content)) {
+      const parts: string[] = [];
+      for (const c of m.content) {
+        const o = c as { type?: unknown; text?: unknown };
+        if (o.type === "text" && typeof o.text === "string") parts.push(o.text);
+      }
+      text = parts.join("\n");
+    }
+    text = text.trim();
+    if (text.length === 0) continue;
+    if (text === last) continue;
+    out.push(text);
+    last = text;
+  }
+  return out;
+}
 
 interface Props {
   sessionId: string;
@@ -91,6 +137,97 @@ export function ChatInput({ sessionId }: Props) {
   // doesn't force a re-render on every Esc.
   const lastEscRef = useRef<number>(0);
 
+  // Attachment state — File objects selected via the picker, queued
+  // to ride along with the next prompt. Cleared on submit. Object
+  // URLs for image previews are tracked in a ref so we can revoke
+  // them on remove/submit (no leak on long sessions).
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const previewUrlsRef = useRef<Map<File, string>>(new Map());
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Per-file size + count limits mirror the server's. Validating
+  // client-side gives instant feedback; the server still re-checks.
+  const MAX_FILE_BYTES = 10 * 1024 * 1024;
+  const MAX_IMAGES = 4;
+  // Server's `files: 8` cap is global (image + text combined). Mirror
+  // it client-side so the UI rejects the 9th attachment with a clear
+  // message instead of letting the server return `too_many_files`.
+  const MAX_TOTAL_FILES = 8;
+  const [attachmentError, setAttachmentError] = useState<string | undefined>(undefined);
+
+  const addAttachments = (files: FileList | File[]): void => {
+    setAttachmentError(undefined);
+    const existing = attachments;
+    const next: File[] = [...existing];
+    let imageCount = existing.filter((f) => f.type.startsWith("image/")).length;
+    for (const f of files) {
+      if (next.length >= MAX_TOTAL_FILES) {
+        setAttachmentError(
+          `Up to ${MAX_TOTAL_FILES} attachments per message; "${f.name}" dropped.`,
+        );
+        continue;
+      }
+      if (f.size > MAX_FILE_BYTES) {
+        setAttachmentError(`"${f.name}" exceeds the 10 MB per-file limit.`);
+        continue;
+      }
+      if (f.type.startsWith("image/") && imageCount >= MAX_IMAGES) {
+        setAttachmentError(`Up to ${MAX_IMAGES} images per message; "${f.name}" dropped.`);
+        continue;
+      }
+      next.push(f);
+      if (f.type.startsWith("image/")) {
+        imageCount += 1;
+        previewUrlsRef.current.set(f, URL.createObjectURL(f));
+      }
+    }
+    setAttachments(next);
+  };
+
+  const removeAttachment = (target: File): void => {
+    const url = previewUrlsRef.current.get(target);
+    if (url !== undefined) {
+      URL.revokeObjectURL(url);
+      previewUrlsRef.current.delete(target);
+    }
+    setAttachments((cur) => cur.filter((f) => f !== target));
+  };
+
+  const clearAttachments = (): void => {
+    for (const url of previewUrlsRef.current.values()) URL.revokeObjectURL(url);
+    previewUrlsRef.current.clear();
+    setAttachments([]);
+    setAttachmentError(undefined);
+  };
+
+  // Revoke any lingering object URLs when the component unmounts.
+  // Snapshot the Map at effect-mount so the cleanup uses that stable
+  // reference instead of `previewUrlsRef.current` at unmount time
+  // (the ref value can change in the meantime).
+  useEffect(() => {
+    const map = previewUrlsRef.current;
+    return () => {
+      for (const url of map.values()) URL.revokeObjectURL(url);
+      map.clear();
+    };
+  }, []);
+
+  // Bash-shell-style prompt history. `historyIdx` is the index into
+  // `history` (0 = most recent). `undefined` means "not in history
+  // mode" (showing the user's draft). `historyDraft` stashes whatever
+  // the user had typed BEFORE pressing Up, so Down past the newest
+  // entry restores it instead of leaving the textarea blank.
+  const messages = useSessionStore((s) => s.messagesBySession[sessionId] ?? EMPTY_MESSAGES);
+  const history = useMemo(() => userHistory(messages), [messages]);
+  const [historyIdx, setHistoryIdx] = useState<number | undefined>(undefined);
+  const historyDraftRef = useRef<string>("");
+  // Reset history navigation when the session changes — each session
+  // has its own history stack.
+  useEffect(() => {
+    setHistoryIdx(undefined);
+    historyDraftRef.current = "";
+  }, [sessionId]);
+
   // Reset the double-Esc latch on session change so a stray Esc
   // logged against session A can't combine with a fresh Esc on
   // session B and abort the wrong run.
@@ -100,12 +237,15 @@ export function ChatInput({ sessionId }: Props) {
 
   // Model selector state. We only know the user's chosen model client-side
   // (the SDK doesn't expose "current model" over REST), so persist the
-  // last-applied selection in localStorage per session and re-apply on
-  // mount. Empty string means "leave whatever the agent has now."
+  // last-applied selection in localStorage per session and re-apply when
+  // the session changes. Empty string means "leave whatever the agent
+  // has now." ChatInput is reused across sessions (no React key on the
+  // mount), so we explicitly re-read storage on sessionId change instead
+  // of relying on useState's mount-only initializer.
   const storageKey = MODEL_KEY_PREFIX + sessionId;
   const [providers, setProviders] = useState<ProvidersListing | undefined>(undefined);
   const [modelChoice, setModelChoice] = useState<string>(
-    () => localStorage.getItem(storageKey) ?? "",
+    () => localStorage.getItem(MODEL_KEY_PREFIX + sessionId) ?? "",
   );
   const [modelError, setModelError] = useState<string | undefined>(undefined);
 
@@ -119,6 +259,25 @@ export function ChatInput({ sessionId }: Props) {
         setModelError(`models unavailable (${code})`);
       });
   }, []);
+
+  // On session change: re-read the per-session selection from storage and
+  // re-apply it to the server-side AgentSession. Without this, the picker
+  // would keep showing the previously-active session's model and the new
+  // session would silently inherit its default. Skips the setModel call
+  // when storage is empty (= "use whatever the session already has").
+  useEffect(() => {
+    const stored = localStorage.getItem(MODEL_KEY_PREFIX + sessionId) ?? "";
+    setModelChoice(stored);
+    setModelError(undefined);
+    if (stored === "") return;
+    const [provider, ...rest] = stored.split(":");
+    const modelId = rest.join(":");
+    if (provider === undefined || modelId.length === 0) return;
+    void api.setModel(sessionId, provider, modelId).catch((err: unknown) => {
+      const code = err instanceof ApiError ? err.code : (err as Error).message;
+      setModelError(`set model failed: ${code}`);
+    });
+  }, [sessionId]);
 
   const onModelChange = async (value: string): Promise<void> => {
     setModelChoice(value);
@@ -141,15 +300,33 @@ export function ChatInput({ sessionId }: Props) {
 
   const submit = async (): Promise<void> => {
     const value = text.trim();
-    if (value.length === 0 || submitting) return;
+    // Allow empty text only when there's at least one attachment —
+    // sending "look at this" with an image but no caption is a
+    // common path. Server still rejects entirely-empty prompts.
+    if ((value.length === 0 && attachments.length === 0) || submitting) return;
     setSubmitting(true);
     try {
       if (isStreaming) {
+        // Steer doesn't accept attachments today — the SDK's steer()
+        // takes (text, images?) which we COULD wire, but cleaner to
+        // ship steer-with-text-only first. Clear immediately + warn
+        // via the inline banner so the chips don't linger between
+        // the warning and `sendSteer` resolving.
+        if (attachments.length > 0) {
+          clearAttachments();
+          setAttachmentError("Attachments aren't sent on steer (mid-turn). Cleared.");
+        }
         await sendSteer(sessionId, value);
       } else {
-        await sendPrompt(sessionId, value);
+        await sendPrompt(sessionId, value, attachments.length > 0 ? attachments : undefined);
       }
       setText("");
+      clearAttachments();
+      // Submitting clears history mode — the user's prompt is now
+      // (or will shortly be) the newest entry, and pressing Up next
+      // should land on it from a fresh empty draft.
+      setHistoryIdx(undefined);
+      historyDraftRef.current = "";
     } catch {
       // store.error renders below
     } finally {
@@ -161,6 +338,41 @@ export function ChatInput({ sessionId }: Props) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void submit();
+      return;
+    }
+    // Arrow-key history cycling — bash-shell style. Only intercepts
+    // when entering history mode from an empty draft (Up) or while
+    // already in history mode (either direction). Once the user
+    // types after Up, `onChange` clears `historyIdx` and arrows
+    // resume normal cursor movement.
+    if (e.key === "ArrowUp") {
+      const inHistory = historyIdx !== undefined;
+      if (inHistory || text.length === 0) {
+        if (history.length === 0) return;
+        e.preventDefault();
+        const nextIdx = inHistory ? Math.min((historyIdx ?? 0) + 1, history.length - 1) : 0;
+        if (!inHistory) historyDraftRef.current = text;
+        setHistoryIdx(nextIdx);
+        const entry = history[nextIdx];
+        if (entry !== undefined) setText(entry);
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      if (historyIdx === undefined) return;
+      e.preventDefault();
+      if (historyIdx > 0) {
+        const nextIdx = historyIdx - 1;
+        setHistoryIdx(nextIdx);
+        const entry = history[nextIdx];
+        if (entry !== undefined) setText(entry);
+      } else {
+        // Past the newest → restore the user's draft from before
+        // they started cycling history.
+        setHistoryIdx(undefined);
+        setText(historyDraftRef.current);
+        historyDraftRef.current = "";
+      }
       return;
     }
     if (e.key === "Escape") {
@@ -181,6 +393,19 @@ export function ChatInput({ sessionId }: Props) {
     }
   };
 
+  // Wrap setText so any user-driven edit (typing, paste, programmatic
+  // change from outside history) drops history mode. If the user
+  // started navigating history and then started typing, subsequent
+  // arrows should behave as ordinary cursor movement, not as more
+  // history navigation.
+  const handleTextChange = (next: string): void => {
+    setText(next);
+    if (historyIdx !== undefined) {
+      setHistoryIdx(undefined);
+      historyDraftRef.current = "";
+    }
+  };
+
   return (
     <div className="border-t border-neutral-800 bg-neutral-950 px-6 py-3">
       <div className="mx-auto max-w-3xl space-y-2">
@@ -195,10 +420,47 @@ export function ChatInput({ sessionId }: Props) {
           )}
         </div>
         {error !== undefined && <p className="text-xs text-red-400">Error: {error}</p>}
+        {attachmentError !== undefined && (
+          <p className="text-xs text-amber-400">{attachmentError}</p>
+        )}
+        {attachments.length > 0 && (
+          <AttachmentPreview
+            attachments={attachments}
+            previewUrls={previewUrlsRef.current}
+            onRemove={removeAttachment}
+          />
+        )}
         <div className="flex items-end gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            // Accept everything; the server (and addAttachments above)
+            // sort images vs text by MIME type. Restricting `accept`
+            // here would block legitimate code-file extensions the
+            // browser doesn't have a built-in MIME for.
+            onChange={(e) => {
+              if (e.target.files !== null) addAttachments(e.target.files);
+              // Reset so re-selecting the same file fires onChange.
+              e.target.value = "";
+            }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={submitting || isStreaming}
+            className="self-stretch rounded-md border border-neutral-700 bg-neutral-900 px-2 text-neutral-300 hover:border-neutral-500 hover:text-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+            title={
+              isStreaming
+                ? "Attachments aren't sent on steer (mid-turn). Wait for the current run to finish."
+                : "Attach files (images go into model context; text files are prepended to the prompt)"
+            }
+          >
+            <Paperclip size={14} />
+          </button>
           <textarea
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => handleTextChange(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder={
               isStreaming
@@ -218,7 +480,7 @@ export function ChatInput({ sessionId }: Props) {
           <div className="flex flex-row gap-1">
             <button
               onClick={() => void submit()}
-              disabled={text.trim().length === 0 || submitting}
+              disabled={(text.trim().length === 0 && attachments.length === 0) || submitting}
               className="rounded-md bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 disabled:cursor-not-allowed disabled:opacity-50"
               title={
                 isStreaming
@@ -413,4 +675,70 @@ function ModelPicker({
       )}
     </div>
   );
+}
+
+/**
+ * Strip of attached file pills above the textarea. Image attachments
+ * render as 48px-square thumbnails (object-fit: cover); non-image
+ * files render as a chip with the filename + size. Each pill has an
+ * × that calls `onRemove` to drop just that one.
+ *
+ * The previewUrls Map is owned by the parent — we read from it but
+ * never modify it here. Object URLs are revoked in the parent's
+ * `removeAttachment` and `clearAttachments`.
+ */
+function AttachmentPreview({
+  attachments,
+  previewUrls,
+  onRemove,
+}: {
+  attachments: File[];
+  previewUrls: Map<File, string>;
+  onRemove: (f: File) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {attachments.map((f, i) => {
+        const isImage = f.type.startsWith("image/");
+        const url = previewUrls.get(f);
+        return (
+          <div
+            key={`${i}-${f.name}`}
+            className="group relative flex items-center gap-1.5 rounded-md border border-neutral-700 bg-neutral-900 pr-1 text-xs text-neutral-200"
+          >
+            {isImage && url !== undefined ? (
+              <img
+                src={url}
+                alt={f.name}
+                className="h-12 w-12 shrink-0 rounded-l-md object-cover"
+              />
+            ) : (
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-l-md bg-neutral-800 text-neutral-400">
+                {isImage ? <ImageIcon size={14} /> : <Paperclip size={12} />}
+              </span>
+            )}
+            <span className="flex flex-col py-1 pl-1">
+              <span className="max-w-[160px] truncate font-mono text-[11px]" title={f.name}>
+                {f.name}
+              </span>
+              <span className="text-[10px] text-neutral-500">{formatBytes(f.size)}</span>
+            </span>
+            <button
+              onClick={() => onRemove(f)}
+              className="ml-1 rounded p-0.5 text-neutral-500 hover:bg-neutral-800 hover:text-red-300"
+              title={`Remove ${f.name}`}
+            >
+              <X size={11} />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
