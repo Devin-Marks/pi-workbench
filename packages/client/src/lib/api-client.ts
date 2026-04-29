@@ -837,6 +837,44 @@ export const api = {
   },
   gitBranches: (projectId: string) =>
     request(`/api/v1/git/branches?projectId=${encodeURIComponent(projectId)}`, vGitBranches),
+  gitCheckout: (projectId: string, branch: string) =>
+    request(
+      "/api/v1/git/checkout",
+      (v, s) => {
+        if (!isObject(v) || v.ok !== true) fail(s, "expected { ok: true }");
+        return { ok: true as const };
+      },
+      { method: "POST", body: { projectId, branch } },
+    ),
+  gitBranchCreate: (
+    projectId: string,
+    name: string,
+    opts?: { startPoint?: string; checkout?: boolean },
+  ) => {
+    const body: Record<string, unknown> = { projectId, name };
+    if (opts?.startPoint !== undefined) body.startPoint = opts.startPoint;
+    if (opts?.checkout !== undefined) body.checkout = opts.checkout;
+    return request(
+      "/api/v1/git/branch/create",
+      (v, s) => {
+        if (!isObject(v) || v.ok !== true) fail(s, "expected { ok: true }");
+        return { ok: true as const };
+      },
+      { method: "POST", body },
+    );
+  },
+  gitBranchDelete: (projectId: string, name: string, force?: boolean) => {
+    const qs = new URLSearchParams({ projectId });
+    if (force === true) qs.set("force", "1");
+    return request(
+      `/api/v1/git/branch/${encodeURIComponent(name)}?${qs.toString()}`,
+      (v, s) => {
+        if (!isObject(v) || v.ok !== true) fail(s, "expected { ok: true }");
+        return { ok: true as const };
+      },
+      { method: "DELETE" },
+    );
+  },
   gitStage: (projectId: string, paths: string[]) =>
     request(
       "/api/v1/git/stage",

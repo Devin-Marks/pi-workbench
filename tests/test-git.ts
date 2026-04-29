@@ -355,6 +355,80 @@ async function main(): Promise<void> {
       );
     }
 
+    // ---- branch create + checkout + delete ----
+    {
+      const create = await jsend(
+        "POST",
+        `${base}/api/v1/git/branch/create`,
+        { projectId: gitProjectId, name: "feature/test", checkout: true },
+        auth,
+      );
+      assert("branch/create + checkout → 200", create.status === 200);
+      const branchesAfter = await jget(
+        `${base}/api/v1/git/branches?projectId=${encodeURIComponent(gitProjectId)}`,
+        auth,
+      );
+      const body = branchesAfter.body as {
+        current?: string;
+        branches: { name: string; current: boolean }[];
+      };
+      assert("HEAD switched to feature/test", body.current === "feature/test");
+      assert(
+        "branches list includes feature/test as current",
+        body.branches.some((b) => b.name === "feature/test" && b.current),
+      );
+    }
+    {
+      const back = await jsend(
+        "POST",
+        `${base}/api/v1/git/checkout`,
+        { projectId: gitProjectId, branch: "main" },
+        auth,
+      );
+      assert("checkout main → 200", back.status === 200);
+      const after = await jget(
+        `${base}/api/v1/git/branches?projectId=${encodeURIComponent(gitProjectId)}`,
+        auth,
+      );
+      const body = after.body as { current?: string };
+      assert("HEAD back on main", body.current === "main");
+    }
+    {
+      // -d refuses unmerged branches; feature/test was created at HEAD
+      // and never had divergent commits, so it IS merged into main.
+      // Plain delete should succeed.
+      const del = await fetch(
+        `${base}/api/v1/git/branch/feature%2Ftest?projectId=${encodeURIComponent(gitProjectId)}`,
+        { method: "DELETE", headers: auth },
+      );
+      assert("branch delete → 200", del.status === 200);
+      const after = await jget(
+        `${base}/api/v1/git/branches?projectId=${encodeURIComponent(gitProjectId)}`,
+        auth,
+      );
+      const body = after.body as { branches: { name: string }[] };
+      assert(
+        "feature/test removed from branch list",
+        !body.branches.some((b) => b.name === "feature/test"),
+      );
+    }
+    {
+      // Invalid branch name should hit the validator before git runs.
+      const bad = await jsend(
+        "POST",
+        `${base}/api/v1/git/branch/create`,
+        { projectId: gitProjectId, name: "-evil flag" },
+        auth,
+      );
+      assert("invalid branch name → 400", bad.status === 400);
+      const body = bad.body as { error: string };
+      assert(
+        "invalid_branch_name error code",
+        body.error === "invalid_branch_name",
+        `got: ${body.error}`,
+      );
+    }
+
     // ---- push without upstream → 400 with sanitized message ----
     {
       const r = await jsend("POST", `${base}/api/v1/git/push`, { projectId: gitProjectId }, auth);

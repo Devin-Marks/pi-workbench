@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { GitBranch, GitCommit, Minus, Plus, RefreshCw, Undo2, Upload } from "lucide-react";
+import {
+  Check,
+  GitBranch,
+  GitCommit,
+  Minus,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Undo2,
+  Upload,
+} from "lucide-react";
 import {
   api,
   ApiError,
@@ -10,6 +20,7 @@ import {
 import { useActiveProject } from "../store/project-store";
 import { useGitStatus } from "../hooks/useGitStatus";
 import { DiffBlock } from "./DiffBlock";
+import { ConfirmDialog, PromptDialog } from "./Modal";
 
 /**
  * Right-pane Git tab. Sections, top-to-bottom:
@@ -42,6 +53,73 @@ export function GitPanel() {
   const [branches, setBranches] = useState<GitBranchEntry[] | undefined>(undefined);
   const [showLog, setShowLog] = useState(false);
   const [showBranches, setShowBranches] = useState(false);
+  // Pending-branch-op state. `branchBusy` blocks duplicate clicks on
+  // the per-row buttons; `branchDialog` drives the create / delete
+  // confirmation modals.
+  const [branchBusy, setBranchBusy] = useState<string | undefined>(undefined);
+  const [branchDialog, setBranchDialog] = useState<
+    { kind: "create" } | { kind: "delete"; name: string } | undefined
+  >(undefined);
+
+  const reloadBranches = async (): Promise<void> => {
+    if (project === undefined) return;
+    try {
+      const r = await api.gitBranches(project.id);
+      setBranches(r.branches);
+    } catch (err) {
+      setOpError(err instanceof ApiError ? err.code : (err as Error).message);
+    }
+  };
+
+  const handleCheckout = async (branch: string): Promise<void> => {
+    if (project === undefined) return;
+    setBranchBusy(branch);
+    setOpError(undefined);
+    try {
+      await api.gitCheckout(project.id, branch);
+      await reloadBranches();
+      refresh();
+    } catch (err) {
+      setOpError(err instanceof ApiError ? err.code : (err as Error).message);
+    } finally {
+      setBranchBusy(undefined);
+    }
+  };
+
+  const handleCreateBranch = async (name: string): Promise<void> => {
+    if (project === undefined) return;
+    setBranchDialog(undefined);
+    setBranchBusy(name);
+    setOpError(undefined);
+    try {
+      // Create + checkout in one step — matches what most UIs do
+      // when the user clicks "New branch" while looking at the
+      // branches panel.
+      await api.gitBranchCreate(project.id, name, { checkout: true });
+      await reloadBranches();
+      refresh();
+    } catch (err) {
+      setOpError(err instanceof ApiError ? err.code : (err as Error).message);
+    } finally {
+      setBranchBusy(undefined);
+    }
+  };
+
+  const handleDeleteBranch = async (force: boolean): Promise<void> => {
+    if (project === undefined || branchDialog?.kind !== "delete") return;
+    const { name } = branchDialog;
+    setBranchDialog(undefined);
+    setBranchBusy(name);
+    setOpError(undefined);
+    try {
+      await api.gitBranchDelete(project.id, name, force);
+      await reloadBranches();
+    } catch (err) {
+      setOpError(err instanceof ApiError ? err.code : (err as Error).message);
+    } finally {
+      setBranchBusy(undefined);
+    }
+  };
 
   // Per-file diff cache. Keyed by `<path>|<staged>` so toggling
   // staged status swaps the rendered diff cleanly.
@@ -401,25 +479,93 @@ export function GitPanel() {
               {branches === undefined ? (
                 <p className="italic text-neutral-500">Loading…</p>
               ) : (
-                <ul className="space-y-0.5">
-                  {branches.map((b) => (
-                    <li
-                      key={b.name}
-                      className={`font-mono ${b.current ? "text-emerald-400" : "text-neutral-300"}`}
-                    >
-                      {b.current ? "● " : "  "}
-                      {b.name}
-                      {b.remote && (
-                        <span className="ml-2 text-[10px] text-neutral-600">remote</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <ul className="space-y-0.5">
+                    {branches.map((b) => {
+                      const busy = branchBusy === b.name;
+                      return (
+                        <li
+                          key={b.name}
+                          className={`group flex items-center gap-1 rounded px-1 py-0.5 font-mono hover:bg-neutral-900 ${
+                            b.current ? "text-emerald-400" : "text-neutral-300"
+                          }`}
+                        >
+                          <span className="w-3 shrink-0">
+                            {b.current ? <Check size={10} /> : null}
+                          </span>
+                          <span className="flex-1 truncate" title={b.name}>
+                            {b.name}
+                          </span>
+                          {b.remote && (
+                            <span className="ml-1 text-[10px] text-neutral-600">remote</span>
+                          )}
+                          {/* Per-row actions only show on hover. Current
+                              local branch shows neither — checkout-self
+                              is a no-op and -d on current is rejected. */}
+                          {!b.current && (
+                            <div className="hidden gap-0.5 group-hover:flex">
+                              <button
+                                onClick={() => void handleCheckout(b.name)}
+                                disabled={busy}
+                                className="rounded px-1 py-0.5 text-[10px] text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-40"
+                                title={
+                                  b.remote
+                                    ? `Checkout (creates a tracking branch from ${b.name})`
+                                    : `Checkout ${b.name}`
+                                }
+                              >
+                                checkout
+                              </button>
+                              {!b.remote && (
+                                <button
+                                  onClick={() => setBranchDialog({ kind: "delete", name: b.name })}
+                                  disabled={busy}
+                                  className="rounded p-0.5 text-neutral-500 hover:bg-red-900/30 hover:text-red-300 disabled:opacity-40"
+                                  title="Delete branch"
+                                >
+                                  <Trash2 size={10} />
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <button
+                    onClick={() => setBranchDialog({ kind: "create" })}
+                    className="mt-2 flex items-center gap-1 rounded px-1 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100"
+                  >
+                    <Plus size={10} /> New branch
+                  </button>
+                </>
               )}
             </div>
           )}
         </div>
       </div>
+      <PromptDialog
+        open={branchDialog?.kind === "create"}
+        onClose={() => setBranchDialog(undefined)}
+        onSubmit={(name) => void handleCreateBranch(name)}
+        title="New branch"
+        label="Branch name"
+        placeholder="feature/my-change"
+        primaryLabel="Create + checkout"
+      />
+      <ConfirmDialog
+        open={branchDialog?.kind === "delete"}
+        onClose={() => setBranchDialog(undefined)}
+        onConfirm={() => void handleDeleteBranch(false)}
+        title="Delete branch"
+        message={
+          branchDialog?.kind === "delete"
+            ? `Delete branch "${branchDialog.name}"? Refused if not merged into HEAD; force-delete from the terminal if you really mean it.`
+            : ""
+        }
+        primaryLabel="Delete"
+        tone="danger"
+      />
     </div>
   );
 }

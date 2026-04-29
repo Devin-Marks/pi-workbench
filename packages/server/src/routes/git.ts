@@ -2,7 +2,11 @@ import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import {
   GitCommandError,
   GitNotInstalledError,
+  InvalidBranchNameError,
+  checkoutBranch,
   commit,
+  createBranch,
+  deleteBranch,
   getBranches,
   getDiff,
   getFileDiff,
@@ -115,6 +119,9 @@ function mapError(reply: FastifyReply, err: unknown): FastifyReply {
       error: "git_not_installed",
       message: "git binary is not on PATH on the server",
     });
+  }
+  if (err instanceof InvalidBranchNameError) {
+    return reply.code(400).send({ error: "invalid_branch_name", message: err.message });
   }
   if (err instanceof GitCommandError) {
     // Git "rejected" / "non-fast-forward" / commit hook failures /
@@ -313,6 +320,133 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
         const result = await getBranches(project.path);
         const isGit = result.branches.length > 0 || (await isGitRepo(project.path));
         return { isGitRepo: isGit, current: result.current, branches: result.branches };
+      } catch (err) {
+        return mapError(reply, err);
+      }
+    },
+  );
+
+  fastify.post<{ Body: { projectId: string; branch: string } }>(
+    "/git/checkout",
+    {
+      schema: {
+        description:
+          "Switch the working tree to `branch`. Refuses on a dirty tree (git's " +
+          "default) — caller surfaces the resulting `git_failed` message so the " +
+          "user can stash or revert first. Pass `origin/feature` to start a " +
+          "tracking branch from the remote ref.",
+        tags: ["git"],
+        body: {
+          type: "object",
+          required: ["projectId", "branch"],
+          additionalProperties: false,
+          properties: {
+            projectId: { type: "string", minLength: 1 },
+            branch: { type: "string", minLength: 1 },
+          },
+        },
+        response: {
+          200: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+          400: errorSchema,
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const project = await resolveProject(req.body.projectId, reply);
+      if (project === undefined) return;
+      try {
+        await checkoutBranch(project.path, req.body.branch);
+        return { ok: true };
+      } catch (err) {
+        return mapError(reply, err);
+      }
+    },
+  );
+
+  fastify.post<{
+    Body: { projectId: string; name: string; startPoint?: string; checkout?: boolean };
+  }>(
+    "/git/branch/create",
+    {
+      schema: {
+        description:
+          "Create a local branch. `startPoint` (defaults to HEAD) accepts any ref " +
+          "the user could pass to `git branch`. `checkout: true` creates and " +
+          "switches in one step via `git checkout -b`.",
+        tags: ["git"],
+        body: {
+          type: "object",
+          required: ["projectId", "name"],
+          additionalProperties: false,
+          properties: {
+            projectId: { type: "string", minLength: 1 },
+            name: { type: "string", minLength: 1 },
+            startPoint: { type: "string", minLength: 1 },
+            checkout: { type: "boolean" },
+          },
+        },
+        response: {
+          200: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+          400: errorSchema,
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const project = await resolveProject(req.body.projectId, reply);
+      if (project === undefined) return;
+      try {
+        const opts: { startPoint?: string; checkout?: boolean } = {};
+        if (req.body.startPoint !== undefined) opts.startPoint = req.body.startPoint;
+        if (req.body.checkout !== undefined) opts.checkout = req.body.checkout;
+        await createBranch(project.path, req.body.name, opts);
+        return { ok: true };
+      } catch (err) {
+        return mapError(reply, err);
+      }
+    },
+  );
+
+  fastify.delete<{ Querystring: { projectId: string; force?: string }; Params: { name: string } }>(
+    "/git/branch/:name",
+    {
+      schema: {
+        description:
+          "Delete a local branch via `git branch -d <name>`. `?force=1` switches " +
+          "to `-D` for branches that haven't been merged. Refuses to delete the " +
+          "currently-checked-out branch (git surfaces a `git_failed`).",
+        tags: ["git"],
+        params: {
+          type: "object",
+          required: ["name"],
+          properties: { name: { type: "string", minLength: 1 } },
+        },
+        querystring: {
+          type: "object",
+          required: ["projectId"],
+          properties: {
+            projectId: { type: "string", minLength: 1 },
+            force: { type: "string", enum: ["0", "1", "true", "false"] },
+          },
+        },
+        response: {
+          200: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+          400: errorSchema,
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const project = await resolveProject(req.query.projectId, reply);
+      if (project === undefined) return;
+      try {
+        const force = req.query.force === "1" || req.query.force === "true";
+        await deleteBranch(project.path, req.params.name, { force });
+        return { ok: true };
       } catch (err) {
         return mapError(reply, err);
       }

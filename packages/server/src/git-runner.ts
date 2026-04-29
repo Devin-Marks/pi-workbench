@@ -415,6 +415,102 @@ export async function commit(cwd: string, message: string): Promise<{ hash: stri
   return { hash: stdout.trim() };
 }
 
+/* ----------------------------- branch ops ----------------------------- */
+
+/**
+ * Restrict branch names to the same character set git itself accepts in
+ * common usage — letters, digits, dot, dash, underscore, slash. Reject
+ * anything else (spaces, control chars, leading dash that could be
+ * mistaken for a flag, dot-only segments, double slashes, etc.) with a
+ * single error code so the route can return a stable 400.
+ */
+export class InvalidBranchNameError extends Error {
+  constructor(name: string) {
+    super(`invalid branch name: ${JSON.stringify(name)}`);
+    this.name = "InvalidBranchNameError";
+  }
+}
+
+function assertBranchName(name: string): void {
+  if (name.length === 0 || name.length > 200) throw new InvalidBranchNameError(name);
+  if (!/^[A-Za-z0-9._/-]+$/.test(name)) throw new InvalidBranchNameError(name);
+  if (name.startsWith("-") || name.startsWith("/") || name.endsWith("/")) {
+    throw new InvalidBranchNameError(name);
+  }
+  if (name.includes("//") || name.includes("..") || name.includes("@{")) {
+    throw new InvalidBranchNameError(name);
+  }
+  // git reserves `HEAD` and a few similar single-token refs.
+  if (name === "HEAD" || name === "FETCH_HEAD" || name === "ORIG_HEAD" || name === "MERGE_HEAD") {
+    throw new InvalidBranchNameError(name);
+  }
+}
+
+/**
+ * Switch the working tree to `branch`. Refuses on a dirty tree (git's
+ * default) — the caller is expected to surface the resulting
+ * `GitCommandError` to the user, who can stash or revert first.
+ */
+export async function checkoutBranch(cwd: string, branch: string): Promise<void> {
+  assertBranchName(branch);
+  await runGit(cwd, ["checkout", "--", branch]).catch(async () => {
+    // `--` fails on some old git when the branch doesn't yet exist as a
+    // local; retry without the separator so e.g. `origin/feature` can
+    // produce a tracking checkout.
+    await runGit(cwd, ["checkout", branch]);
+  });
+}
+
+export interface CreateBranchOptions {
+  /** Branch / commit to base the new branch on. Defaults to current HEAD. */
+  startPoint?: string;
+  /** When true, also switch the working tree to the new branch. */
+  checkout?: boolean;
+}
+
+/**
+ * Create a new local branch. `startPoint` defaults to HEAD; pass
+ * `origin/main` (etc.) to branch off a tracking ref. When `checkout`
+ * is true, uses `git checkout -b` to create + switch in one step.
+ */
+export async function createBranch(
+  cwd: string,
+  name: string,
+  opts: CreateBranchOptions = {},
+): Promise<void> {
+  assertBranchName(name);
+  if (opts.startPoint !== undefined) assertBranchName(opts.startPoint);
+  if (opts.checkout === true) {
+    const args = ["checkout", "-b", name];
+    if (opts.startPoint !== undefined) args.push(opts.startPoint);
+    await runGit(cwd, args);
+  } else {
+    const args = ["branch", name];
+    if (opts.startPoint !== undefined) args.push(opts.startPoint);
+    await runGit(cwd, args);
+  }
+}
+
+export interface DeleteBranchOptions {
+  /** Force-delete via `-D` even when the branch isn't merged. */
+  force?: boolean;
+}
+
+/**
+ * Delete a local branch. Default uses `-d` (refuses to delete an
+ * unmerged branch); `force: true` switches to `-D`. Refuses to delete
+ * the currently-checked-out branch (git's default behavior surfaces a
+ * `GitCommandError`).
+ */
+export async function deleteBranch(
+  cwd: string,
+  name: string,
+  opts: DeleteBranchOptions = {},
+): Promise<void> {
+  assertBranchName(name);
+  await runGit(cwd, ["branch", opts.force === true ? "-D" : "-d", name]);
+}
+
 export interface PushOptions {
   remote?: string;
   branch?: string;
