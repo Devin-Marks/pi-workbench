@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Check,
+  Columns2,
   GitBranch,
   GitCommit,
   Minus,
   Plus,
   RefreshCw,
+  Rows2,
   Trash2,
   Undo2,
   Upload,
@@ -16,11 +18,13 @@ import {
   type GitFileStatus,
   type GitLogEntry,
   type GitBranch as GitBranchEntry,
+  type GitRemote,
 } from "../lib/api-client";
 import { useActiveProject } from "../store/project-store";
 import { useGitStatus } from "../hooks/useGitStatus";
 import { DiffBlock } from "./DiffBlock";
-import { ConfirmDialog, PromptDialog } from "./Modal";
+import { ConfirmDialog, Modal, PromptDialog } from "./Modal";
+import { laneColor, layoutCommits, type CommitLayout } from "../lib/git-graph";
 
 /**
  * Right-pane Git tab. Sections, top-to-bottom:
@@ -51,8 +55,10 @@ export function GitPanel() {
   // Lazily-loaded log + branches.
   const [log, setLog] = useState<GitLogEntry[] | undefined>(undefined);
   const [branches, setBranches] = useState<GitBranchEntry[] | undefined>(undefined);
+  const [remotes, setRemotes] = useState<GitRemote[] | undefined>(undefined);
   const [showLog, setShowLog] = useState(false);
   const [showBranches, setShowBranches] = useState(false);
+  const [showRemotes, setShowRemotes] = useState(false);
   // Pending-branch-op state. `branchBusy` blocks duplicate clicks on
   // the per-row buttons; `branchDialog` drives the create / delete
   // confirmation modals.
@@ -60,6 +66,62 @@ export function GitPanel() {
   const [branchDialog, setBranchDialog] = useState<
     { kind: "create" } | { kind: "delete"; name: string } | undefined
   >(undefined);
+
+  // Remote-add modal state. PromptDialog only takes one input, so a
+  // "name + url" form lives in its own modal below. Per-row delete
+  // uses ConfirmDialog (danger tone) — different state field so the
+  // two modals don't share a discriminator.
+  const [remoteBusy, setRemoteBusy] = useState<string | undefined>(undefined);
+  const [showAddRemote, setShowAddRemote] = useState(false);
+  const [newRemoteName, setNewRemoteName] = useState("");
+  const [newRemoteUrl, setNewRemoteUrl] = useState("");
+  const [removeRemoteName, setRemoveRemoteName] = useState<string | undefined>(undefined);
+
+  const reloadRemotes = async (): Promise<void> => {
+    if (project === undefined) return;
+    try {
+      const r = await api.gitRemotes(project.id);
+      setRemotes(r.remotes);
+    } catch (err) {
+      setOpError(err instanceof ApiError ? err.code : (err as Error).message);
+    }
+  };
+
+  const handleAddRemote = async (): Promise<void> => {
+    if (project === undefined) return;
+    const name = newRemoteName.trim();
+    const url = newRemoteUrl.trim();
+    if (name.length === 0 || url.length === 0) return;
+    setRemoteBusy(name);
+    setOpError(undefined);
+    try {
+      await api.gitRemoteAdd(project.id, name, url);
+      setShowAddRemote(false);
+      setNewRemoteName("");
+      setNewRemoteUrl("");
+      await reloadRemotes();
+    } catch (err) {
+      setOpError(err instanceof ApiError ? err.message || err.code : (err as Error).message);
+    } finally {
+      setRemoteBusy(undefined);
+    }
+  };
+
+  const handleRemoveRemote = async (): Promise<void> => {
+    if (project === undefined || removeRemoteName === undefined) return;
+    const name = removeRemoteName;
+    setRemoveRemoteName(undefined);
+    setRemoteBusy(name);
+    setOpError(undefined);
+    try {
+      await api.gitRemoteRemove(project.id, name);
+      await reloadRemotes();
+    } catch (err) {
+      setOpError(err instanceof ApiError ? err.message || err.code : (err as Error).message);
+    } finally {
+      setRemoteBusy(undefined);
+    }
+  };
 
   const reloadBranches = async (): Promise<void> => {
     if (project === undefined) return;
@@ -136,6 +198,26 @@ export function GitPanel() {
   const [pushSetUpstream, setPushSetUpstream] = useState(false);
   const [showPushOptions, setShowPushOptions] = useState(false);
 
+  // Per-panel diff view-type preference. Each diff-rendering panel
+  // owns its own setting — the TurnDiffPanel and GitPanel choices
+  // are independent (a user might want side-by-side for git diffs
+  // they're committing but unified for the per-turn agent activity).
+  const [diffViewType, setDiffViewType] = useState<"unified" | "split">(() => {
+    try {
+      return localStorage.getItem("pi.gitPanel.viewType") === "split" ? "split" : "unified";
+    } catch {
+      return "unified";
+    }
+  });
+  const setAndPersistDiffView = (next: "unified" | "split"): void => {
+    setDiffViewType(next);
+    try {
+      localStorage.setItem("pi.gitPanel.viewType", next);
+    } catch {
+      // ignore — choice still applies for this session
+    }
+  };
+
   // Prune diff cache entries whose file is no longer in the latest
   // status (e.g. user ran `git checkout -- file` from the integrated
   // terminal). Without this, the diff card stayed open with stale
@@ -184,6 +266,18 @@ export function GitPanel() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showBranches, project?.id]);
+
+  useEffect(() => {
+    if (showRemotes && project !== undefined) {
+      void api
+        .gitRemotes(project.id)
+        .then((r) => setRemotes(r.remotes))
+        .catch((err: unknown) =>
+          setOpError(err instanceof ApiError ? err.code : (err as Error).message),
+        );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showRemotes, project?.id]);
 
   if (project === undefined) {
     return (
@@ -300,10 +394,15 @@ export function GitPanel() {
     }
   };
 
-  // Distinct remote names parsed out of the existing branches list:
-  // remote refs are `<remote>/<branch>` so the leading segment IS the
-  // remote name. Avoids a second route call.
+  // Distinct remote names for the Push/Fetch/Pull dropdown. Prefer
+  // the explicit Remotes-section data when loaded; fall back to
+  // parsing the branches list for `<remote>/<branch>` prefixes when
+  // remotes haven't been fetched yet (branches typically load first
+  // when the user expands a different section).
   const knownRemotes = (() => {
+    if (remotes !== undefined) {
+      return remotes.map((r) => r.name).sort();
+    }
     if (branches === undefined) return [] as string[];
     const set = new Set<string>();
     for (const b of branches) {
@@ -312,6 +411,15 @@ export function GitPanel() {
       if (slash > 0) set.add(b.name.slice(0, slash));
     }
     return Array.from(set).sort();
+  })();
+
+  // Local branch names for the Branch override dropdown.
+  const knownLocalBranches = (() => {
+    if (branches === undefined) return [] as string[];
+    return branches
+      .filter((b) => !b.remote)
+      .map((b) => b.name)
+      .sort();
   })();
 
   const handleFetch = async (): Promise<void> => {
@@ -392,13 +500,26 @@ export function GitPanel() {
             </span>
           )}
         </div>
-        <button
-          onClick={() => void refresh()}
-          className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
-          title="Refresh"
-        >
-          <RefreshCw size={13} className={busy ? "animate-spin" : ""} />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setAndPersistDiffView(diffViewType === "split" ? "unified" : "split")}
+            className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+            title={
+              diffViewType === "split"
+                ? "Switch git diffs to unified view"
+                : "Switch git diffs to side-by-side view"
+            }
+          >
+            {diffViewType === "split" ? <Rows2 size={13} /> : <Columns2 size={13} />}
+          </button>
+          <button
+            onClick={() => void refresh()}
+            className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+            title="Refresh"
+          >
+            <RefreshCw size={13} className={busy ? "animate-spin" : ""} />
+          </button>
+        </div>
       </div>
 
       {(statusError !== undefined || opError !== undefined) && (
@@ -431,6 +552,7 @@ export function GitPanel() {
             onClickFile={(f) => void toggleDiff(f, true)}
             openDiffs={openDiffs}
             staged
+            diffViewType={diffViewType}
           />
         )}
         {unstagedFiles.length > 0 && (
@@ -445,6 +567,7 @@ export function GitPanel() {
             onClickFile={(f) => void toggleDiff(f, false)}
             openDiffs={openDiffs}
             staged={false}
+            diffViewType={diffViewType}
           />
         )}
         {untrackedFiles.length > 0 && (
@@ -463,6 +586,7 @@ export function GitPanel() {
             onClickFile={(f) => void toggleDiff(f, false)}
             openDiffs={openDiffs}
             staged={false}
+            diffViewType={diffViewType}
           />
         )}
 
@@ -499,14 +623,21 @@ export function GitPanel() {
             <button
               onClick={() => {
                 setShowPushOptions((v) => !v);
-                // Lazy-load branches (for the remote dropdown) the
-                // first time the user opens push options. Reuses the
-                // same effect that drives the Branches section, so
-                // either expansion warms the cache.
+                // Lazy-load branches + remotes the first time the
+                // user opens push options. Both feed the dropdowns
+                // below; without these the dropdowns fall back to
+                // free-text inputs (which is what the user reported
+                // as "it's not a dropdown, it's a text field").
                 if (!showPushOptions && branches === undefined) {
                   void api
                     .gitBranches(project.id)
                     .then((r) => setBranches(r.branches))
+                    .catch(() => undefined);
+                }
+                if (!showPushOptions && remotes === undefined) {
+                  void api
+                    .gitRemotes(project.id)
+                    .then((r) => setRemotes(r.remotes))
                     .catch(() => undefined);
                 }
               }}
@@ -548,13 +679,28 @@ export function GitPanel() {
               </label>
               <label className="flex items-center gap-2 text-[11px]">
                 <span className="w-16 shrink-0 text-neutral-400">Branch</span>
-                <input
-                  type="text"
-                  value={pushBranchOverride}
-                  onChange={(e) => setPushBranchOverride(e.target.value)}
-                  placeholder={status?.branch ?? "current"}
-                  className="flex-1 rounded border border-neutral-700 bg-neutral-950 px-1 py-0.5 text-[11px] text-neutral-100 outline-none focus:border-neutral-500"
-                />
+                {knownLocalBranches.length > 0 ? (
+                  <select
+                    value={pushBranchOverride}
+                    onChange={(e) => setPushBranchOverride(e.target.value)}
+                    className="flex-1 rounded border border-neutral-700 bg-neutral-950 px-1 py-0.5 text-[11px] text-neutral-100 outline-none focus:border-neutral-500"
+                  >
+                    <option value="">{status?.branch ?? "current branch"}</option>
+                    {knownLocalBranches.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={pushBranchOverride}
+                    onChange={(e) => setPushBranchOverride(e.target.value)}
+                    placeholder={status?.branch ?? "current"}
+                    className="flex-1 rounded border border-neutral-700 bg-neutral-950 px-1 py-0.5 text-[11px] text-neutral-100 outline-none focus:border-neutral-500"
+                  />
+                )}
               </label>
               <label className="flex items-center gap-2 text-[11px] text-neutral-300">
                 <input
@@ -621,21 +767,7 @@ export function GitPanel() {
               ) : log.length === 0 ? (
                 <p className="italic text-neutral-500">No commits yet.</p>
               ) : (
-                <ul className="space-y-1">
-                  {log.map((c) => (
-                    <li key={c.hash} className="flex flex-col gap-0.5">
-                      <div className="flex items-baseline gap-2">
-                        <span className="font-mono text-neutral-500">{c.hash.slice(0, 7)}</span>
-                        <span className="truncate text-neutral-200" title={c.message}>
-                          {c.message}
-                        </span>
-                      </div>
-                      <span className="font-mono text-[10px] text-neutral-600">
-                        {c.author} · {new Date(c.date).toLocaleString()}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+                <LogGraph commits={log} />
               )}
             </div>
           )}
@@ -719,6 +851,90 @@ export function GitPanel() {
             </div>
           )}
         </div>
+
+        {/* Remotes section — same lazy-load pattern as Log + Branches.
+            Read-only for now; managing remotes (`git remote add/remove`)
+            is rare enough that the integrated terminal handles it
+            without a dedicated UI. */}
+        <div className="border-t border-neutral-800/60">
+          <button
+            onClick={() => setShowRemotes((v) => !v)}
+            className="flex w-full items-center justify-between px-3 py-2 text-left text-[10px] uppercase tracking-wider text-neutral-400 hover:bg-neutral-900"
+          >
+            <span>Remotes</span>
+            <span>{showRemotes ? "−" : "+"}</span>
+          </button>
+          {showRemotes && (
+            <div className="px-3 pb-3 text-[11px]">
+              {remotes === undefined ? (
+                <p className="italic text-neutral-500">Loading…</p>
+              ) : (
+                <>
+                  {remotes.length === 0 ? (
+                    <p className="italic text-neutral-500">No remotes configured.</p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {remotes.map((r) => {
+                        const diverged = r.fetchUrl !== r.pushUrl;
+                        const busy = remoteBusy === r.name;
+                        return (
+                          <li key={r.name} className="group flex flex-col gap-0.5">
+                            <div className="flex items-baseline gap-2">
+                              {/* Neutral, not emerald — emerald in the
+                                  branches list means "currently checked
+                                  out". Remotes don't have a singular
+                                  active state at this list level; the
+                                  active selection lives on the Push
+                                  Options dropdown above. */}
+                              <span className="font-mono text-neutral-200">{r.name}</span>
+                              {diverged && (
+                                <span className="rounded bg-amber-900/30 px-1 py-0.5 text-[9px] uppercase tracking-wider text-amber-300">
+                                  fetch ≠ push
+                                </span>
+                              )}
+                              <button
+                                onClick={() => setRemoveRemoteName(r.name)}
+                                disabled={busy}
+                                className="ml-auto hidden rounded p-0.5 text-neutral-500 hover:bg-red-900/30 hover:text-red-300 disabled:opacity-40 group-hover:inline-flex"
+                                title={`Remove remote "${r.name}"`}
+                              >
+                                <Trash2 size={10} />
+                              </button>
+                            </div>
+                            <span
+                              className="break-all font-mono text-[10px] text-neutral-500"
+                              title={r.fetchUrl}
+                            >
+                              {r.fetchUrl}
+                            </span>
+                            {diverged && (
+                              <span
+                                className="break-all font-mono text-[10px] text-neutral-500"
+                                title={`push → ${r.pushUrl}`}
+                              >
+                                push → {r.pushUrl}
+                              </span>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                  <button
+                    onClick={() => {
+                      setNewRemoteName("");
+                      setNewRemoteUrl("");
+                      setShowAddRemote(true);
+                    }}
+                    className="mt-2 flex items-center gap-1 rounded px-1 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100"
+                  >
+                    <Plus size={10} /> Add remote
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
       <PromptDialog
         open={branchDialog?.kind === "create"}
@@ -742,6 +958,66 @@ export function GitPanel() {
         primaryLabel="Delete"
         tone="danger"
       />
+      <Modal open={showAddRemote} onClose={() => setShowAddRemote(false)} title="Add remote">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void handleAddRemote();
+          }}
+          className="flex flex-col gap-3 px-4 py-3"
+        >
+          <label className="block space-y-1.5">
+            <span className="text-xs text-neutral-300">Name</span>
+            <input
+              type="text"
+              value={newRemoteName}
+              onChange={(e) => setNewRemoteName(e.target.value)}
+              placeholder="origin"
+              autoFocus
+              className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-1.5 font-mono text-sm text-neutral-100 outline-none focus:border-neutral-500"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs text-neutral-300">URL</span>
+            <input
+              type="text"
+              value={newRemoteUrl}
+              onChange={(e) => setNewRemoteUrl(e.target.value)}
+              placeholder="git@github.com:user/repo.git"
+              className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-3 py-1.5 font-mono text-sm text-neutral-100 outline-none focus:border-neutral-500"
+            />
+          </label>
+          <footer className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setShowAddRemote(false)}
+              className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={newRemoteName.trim().length === 0 || newRemoteUrl.trim().length === 0}
+              className="rounded-md bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Add
+            </button>
+          </footer>
+        </form>
+      </Modal>
+      <ConfirmDialog
+        open={removeRemoteName !== undefined}
+        onClose={() => setRemoveRemoteName(undefined)}
+        onConfirm={() => void handleRemoveRemote()}
+        title="Remove remote"
+        message={
+          removeRemoteName !== undefined
+            ? `Remove remote "${removeRemoteName}"? The local repo loses its reference to this URL; existing commits aren't affected.`
+            : ""
+        }
+        primaryLabel="Remove"
+        tone="danger"
+      />
     </div>
   );
 }
@@ -760,6 +1036,7 @@ interface FileGroupProps {
   onClickFile: (f: GitFileStatus) => void;
   openDiffs: Record<string, string | "loading" | "error">;
   staged: boolean;
+  diffViewType: "unified" | "split";
 }
 
 const REVERT_CONFIRM_TIMEOUT_MS = 3000;
@@ -896,7 +1173,7 @@ function FileGroup(props: FileGroupProps) {
                       (no diff — file is binary or unchanged)
                     </p>
                   ) : (
-                    <DiffBlock diff={diffState} />
+                    <DiffBlock diff={diffState} viewType={props.diffViewType} />
                   )}
                 </div>
               )}
@@ -929,4 +1206,178 @@ function kindBadge(kind: GitFileStatus["kind"]): string {
     default:
       return "·";
   }
+}
+
+// === Log graph rendering (Dif7 follow-up — VSCode-style) ===
+
+const LANE_W = 14; // px per lane
+const ROW_H = 36; // px per commit row — matches the two-line layout below
+
+/**
+ * Tree-style git log. For each commit row we draw a fixed-width SVG
+ * column to the left of the text:
+ *   - vertical lines for every "through" lane (passes top→bottom)
+ *   - the commit dot in this commit's lane
+ *   - edges from incoming lanes (above) joining the dot
+ *   - edges to outgoing lanes (below) descending into the next row
+ *
+ * Multi-parent commits (merges) emit additional outgoing lanes that
+ * head off into space at the bottom of the row to be picked up by
+ * a later commit (the merge ancestor).
+ *
+ * No curves / arcs — straight lines and short diagonals. VSCode's
+ * graph uses gentle curves; that's pure aesthetics and adds path-
+ * generation complexity for no functional gain in our context.
+ */
+function LogGraph({ commits }: { commits: GitLogEntry[] }) {
+  const layouts = layoutCommits(commits);
+  const maxLanes = Math.max(1, ...layouts.map((l) => l.width));
+  return (
+    <ul className="space-y-0">
+      {commits.map((c, i) => {
+        const layout = layouts[i];
+        if (layout === undefined) return null;
+        return (
+          <li key={c.hash} className="group flex items-stretch">
+            <GraphCell layout={layout} isLast={i === layouts.length - 1} maxLanes={maxLanes} />
+            <div className="flex flex-col justify-center gap-0.5 pl-2" style={{ minHeight: ROW_H }}>
+              <div className="flex items-baseline gap-2">
+                <span className="font-mono text-neutral-500">{c.hash.slice(0, 7)}</span>
+                {c.refs.map((r, ri) => (
+                  // Key on `${index}-${value}` to survive the rare case where
+                  // git's %D output emits the same string twice (e.g. duplicate
+                  // tags via different prefixes).
+                  <RefBadge key={`${ri}-${r}`} ref_={r} />
+                ))}
+                <span className="truncate text-neutral-200" title={c.message}>
+                  {c.message}
+                </span>
+              </div>
+              <span className="font-mono text-[10px] text-neutral-600">
+                {c.author} · {new Date(c.date).toLocaleString()}
+              </span>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function GraphCell({
+  layout,
+  isLast,
+  maxLanes,
+}: {
+  layout: CommitLayout;
+  isLast: boolean;
+  maxLanes: number;
+}) {
+  const w = maxLanes * LANE_W;
+  const h = ROW_H;
+  const dotX = layout.lane * LANE_W + LANE_W / 2;
+  const dotY = h / 2;
+
+  const lines: Array<{ x1: number; y1: number; x2: number; y2: number; color: string }> = [];
+
+  // Through lanes — full-height verticals. Color by lane index so
+  // lanes are visually distinct as they pass through.
+  for (const lane of layout.through) {
+    const x = lane * LANE_W + LANE_W / 2;
+    lines.push({ x1: x, y1: 0, x2: x, y2: h, color: laneColor(lane) });
+  }
+
+  // Incoming lanes — from top edge to dot. The commit's own lane (if
+  // it had a vertical predecessor) renders as a vertical FROM TOP TO
+  // DOT in the commit's lane color.
+  for (const inLane of layout.incomingLanes) {
+    const x = inLane * LANE_W + LANE_W / 2;
+    lines.push({
+      x1: x,
+      y1: 0,
+      x2: dotX,
+      y2: dotY,
+      color: laneColor(inLane),
+    });
+  }
+  // (No top-stub for tip commits mid-history — the absence of an
+  // incoming line is the correct visual cue for "branch starts here.")
+
+  // Outgoing lanes — from dot to bottom edge. Each parent gets its
+  // own descender. Use the OUTGOING lane index for color so a fork
+  // immediately picks up its destination color.
+  if (!isLast) {
+    for (const out of layout.outgoingLanes) {
+      const x = out.lane * LANE_W + LANE_W / 2;
+      lines.push({
+        x1: dotX,
+        y1: dotY,
+        x2: x,
+        y2: h,
+        color: laneColor(out.lane),
+      });
+    }
+  }
+  // Last row: stub below the dot to terminate the line so it doesn't
+  // float disconnected from any rendered geometry.
+  if (isLast && layout.outgoingLanes.length > 0) {
+    for (const out of layout.outgoingLanes) {
+      const x = out.lane * LANE_W + LANE_W / 2;
+      lines.push({
+        x1: dotX,
+        y1: dotY,
+        x2: x,
+        y2: dotY + 6,
+        color: laneColor(out.lane),
+      });
+    }
+  }
+
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="shrink-0" aria-hidden>
+      {lines.map((l, i) => (
+        <line
+          key={i}
+          x1={l.x1}
+          y1={l.y1}
+          x2={l.x2}
+          y2={l.y2}
+          stroke={l.color}
+          strokeWidth={1.5}
+          strokeLinecap="round"
+        />
+      ))}
+      <circle cx={dotX} cy={dotY} r={3.5} fill={laneColor(layout.lane)} />
+    </svg>
+  );
+}
+
+/**
+ * Render a single ref decoration as a small inline pill. We classify
+ * refs into a few visual buckets:
+ *   - "HEAD -> <branch>" → emerald, marks the active branch
+ *   - "tag: <name>" → amber
+ *   - "<remote>/<branch>" (contains /) → neutral, dimmer
+ *   - bare branch name → neutral, brighter
+ */
+function RefBadge({ ref_ }: { ref_: string }) {
+  const isHead = ref_.startsWith("HEAD ->") || ref_ === "HEAD";
+  const isTag = ref_.startsWith("tag:");
+  const text = isHead
+    ? ref_.replace(/^HEAD ->\s*/, "")
+    : isTag
+      ? ref_.replace(/^tag:\s*/, "")
+      : ref_;
+  const cls = isHead
+    ? "bg-emerald-900/40 text-emerald-300"
+    : isTag
+      ? "bg-amber-900/40 text-amber-300"
+      : ref_.includes("/")
+        ? "bg-neutral-800 text-neutral-500"
+        : "bg-neutral-800 text-neutral-300";
+  return (
+    <span className={`shrink-0 rounded px-1.5 py-0 text-[9px] uppercase tracking-wider ${cls}`}>
+      {isTag ? `▼ ${text}` : text}
+    </span>
+  );
 }

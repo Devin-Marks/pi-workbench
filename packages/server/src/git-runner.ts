@@ -94,6 +94,15 @@ export interface LogEntry {
   message: string;
   author: string;
   date: string;
+  /** Parent commit hashes — empty for the root commit, two for merges. */
+  parents: string[];
+  /**
+   * Ref decorations git would print with `%D` — branch tips, tags, and
+   * the magic "HEAD -> main" indicator that tells you which ref is
+   * currently checked out. The renderer uses these to badge the
+   * commit row with branch / tag pills.
+   */
+  refs: string[];
 }
 
 export interface BranchEntry {
@@ -323,12 +332,27 @@ export async function getLog(cwd: string, limit = 30): Promise<LogEntry[]> {
   if (!(await isGitRepo(cwd))) return [];
   // Custom format with NUL field separators and RS record separator.
   // Avoids ambiguity if a commit message has any character we'd
-  // otherwise pick as a delimiter.
+  // otherwise pick as a delimiter. New fields:
+  //   %P → space-separated parent hashes (empty for root, 2+ for merges)
+  //   %D → ref decorations like "HEAD -> main, origin/main, tag: v1"
+  // We pass `HEAD --branches --tags --remotes` so branches that
+  // aren't ancestors of HEAD still surface — the graph renderer wants
+  // the full topology, not just first-parent ancestry from the
+  // current branch. Explicit `HEAD` keeps the checked-out branch in
+  // the result even if many older branch tips would otherwise crowd
+  // it out at the `--max-count` boundary. `--topo-order` keeps
+  // commits from disjoint branches grouped instead of date-interleaved
+  // so the graph reads cleanly.
   const FS = "\x1F";
   const RS = "\x1E";
-  const fmt = `%H${FS}%s${FS}%an${FS}%aI${RS}`;
+  const fmt = `%H${FS}%s${FS}%an${FS}%aI${FS}%P${FS}%D${RS}`;
   const { stdout } = await runGit(cwd, [
     "log",
+    "--topo-order",
+    "HEAD",
+    "--branches",
+    "--tags",
+    "--remotes",
     `--max-count=${Math.max(1, Math.min(limit, 1000))}`,
     `--pretty=format:${fmt}`,
   ]);
@@ -338,9 +362,101 @@ export async function getLog(cwd: string, limit = 30): Promise<LogEntry[]> {
     .map((rec) => rec.replace(/^\n/, ""))
     .filter((rec) => rec.length > 0)
     .map((rec): LogEntry => {
-      const [hash = "", message = "", author = "", date = ""] = rec.split(FS);
-      return { hash, message, author, date };
+      const [hash = "", message = "", author = "", date = "", parentsRaw = "", refsRaw = ""] =
+        rec.split(FS);
+      const parents =
+        parentsRaw.length > 0 ? parentsRaw.split(" ").filter((p) => p.length > 0) : [];
+      const refs =
+        refsRaw.length > 0
+          ? refsRaw
+              .split(",")
+              .map((r) => r.trim())
+              .filter((r) => r.length > 0)
+          : [];
+      return { hash, message, author, date, parents, refs };
     });
+}
+
+/* ----------------------------- remotes ----------------------------- */
+
+export interface RemoteEntry {
+  name: string;
+  /** Fetch URL (the more meaningful of the two for users). */
+  fetchUrl: string;
+  /** Push URL — usually identical to fetch, but git allows configuring them
+   *  separately (e.g. read-only mirror + write-through fork). Surfaced
+   *  alongside fetch so the UI can flag the divergence when present. */
+  pushUrl: string;
+}
+
+/**
+ * `git remote -v` output is two lines per remote (one (fetch), one (push)),
+ * tab-delimited:
+ *
+ *   origin\thttps://github.com/foo/bar.git (fetch)
+ *   origin\thttps://github.com/foo/bar.git (push)
+ *
+ * We parse both forms into a single entry per remote so the UI doesn't
+ * render duplicates. Empty array for non-git or no-remotes-configured.
+ */
+export async function getRemotes(cwd: string): Promise<RemoteEntry[]> {
+  if (!(await isGitRepo(cwd))) return [];
+  const { stdout } = await runGit(cwd, ["remote", "-v"]);
+  const map = new Map<string, RemoteEntry>();
+  for (const line of stdout.split("\n")) {
+    if (line.length === 0) continue;
+    // `name<TAB>url (fetch|push)`
+    const m = /^(\S+)\s+(.+?)\s+\((fetch|push)\)$/.exec(line);
+    if (m === null) continue;
+    const name = m[1] ?? "";
+    const url = m[2] ?? "";
+    const dir = m[3] === "push" ? "push" : "fetch";
+    if (name.length === 0) continue;
+    const existing = map.get(name);
+    if (existing === undefined) {
+      // Pre-fill the OTHER URL with the same value; if the second
+      // line for this remote contradicts, we overwrite below.
+      map.set(name, { name, fetchUrl: url, pushUrl: url });
+    } else if (dir === "push") {
+      existing.pushUrl = url;
+    } else {
+      existing.fetchUrl = url;
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Add a remote. Same name validator as branch creation reused via
+ * `assertRemoteName`. The URL is passed verbatim to git as a
+ * positional arg; `execFile` (no shell) means there's no command-
+ * injection surface even if the URL contains spaces or shell
+ * metachars. Common shapes: `https://github.com/foo/bar.git`,
+ * `git@github.com:foo/bar.git`, `file:///abs/path`.
+ */
+export async function addRemote(cwd: string, name: string, url: string): Promise<void> {
+  assertRemoteName(name);
+  if (url.length === 0 || url.length > 1024) {
+    throw new InvalidBranchNameError(`invalid remote URL`);
+  }
+  // Reject leading dash so the URL can't be parsed as a flag if a
+  // future code path drops the `--` separator. `git remote add`
+  // ignores `--` in current versions, but defensive.
+  if (url.startsWith("-")) {
+    throw new InvalidBranchNameError(`invalid remote URL`);
+  }
+  await runGit(cwd, ["remote", "add", name, url]);
+}
+
+/**
+ * Remove a remote. Idempotent at the route layer — git emits
+ * "fatal: No such remote" if the name is unknown, which surfaces as
+ * the existing 400 git_failed; the route layer can choose to map
+ * that to 404 if needed.
+ */
+export async function removeRemote(cwd: string, name: string): Promise<void> {
+  assertRemoteName(name);
+  await runGit(cwd, ["remote", "remove", name]);
 }
 
 /* ----------------------------- branches ----------------------------- */

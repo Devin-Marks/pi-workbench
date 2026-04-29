@@ -8,7 +8,10 @@ import {
   createBranch,
   deleteBranch,
   fetch,
+  addRemote,
   getBranches,
+  getRemotes,
+  removeRemote,
   getDiff,
   getFileDiff,
   getLog,
@@ -80,12 +83,14 @@ const logSchema = {
       type: "array",
       items: {
         type: "object",
-        required: ["hash", "message", "author", "date"],
+        required: ["hash", "message", "author", "date", "parents", "refs"],
         properties: {
           hash: { type: "string" },
           message: { type: "string" },
           author: { type: "string" },
           date: { type: "string" },
+          parents: { type: "array", items: { type: "string" } },
+          refs: { type: "array", items: { type: "string" } },
         },
       },
     },
@@ -107,6 +112,26 @@ const branchesSchema = {
           name: { type: "string" },
           current: { type: "boolean" },
           remote: { type: "boolean" },
+        },
+      },
+    },
+  },
+} as const;
+
+const remotesSchema = {
+  type: "object",
+  required: ["isGitRepo", "remotes"],
+  properties: {
+    isGitRepo: { type: "boolean" },
+    remotes: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["name", "fetchUrl", "pushUrl"],
+        properties: {
+          name: { type: "string" },
+          fetchUrl: { type: "string" },
+          pushUrl: { type: "string" },
         },
       },
     },
@@ -322,6 +347,113 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
         const result = await getBranches(project.path);
         const isGit = result.branches.length > 0 || (await isGitRepo(project.path));
         return { isGitRepo: isGit, current: result.current, branches: result.branches };
+      } catch (err) {
+        return mapError(reply, err);
+      }
+    },
+  );
+
+  fastify.get<{ Querystring: { projectId: string } }>(
+    "/git/remotes",
+    {
+      schema: {
+        description:
+          "Configured git remotes with their fetch + push URLs. " +
+          "Empty array for non-git projects or repos with no remotes.",
+        tags: ["git"],
+        querystring: {
+          type: "object",
+          required: ["projectId"],
+          properties: { projectId: { type: "string", minLength: 1 } },
+        },
+        response: { 200: remotesSchema, 400: errorSchema, 404: errorSchema, 500: errorSchema },
+      },
+    },
+    async (req, reply) => {
+      const project = await resolveProject(req.query.projectId, reply);
+      if (project === undefined) return;
+      try {
+        const remotes = await getRemotes(project.path);
+        const isGit = remotes.length > 0 || (await isGitRepo(project.path));
+        return { isGitRepo: isGit, remotes };
+      } catch (err) {
+        return mapError(reply, err);
+      }
+    },
+  );
+
+  fastify.post<{ Body: { projectId: string; name: string; url: string } }>(
+    "/git/remote/add",
+    {
+      schema: {
+        description:
+          "Add a git remote (`git remote add <name> <url>`). Name is " +
+          "validated against the same character set as branch names. " +
+          "URL accepts any string git itself accepts (https://, git@, " +
+          "file://, etc.). Duplicate name → 400 `git_failed`.",
+        tags: ["git"],
+        body: {
+          type: "object",
+          required: ["projectId", "name", "url"],
+          additionalProperties: false,
+          properties: {
+            projectId: { type: "string", minLength: 1 },
+            name: { type: "string", minLength: 1 },
+            url: { type: "string", minLength: 1, maxLength: 1024 },
+          },
+        },
+        response: {
+          200: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+          400: errorSchema,
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const project = await resolveProject(req.body.projectId, reply);
+      if (project === undefined) return;
+      try {
+        await addRemote(project.path, req.body.name, req.body.url);
+        return { ok: true };
+      } catch (err) {
+        return mapError(reply, err);
+      }
+    },
+  );
+
+  fastify.delete<{ Params: { name: string }; Querystring: { projectId: string } }>(
+    "/git/remote/:name",
+    {
+      schema: {
+        description:
+          "Remove a git remote (`git remote remove <name>`). 400 " +
+          "`git_failed` if the name is unknown.",
+        tags: ["git"],
+        params: {
+          type: "object",
+          required: ["name"],
+          properties: { name: { type: "string", minLength: 1 } },
+        },
+        querystring: {
+          type: "object",
+          required: ["projectId"],
+          properties: { projectId: { type: "string", minLength: 1 } },
+        },
+        response: {
+          200: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+          400: errorSchema,
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const project = await resolveProject(req.query.projectId, reply);
+      if (project === undefined) return;
+      try {
+        await removeRemote(project.path, req.params.name);
+        return { ok: true };
       } catch (err) {
         return mapError(reply, err);
       }
