@@ -47,6 +47,29 @@ export function GitPanel() {
   // staged status swaps the rendered diff cleanly.
   const [openDiffs, setOpenDiffs] = useState<Record<string, string | "loading" | "error">>({});
 
+  // Prune diff cache entries whose file is no longer in the latest
+  // status (e.g. user ran `git checkout -- file` from the integrated
+  // terminal). Without this, the diff card stayed open with stale
+  // content. We compare path-only because either staged side counts
+  // as "still around".
+  useEffect(() => {
+    if (status === undefined) return;
+    const livePaths = new Set(status.files.map((f) => f.path));
+    setOpenDiffs((prev) => {
+      let changed = false;
+      const next: typeof prev = {};
+      for (const [key, value] of Object.entries(prev)) {
+        const path = key.split("|")[0] ?? "";
+        if (livePaths.has(path)) {
+          next[key] = value;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [status]);
+
   // Load lazily on first expand. Refresh on subsequent project
   // switches if the user happens to leave the section open.
   useEffect(() => {

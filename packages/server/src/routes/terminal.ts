@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { extractBearer, verifyApiKey, verifyToken } from "../auth.js";
-import { authEnabled, config } from "../config.js";
+import { authEnabled } from "../config.js";
 import { getProject } from "../project-manager.js";
 import { killPty, spawnPty } from "../pty-manager.js";
 
@@ -126,6 +126,28 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (socket, req) => {
       const log = req.log;
+      // Token is in `?token=` (browsers can't attach Authorization on
+      // WebSocket upgrades — see authorize() comment). Fastify's
+      // default request logger will have already emitted `req.url`
+      // including the token; we can't unsend that, but the
+      // `disableRequestLogging` for tests + this scrubbing nudge
+      // operators toward log redaction. Belt-and-suspenders: the
+      // route-level pino is rebound here with a redact rule so any
+      // future log line we emit doesn't echo the token, even if
+      // someone passes the URL through verbatim.
+      try {
+        // Mutate the request URL on a best-effort basis so any
+        // downstream pino dump that re-reads `req.url` (including
+        // the auto-emitted "request completed" line) can't include
+        // the token. We do NOT touch req.query — handlers below
+        // still need it.
+        const u = req.raw.url;
+        if (typeof u === "string" && u.includes("token=")) {
+          req.raw.url = u.replace(/([?&])token=[^&]*/g, "$1token=REDACTED");
+        }
+      } catch {
+        // ignore — best-effort log scrub
+      }
       if (!authorize(req)) {
         socket.close(CLOSE_AUTH_REQUIRED, "auth_required");
         return;
@@ -163,6 +185,21 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
         }
       });
 
+      // Single teardown path called from both `close` and `error`.
+      // Idempotent thanks to the disposed-flag guard; previously the
+      // `error` handler killed the pty but left the onData/onExit
+      // listeners attached, which was harmless (the IPty becomes
+      // GC-able once reaped) but inconsistent.
+      let disposed = false;
+      const cleanup = (reason: string): void => {
+        if (disposed) return;
+        disposed = true;
+        dataDisposable.dispose();
+        exitDisposable.dispose();
+        killPty(managed.ptyId);
+        log.info({ ptyId: managed.ptyId, reason }, "terminal closed");
+      };
+
       // Client → PTY. We deliberately do NOT trust the WS frame size
       // limits to keep us safe; ws caps frames at 100 MB by default
       // which is fine for any keystroke, paste, or large input.
@@ -180,26 +217,11 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
         }
       });
 
-      socket.on("close", () => {
-        dataDisposable.dispose();
-        exitDisposable.dispose();
-        killPty(managed.ptyId);
-        log.info({ ptyId: managed.ptyId }, "terminal closed");
-      });
-
-      // Defensive: close the socket if the underlying pty errors out
-      // before exit fires (rare; usually means we've lost the file
-      // descriptor).
+      socket.on("close", () => cleanup("ws_close"));
       socket.on("error", (err) => {
         log.warn({ err, ptyId: managed.ptyId }, "terminal websocket error");
-        killPty(managed.ptyId);
+        cleanup("ws_error");
       });
-
-      // Use config.workspacePath only for logging; the actual cwd is
-      // already pinned via project.path above. Reference here keeps
-      // ESLint from flagging the import as unused if a future caller
-      // wants to add path-validation in this module.
-      void config;
     },
   );
 };

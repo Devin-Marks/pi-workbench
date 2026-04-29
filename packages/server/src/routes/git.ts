@@ -9,6 +9,7 @@ import {
   getLog,
   getStagedDiff,
   getStatus,
+  isGitRepo,
   push,
   stagePaths,
   unstagePaths,
@@ -157,7 +158,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
           required: ["projectId"],
           properties: { projectId: { type: "string", minLength: 1 } },
         },
-        response: { 200: statusSchema, 404: errorSchema, 500: errorSchema },
+        response: { 200: statusSchema, 400: errorSchema, 404: errorSchema, 500: errorSchema },
       },
     },
     async (req, reply) => {
@@ -182,7 +183,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
           required: ["projectId"],
           properties: { projectId: { type: "string", minLength: 1 } },
         },
-        response: { 200: diffSchema, 404: errorSchema, 500: errorSchema },
+        response: { 200: diffSchema, 400: errorSchema, 404: errorSchema, 500: errorSchema },
       },
     },
     async (req, reply) => {
@@ -190,7 +191,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
       if (project === undefined) return;
       try {
         const diff = await getDiff(project.path);
-        return { isGitRepo: diff.length > 0 || (await isRepo(project.path)), diff };
+        return { isGitRepo: diff.length > 0 || (await isGitRepo(project.path)), diff };
       } catch (err) {
         return mapError(reply, err);
       }
@@ -208,7 +209,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
           required: ["projectId"],
           properties: { projectId: { type: "string", minLength: 1 } },
         },
-        response: { 200: diffSchema, 404: errorSchema, 500: errorSchema },
+        response: { 200: diffSchema, 400: errorSchema, 404: errorSchema, 500: errorSchema },
       },
     },
     async (req, reply) => {
@@ -216,7 +217,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
       if (project === undefined) return;
       try {
         const diff = await getStagedDiff(project.path);
-        return { isGitRepo: diff.length > 0 || (await isRepo(project.path)), diff };
+        return { isGitRepo: diff.length > 0 || (await isGitRepo(project.path)), diff };
       } catch (err) {
         return mapError(reply, err);
       }
@@ -240,7 +241,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
             staged: { type: "string", enum: ["0", "1", "true", "false"] },
           },
         },
-        response: { 200: diffSchema, 404: errorSchema, 500: errorSchema },
+        response: { 200: diffSchema, 400: errorSchema, 404: errorSchema, 500: errorSchema },
       },
     },
     async (req, reply) => {
@@ -249,7 +250,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
       try {
         const staged = req.query.staged === "1" || req.query.staged === "true";
         const diff = await getFileDiff(project.path, req.query.path, staged);
-        return { isGitRepo: diff.length > 0 || (await isRepo(project.path)), diff };
+        return { isGitRepo: diff.length > 0 || (await isGitRepo(project.path)), diff };
       } catch (err) {
         return mapError(reply, err);
       }
@@ -271,7 +272,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
             limit: { type: "string", pattern: "^[0-9]+$" },
           },
         },
-        response: { 200: logSchema, 404: errorSchema, 500: errorSchema },
+        response: { 200: logSchema, 400: errorSchema, 404: errorSchema, 500: errorSchema },
       },
     },
     async (req, reply) => {
@@ -283,7 +284,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
             ? Math.min(1000, Math.max(1, Number.parseInt(req.query.limit, 10)))
             : 30;
         const commits = await getLog(project.path, limit);
-        return { isGitRepo: commits.length > 0 || (await isRepo(project.path)), commits };
+        return { isGitRepo: commits.length > 0 || (await isGitRepo(project.path)), commits };
       } catch (err) {
         return mapError(reply, err);
       }
@@ -301,7 +302,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
           required: ["projectId"],
           properties: { projectId: { type: "string", minLength: 1 } },
         },
-        response: { 200: branchesSchema, 404: errorSchema, 500: errorSchema },
+        response: { 200: branchesSchema, 400: errorSchema, 404: errorSchema, 500: errorSchema },
       },
     },
     async (req, reply) => {
@@ -309,7 +310,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
       if (project === undefined) return;
       try {
         const result = await getBranches(project.path);
-        const isGit = result.branches.length > 0 || (await isRepo(project.path));
+        const isGit = result.branches.length > 0 || (await isGitRepo(project.path));
         return { isGitRepo: isGit, current: result.current, branches: result.branches };
       } catch (err) {
         return mapError(reply, err);
@@ -479,20 +480,3 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 };
-
-/**
- * Tiny helper for the diff routes — they want to report `isGitRepo`
- * accurately even when the diff text is empty (a clean repo). Cheaper
- * than re-running `getStatus`.
- */
-async function isRepo(cwd: string): Promise<boolean> {
-  try {
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const run = promisify(execFile);
-    await run("git", ["rev-parse", "--is-inside-work-tree"], { cwd });
-    return true;
-  } catch {
-    return false;
-  }
-}

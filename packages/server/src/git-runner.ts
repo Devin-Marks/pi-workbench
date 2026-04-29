@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { homedir } from "node:os";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -128,6 +129,14 @@ async function runGit(cwd: string, args: string[]): Promise<RunResult> {
       maxBuffer: MAX_BUFFER,
       env: {
         ...process.env,
+        // `git config` consults $HOME for the user's global config.
+        // If the parent process has no HOME (some container init
+        // flows, certain systemd/launchd configurations), git falls
+        // back to /etc/passwd lookup which can fail opaquely. Force
+        // a sensible default from `os.homedir()` (which itself
+        // checks USERPROFILE on Windows + falls back to the passwd
+        // entry).
+        HOME: process.env.HOME ?? homedir(),
         GIT_TERMINAL_PROMPT: "0",
         // `true` is the POSIX no-op; suppresses any askpass GUI.
         GIT_ASKPASS: "true",
@@ -165,9 +174,10 @@ function sanitizeStderr(stderr: string): string {
 /**
  * True iff `cwd` is inside a git working tree. Cheap probe used by
  * every public function so "not a repo" can return the empty default
- * rather than throw.
+ * rather than throw. Exported so route helpers (e.g. for the diff
+ * endpoints' `isGitRepo` flag) don't have to re-implement it.
  */
-async function isGitRepo(cwd: string): Promise<boolean> {
+export async function isGitRepo(cwd: string): Promise<boolean> {
   try {
     await runGit(cwd, ["rev-parse", "--is-inside-work-tree"]);
     return true;
@@ -188,7 +198,10 @@ async function isGitRepo(cwd: string): Promise<boolean> {
 function parseStatus(stdout: string): FileStatusEntry[] {
   const out: FileStatusEntry[] = [];
   for (const line of stdout.split("\n")) {
-    if (line.length < 3) continue;
+    // Minimum well-formed porcelain line: 2 status chars + space +
+    // at least 1-char path = 4. Length 3 sneaks past the old check
+    // and produces an empty path.
+    if (line.length < 4) continue;
     const code = line.slice(0, 2);
     const rest = line.slice(3);
     let path = rest;
@@ -210,6 +223,7 @@ function parseStatus(stdout: string): FileStatusEntry[] {
       code,
     };
     if (originalPath !== undefined) entry.originalPath = originalPath;
+    if (path.length === 0) continue; // defensive — see length filter above
     out.push(entry);
   }
   return out;
@@ -329,8 +343,11 @@ export async function getBranches(cwd: string): Promise<BranchesResult> {
     // git emits "(HEAD detached at ...)" as a pseudo-ref; skip.
     if (name.startsWith("(")) continue;
     const isCurrent = headFlag === "*";
-    const remote = name.startsWith("remotes/") || name.startsWith("origin/");
-    const cleanName = name.startsWith("remotes/") ? name.slice("remotes/".length) : name;
+    // git's --format always prefixes remote-tracking branches with
+    // `remotes/`. The earlier `origin/` heuristic mis-classified a
+    // local branch literally named `origin/feature` as remote.
+    const remote = name.startsWith("remotes/");
+    const cleanName = remote ? name.slice("remotes/".length) : name;
     branches.push({ name: cleanName, current: isCurrent, remote });
     if (isCurrent) current = cleanName;
   }
