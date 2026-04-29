@@ -367,6 +367,26 @@ export async function unstagePaths(cwd: string, paths: string[]): Promise<void> 
 }
 
 /**
+ * Discard local changes for the given files: restores both the
+ * index AND the working tree to HEAD via `git restore --staged
+ * --worktree --source=HEAD -- <paths>`. The user-visible "Revert"
+ * action.
+ *
+ * For untracked files, `git restore` errors with "pathspec did
+ * not match any file(s) known to git". The route surfaces this
+ * via `GitCommandError` so the UI can display "untracked files
+ * can't be reverted; delete them via the file browser instead."
+ *
+ * Destructive — the caller is expected to gate this behind a
+ * confirmation in the UI (the click-twice-to-confirm pattern in
+ * GitPanel).
+ */
+export async function revertPaths(cwd: string, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  await runGit(cwd, ["restore", "--staged", "--worktree", "--source=HEAD", "--", ...paths]);
+}
+
+/**
  * Commit the currently-staged changes. Empty / whitespace-only
  * messages are rejected at the route layer; this just runs the
  * command. `--no-verify` is NOT used — we want pre-commit hooks to

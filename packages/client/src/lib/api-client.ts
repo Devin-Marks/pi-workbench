@@ -855,6 +855,15 @@ export const api = {
       },
       { method: "POST", body: { projectId, paths } },
     ),
+  gitRevert: (projectId: string, paths: string[]) =>
+    request(
+      "/api/v1/git/revert",
+      (v, s) => {
+        if (!isObject(v) || v.ok !== true) fail(s, "expected { ok: true }");
+        return { ok: true as const };
+      },
+      { method: "POST", body: { projectId, paths } },
+    ),
   gitCommit: (projectId: string, message: string) =>
     request(
       "/api/v1/git/commit",

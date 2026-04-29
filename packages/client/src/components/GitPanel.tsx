@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { GitBranch, GitCommit, RefreshCw, Upload } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { GitBranch, GitCommit, Minus, Plus, RefreshCw, Undo2, Upload } from "lucide-react";
 import {
   api,
   ApiError,
@@ -153,6 +153,27 @@ export function GitPanel() {
     }
   };
 
+  // Revert (discard local changes). Wired through to
+  // `git restore --staged --worktree --source=HEAD` server-side.
+  // Untracked files are filtered out client-side because git
+  // refuses them; the panel doesn't render the button for them
+  // (see FileGroup below).
+  const revert = async (paths: string[]): Promise<void> => {
+    if (paths.length === 0) return;
+    setBusy(true);
+    setOpError(undefined);
+    setOpResult(undefined);
+    try {
+      await api.gitRevert(project.id, paths);
+      setOpResult(paths.length === 1 ? `Reverted ${paths[0]}` : `Reverted ${paths.length} files`);
+      await refresh();
+    } catch (err) {
+      setOpError(err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const unstage = async (paths: string[]): Promise<void> => {
     if (paths.length === 0) return;
     setBusy(true);
@@ -253,6 +274,7 @@ export function GitPanel() {
             onGroupAction={() => void unstage(stagedFiles.map((f) => f.path))}
             onFileAction={(f) => void unstage([f.path])}
             fileActionLabel="Unstage"
+            onRevert={(f) => void revert([f.path])}
             onClickFile={(f) => void toggleDiff(f, true)}
             openDiffs={openDiffs}
             staged
@@ -266,6 +288,7 @@ export function GitPanel() {
             onGroupAction={() => void stage(unstagedFiles.map((f) => f.path))}
             onFileAction={(f) => void stage([f.path])}
             fileActionLabel="Stage"
+            onRevert={(f) => void revert([f.path])}
             onClickFile={(f) => void toggleDiff(f, false)}
             openDiffs={openDiffs}
             staged={false}
@@ -279,6 +302,11 @@ export function GitPanel() {
             onGroupAction={() => void stage(untrackedFiles.map((f) => f.path))}
             onFileAction={(f) => void stage([f.path])}
             fileActionLabel="Stage"
+            // Untracked files can't be reverted (git refuses; they
+            // weren't in HEAD). Pass undefined so the row hides
+            // the revert button — user should delete via the file
+            // browser instead.
+            onRevert={undefined}
             onClickFile={(f) => void toggleDiff(f, false)}
             openDiffs={openDiffs}
             staged={false}
@@ -403,12 +431,64 @@ interface FileGroupProps {
   onGroupAction: () => void;
   onFileAction: (f: GitFileStatus) => void;
   fileActionLabel: string;
+  /** Called when the user double-clicks (confirms) Revert. Pass
+   *  `undefined` to hide the revert button entirely (e.g. for
+   *  untracked files where git can't restore from HEAD). */
+  onRevert: ((f: GitFileStatus) => void) | undefined;
   onClickFile: (f: GitFileStatus) => void;
   openDiffs: Record<string, string | "loading" | "error">;
   staged: boolean;
 }
 
+const REVERT_CONFIRM_TIMEOUT_MS = 3000;
+
 function FileGroup(props: FileGroupProps) {
+  // Click-twice-to-confirm state for the destructive Revert action.
+  // First click on a file's revert button puts THAT file's path
+  // into `pending`, swaps the icon for "Confirm?" copy, and sets
+  // a 3s timeout to auto-clear. Second click within the window
+  // executes the revert. Clicking a different file's revert
+  // moves the pending state to that file (so two-step destructive
+  // actions can't accidentally hit the wrong row). The ref tracks
+  // the timeout so we can clear it on unmount or state transition.
+  const [pendingRevert, setPendingRevert] = useState<string | undefined>(undefined);
+  const revertTimerRef = useRef<number | undefined>(undefined);
+
+  const clearPending = (): void => {
+    if (revertTimerRef.current !== undefined) {
+      window.clearTimeout(revertTimerRef.current);
+      revertTimerRef.current = undefined;
+    }
+    setPendingRevert(undefined);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (revertTimerRef.current !== undefined) {
+        window.clearTimeout(revertTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleRevertClick = (f: GitFileStatus): void => {
+    if (props.onRevert === undefined) return;
+    if (pendingRevert === f.path) {
+      // Second click within the window — commit.
+      clearPending();
+      props.onRevert(f);
+      return;
+    }
+    // First click (or click on a different file).
+    if (revertTimerRef.current !== undefined) {
+      window.clearTimeout(revertTimerRef.current);
+    }
+    setPendingRevert(f.path);
+    revertTimerRef.current = window.setTimeout(() => {
+      setPendingRevert(undefined);
+      revertTimerRef.current = undefined;
+    }, REVERT_CONFIRM_TIMEOUT_MS);
+  };
+
   return (
     <div className="border-t border-neutral-800/60">
       <div className="flex items-center justify-between px-3 py-1.5">
@@ -426,6 +506,7 @@ function FileGroup(props: FileGroupProps) {
         {props.files.map((f) => {
           const key = `${f.path}|${props.staged ? "staged" : "unstaged"}`;
           const diffState = props.openDiffs[key];
+          const revertPending = pendingRevert === f.path;
           return (
             <li key={f.path} className="border-t border-neutral-900">
               <div className="group flex items-center gap-2 px-3 py-1 hover:bg-neutral-900">
@@ -442,10 +523,43 @@ function FileGroup(props: FileGroupProps) {
                 >
                   {f.path}
                 </button>
+                {props.onRevert !== undefined && (
+                  <button
+                    onClick={() => handleRevertClick(f)}
+                    // `inline-flex` (NOT plain `inline`) is what
+                    // keeps the icon on the same baseline as the
+                    // text. `inline` alone would override our
+                    // `flex` display and stack the icon below the
+                    // label whenever the text wrapped or got too
+                    // wide. `group-hover:inline-flex` handles the
+                    // visible state on hover.
+                    className={
+                      revertPending
+                        ? "inline-flex items-center gap-1 rounded bg-red-900/40 px-1 py-0.5 text-[10px] text-red-200"
+                        : "hidden items-center gap-1 text-[10px] text-neutral-500 hover:text-red-300 group-hover:inline-flex"
+                    }
+                    title={
+                      revertPending
+                        ? "Click again to discard local changes (this cannot be undone)"
+                        : "Revert: discard local changes for this file"
+                    }
+                  >
+                    <Undo2 size={10} />
+                    {revertPending ? "Confirm?" : "Revert"}
+                  </button>
+                )}
                 <button
                   onClick={() => props.onFileAction(f)}
-                  className="hidden text-[10px] text-neutral-500 hover:text-neutral-200 group-hover:inline"
+                  // Same `inline-flex` trick as the revert button —
+                  // plain `inline` would override the implicit
+                  // flex-row layout and let the icon wrap.
+                  className="ml-3 hidden items-center gap-1 text-[10px] text-neutral-500 hover:text-neutral-200 group-hover:inline-flex"
                 >
+                  {props.fileActionLabel === "Stage" ? (
+                    <Plus size={10} />
+                  ) : props.fileActionLabel === "Unstage" ? (
+                    <Minus size={10} />
+                  ) : null}
                   {props.fileActionLabel}
                 </button>
               </div>

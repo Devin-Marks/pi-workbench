@@ -11,6 +11,7 @@ import {
   getStatus,
   isGitRepo,
   push,
+  revertPaths,
   stagePaths,
   unstagePaths,
 } from "../git-runner.js";
@@ -381,6 +382,47 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
       if (project === undefined) return;
       try {
         await unstagePaths(project.path, req.body.paths);
+        return { ok: true };
+      } catch (err) {
+        return mapError(reply, err);
+      }
+    },
+  );
+
+  fastify.post<{ Body: { projectId: string; paths: string[] } }>(
+    "/git/revert",
+    {
+      schema: {
+        description:
+          "Discard local changes for the given files via `git restore " +
+          "--staged --worktree --source=HEAD`. Restores both the index " +
+          "and the working tree to HEAD — destructive, the caller is " +
+          "expected to gate behind a confirmation. Untracked files " +
+          "produce a 400 with git's stderr ('pathspec did not match'); " +
+          "delete those via /files/delete instead.",
+        tags: ["git"],
+        body: {
+          type: "object",
+          required: ["projectId", "paths"],
+          additionalProperties: false,
+          properties: {
+            projectId: { type: "string", minLength: 1 },
+            paths: { type: "array", items: { type: "string", minLength: 1 }, minItems: 1 },
+          },
+        },
+        response: {
+          200: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+          400: errorSchema,
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const project = await resolveProject(req.body.projectId, reply);
+      if (project === undefined) return;
+      try {
+        await revertPaths(project.path, req.body.paths);
         return { ok: true };
       } catch (err) {
         return mapError(reply, err);
