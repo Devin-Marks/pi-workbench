@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { EditorView, basicSetup } from "codemirror";
-import { EditorState, type Extension } from "@codemirror/state";
+import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { javascript } from "@codemirror/lang-javascript";
@@ -30,13 +30,21 @@ export default function CodeMirrorEditor({
   file,
   onChange,
   onSaveShortcut,
+  wrap,
 }: {
   file: OpenFile;
   onChange: (next: string) => void;
   onSaveShortcut: () => void;
+  wrap: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  // CodeMirror Compartment for the lineWrapping extension. A
+  // compartment lets us swap that one extension at runtime via
+  // `dispatch({ effects: wrapCompartment.reconfigure(...) })` without
+  // rebuilding the entire EditorState (which would lose cursor, undo,
+  // selection, etc.).
+  const wrapCompartmentRef = useRef<Compartment>(new Compartment());
 
   // Latest `onChange` / `onSaveShortcut` in refs so the EditorView
   // listener doesn't capture stale closures across renders.
@@ -59,7 +67,7 @@ export default function CodeMirrorEditor({
     const exts: Extension[] = [
       basicSetup,
       oneDark,
-      EditorView.lineWrapping,
+      wrapCompartmentRef.current.of(wrap ? EditorView.lineWrapping : []),
       keymap.of([
         {
           key: "Mod-s",
@@ -86,6 +94,16 @@ export default function CodeMirrorEditor({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Reconfigure the wrap compartment when the prop changes. Unlike
+  // a full editor rebuild, this preserves cursor / scroll / undo.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === null) return;
+    view.dispatch({
+      effects: wrapCompartmentRef.current.reconfigure(wrap ? EditorView.lineWrapping : []),
+    });
+  }, [wrap]);
 
   // External draft change (e.g. reloadFile bringing fresh disk content)
   // — sync into the editor without firing onChange.

@@ -1,7 +1,43 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { useFileStore, type OpenFile } from "../store/file-store";
 import { useActiveProject } from "../store/project-store";
-import { X } from "lucide-react";
+import { WrapText, X } from "lucide-react";
+
+const WRAP_KEY_PREFIX = "pi.editor.wrap.";
+
+/**
+ * Per-file-extension line-wrap preference, persisted across sessions.
+ * Long log files want horizontal scroll; markdown / prose wants wrap.
+ * The bucket is keyed by lower-cased extension (or "" for no
+ * extension); the default for unset extensions is `true` (wrap on),
+ * matching the behaviour the editor shipped with.
+ */
+function extensionOf(path: string): string {
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  const base = slash === -1 ? path : path.slice(slash + 1);
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0) return "";
+  return base.slice(dot + 1).toLowerCase();
+}
+
+function readWrapPref(ext: string): boolean {
+  try {
+    const v = localStorage.getItem(WRAP_KEY_PREFIX + ext);
+    if (v === "0") return false;
+    if (v === "1") return true;
+  } catch {
+    // private-mode storage failure → fall through to default
+  }
+  return true;
+}
+
+function writeWrapPref(ext: string, wrap: boolean): void {
+  try {
+    localStorage.setItem(WRAP_KEY_PREFIX + ext, wrap ? "1" : "0");
+  } catch {
+    // ignore — choice still applies for this session
+  }
+}
 
 /**
  * Lazy-loaded CodeMirror host. The CM bundle (basicSetup + 9 language
@@ -41,6 +77,21 @@ export function EditorPanel() {
   const externallyChanged = useFileStore((s) => s.externallyChanged);
 
   const active = openFiles.find((f) => f.path === activePath);
+  const activeExt = active !== undefined ? extensionOf(active.path) : "";
+  const [wrap, setWrap] = useState<boolean>(() => readWrapPref(activeExt));
+
+  // Re-read the persisted preference when switching tabs / extensions.
+  useEffect(() => {
+    setWrap(readWrapPref(activeExt));
+  }, [activeExt]);
+
+  const toggleWrap = useCallback((): void => {
+    setWrap((prev) => {
+      const next = !prev;
+      writeWrapPref(activeExt, next);
+      return next;
+    });
+  }, [activeExt]);
 
   return (
     <div className="flex h-full flex-col bg-neutral-950 text-sm text-neutral-200">
@@ -74,6 +125,7 @@ export function EditorPanel() {
               <CodeMirrorEditor
                 key={active.tabId}
                 file={active}
+                wrap={wrap}
                 onChange={(v) => updateDraft(active.path, v)}
                 onSaveShortcut={() => {
                   if (project !== undefined) void saveFile(project.id, active.path);
@@ -81,7 +133,7 @@ export function EditorPanel() {
               />
             </Suspense>
           )}
-          <StatusBar file={active} />
+          <StatusBar file={active} wrap={wrap} onToggleWrap={toggleWrap} />
         </>
       )}
     </div>
@@ -173,7 +225,15 @@ function ExternalChangeBanner({
   );
 }
 
-function StatusBar({ file }: { file: OpenFile }) {
+function StatusBar({
+  file,
+  wrap,
+  onToggleWrap,
+}: {
+  file: OpenFile;
+  wrap: boolean;
+  onToggleWrap: () => void;
+}) {
   const dirty = file.dirty;
   const saving = file.saving;
   const savedAt = file.savedAt;
@@ -193,7 +253,23 @@ function StatusBar({ file }: { file: OpenFile }) {
   }
   return (
     <div className="flex items-center justify-between gap-3 border-t border-neutral-800 bg-neutral-900/40 px-3 py-1 text-[11px]">
-      <span className="font-mono text-neutral-500">{file.language}</span>
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-neutral-500">{file.language}</span>
+        <button
+          onClick={onToggleWrap}
+          className={`flex items-center gap-1 rounded px-1 py-0.5 text-[10px] hover:bg-neutral-800 ${
+            wrap ? "text-neutral-300" : "text-neutral-500"
+          }`}
+          title={
+            wrap
+              ? "Wrap on (click to switch to horizontal scroll, persisted per file extension)"
+              : "Wrap off (click to enable wrap, persisted per file extension)"
+          }
+        >
+          <WrapText size={11} />
+          {wrap ? "wrap" : "no wrap"}
+        </button>
+      </div>
       <span className={className}>{label}</span>
     </div>
   );
