@@ -31,9 +31,11 @@ const execFileAsync = promisify(execFile);
  *      back to the SDK's per-edit `details.diff` from the LAST edit
  *      result for that file. Imperfect but better than nothing.
  *
- * The "agent_start to agent_end" boundary mentioned in the dev plan
- * is approximated by "since the most recent user message" — those
- * events aren't persisted into the messages array; user messages are.
+ * Boundary: when the caller passes `startIndex` (the message-array
+ * index captured at the most recent `agent_start` event by the session
+ * registry), we walk from there exactly. Otherwise we approximate
+ * "latest turn" as "since the most recent user message" — fine for
+ * cold-loaded sessions that haven't yet emitted an `agent_start`.
  */
 
 export interface TurnDiffEntry {
@@ -72,18 +74,33 @@ interface ToolCallResultPair {
 
 /**
  * Walk the session's messages array and pull out the latest turn's
- * write/edit operations, paired with their result details. The
- * "latest turn" is everything after the most recent user message
- * (inclusive of user → final assistant). For sessions with no user
- * message yet, we walk the whole array.
+ * write/edit operations, paired with their result details.
+ *
+ * When `explicitStartIndex` is provided (the session-registry's
+ * `lastAgentStartIndex`), the walk starts there and ignores
+ * intermediate user-shaped messages produced by compaction or steering.
+ * Otherwise we fall back to "the most recent user message" — fine for
+ * the common case and necessary for cold-loaded sessions that never
+ * emitted `agent_start` since the server booted.
  */
-export function collectTurnTouches(messages: ReadonlyArray<unknown>): ToolCallResultPair[] {
+export function collectTurnTouches(
+  messages: ReadonlyArray<unknown>,
+  explicitStartIndex?: number,
+): ToolCallResultPair[] {
   let startIndex = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i] as { role?: unknown };
-    if (m.role === "user") {
-      startIndex = i + 1;
-      break;
+  if (
+    explicitStartIndex !== undefined &&
+    explicitStartIndex >= 0 &&
+    explicitStartIndex <= messages.length
+  ) {
+    startIndex = explicitStartIndex;
+  } else {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i] as { role?: unknown };
+      if (m.role === "user") {
+        startIndex = i + 1;
+        break;
+      }
     }
   }
 
@@ -150,8 +167,9 @@ export function collectTurnTouches(messages: ReadonlyArray<unknown>): ToolCallRe
 export async function buildTurnDiff(
   session: Pick<AgentSession, "messages">,
   projectPath: string,
+  explicitStartIndex?: number,
 ): Promise<TurnDiffEntry[]> {
-  const touches = collectTurnTouches(session.messages);
+  const touches = collectTurnTouches(session.messages, explicitStartIndex);
   if (touches.length === 0) return [];
 
   const isGitRepo = await stat(join(projectPath, ".git")).then(

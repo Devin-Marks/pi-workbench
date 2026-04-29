@@ -113,6 +113,15 @@ interface SessionState {
    * file, etc.) instead of an opaque spinner.
    */
   activeToolBySession: Record<string, ActiveTool | undefined>;
+  /**
+   * Per-session monotonic counter incremented on every `agent_end`
+   * event the client observes. Components that need to react to
+   * "the agent just finished" (e.g. the file-tree refresh in App.tsx)
+   * key effects on this counter instead of on a derived signal like
+   * messages.length, which fires on benign array-replacement refetches
+   * too. Cheap to compare; no allocations.
+   */
+  agentEndCountBySession: Record<string, number>;
   /** Per-session abort controller for the open SSE stream, if any. */
   controllers: Map<string, AbortController>;
   /** Errors surfaced from API calls (sticky until next successful op). */
@@ -139,6 +148,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   bannerBySession: {},
   streamingTextBySession: {},
   activeToolBySession: {},
+  agentEndCountBySession: {},
   controllers: new Map(),
   error: undefined,
   loadingList: false,
@@ -429,15 +439,25 @@ function applyEvent(
           streamingBySession: { ...s.streamingBySession, [sessionId]: false },
           streamingTextBySession: { ...s.streamingTextBySession, [sessionId]: "" },
           activeToolBySession: { ...s.activeToolBySession, [sessionId]: undefined },
+          agentEndCountBySession: {
+            ...s.agentEndCountBySession,
+            [sessionId]: (s.agentEndCountBySession[sessionId] ?? 0) + 1,
+          },
         }));
       })
       .catch(() => {
         // If the refetch fails, at least flip streaming off so the
         // input re-enables. The chat view stays out-of-date until
-        // the next interaction.
+        // the next interaction. Bump the counter regardless — consumers
+        // (file-tree refresh, etc.) should still react even if the
+        // refetch failed: the on-disk state likely changed.
         set((s) => ({
           streamingBySession: { ...s.streamingBySession, [sessionId]: false },
           activeToolBySession: { ...s.activeToolBySession, [sessionId]: undefined },
+          agentEndCountBySession: {
+            ...s.agentEndCountBySession,
+            [sessionId]: (s.agentEndCountBySession[sessionId] ?? 0) + 1,
+          },
         }));
       });
     return;

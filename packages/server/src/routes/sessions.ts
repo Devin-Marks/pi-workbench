@@ -292,7 +292,11 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
     async (req, reply) => {
       const live = getSession(req.params.id);
       if (live === undefined) return notFound(reply);
-      const entries = await buildTurnDiff(live.session, live.workspacePath);
+      const entries = await buildTurnDiff(
+        live.session,
+        live.workspacePath,
+        live.lastAgentStartIndex,
+      );
       return { entries };
     },
   );

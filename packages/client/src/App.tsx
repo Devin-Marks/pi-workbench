@@ -148,12 +148,12 @@ export function App() {
   const gitChangedCount = gitStatus.status?.files.length ?? 0;
 
   // Refresh the file tree on every agent_end the active project hears,
-  // since the agent commonly writes/edits files mid-turn. We listen on
-  // the session store's messagesBySession length as a cheap proxy: a
-  // refetched messages array always lands on agent_end and changes
-  // length when a new tool result is appended.
-  const activeMessagesLength = useSessionStore((s) =>
-    activeSessionId !== undefined ? (s.messagesBySession[activeSessionId]?.length ?? 0) : 0,
+  // since the agent commonly writes/edits files mid-turn. The session
+  // store bumps `agentEndCountBySession[id]` exactly once per agent_end,
+  // so this effect fires once per turn — no false positives from
+  // benign array-replacement refetches that would trip a length proxy.
+  const agentEndCount = useSessionStore((s) =>
+    activeSessionId !== undefined ? (s.agentEndCountBySession[activeSessionId] ?? 0) : 0,
   );
   const isStreaming = useSessionStore((s) =>
     activeSessionId !== undefined ? (s.streamingBySession[activeSessionId] ?? false) : false,
@@ -163,7 +163,7 @@ export function App() {
     if (active === undefined || isStreaming) return;
     void loadFileTree(active.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active?.id, isStreaming, activeMessagesLength]);
+  }, [active?.id, isStreaming, agentEndCount]);
 
   // Agent file-change awareness for open editor tabs. Walks NEW
   // tool_result messages since we last looked, finds write/edit

@@ -33,6 +33,18 @@ export interface LiveSession {
   clients: Set<SSEClient>;
   createdAt: Date;
   lastActivityAt: Date;
+  /**
+   * `messages.length` captured at the most recent `agent_start` event,
+   * i.e. the index of the FIRST message that belongs to the latest agent
+   * turn. Used by `turn-diff-builder` to bound "the latest turn" exactly,
+   * instead of approximating with "everything since the most recent user
+   * message" (which misclassifies turns that contain intermediate
+   * user-shaped messages from compaction or steering).
+   *
+   * Undefined for cold-loaded sessions until the next `agent_start`.
+   * Callers should fall back to the user-message heuristic in that case.
+   */
+  lastAgentStartIndex: number | undefined;
   /** Internal — call to detach the registry's own subscription on dispose. */
   unsubscribe: () => void;
 }
@@ -137,6 +149,12 @@ async function ensureSessionDir(projectId: string): Promise<string> {
 function makeSubscribeHandler(live: LiveSession): () => void {
   return live.session.subscribe((event: AgentSessionEvent) => {
     live.lastActivityAt = new Date();
+    if (event.type === "agent_start") {
+      // Capture BEFORE the SDK appends turn messages, so the index points
+      // at the first message of the new turn (the user prompt or the
+      // steered/follow-up entry).
+      live.lastAgentStartIndex = live.session.messages.length;
+    }
     for (const client of live.clients) {
       try {
         client.send(event);
@@ -180,6 +198,7 @@ export async function createSession(
     clients: new Set(),
     createdAt: now,
     lastActivityAt: now,
+    lastAgentStartIndex: undefined,
     unsubscribe: () => undefined,
   };
   live.unsubscribe = makeSubscribeHandler(live);
@@ -248,6 +267,7 @@ export async function resumeSession(
     clients: new Set(),
     createdAt: match.created,
     lastActivityAt: now,
+    lastAgentStartIndex: undefined,
     unsubscribe: () => undefined,
   };
   live.unsubscribe = makeSubscribeHandler(live);
@@ -485,6 +505,7 @@ export async function forkSession(sessionId: string, entryId: string): Promise<L
     clients: new Set(),
     createdAt: now,
     lastActivityAt: now,
+    lastAgentStartIndex: undefined,
     unsubscribe: () => undefined,
   };
   live.unsubscribe = makeSubscribeHandler(live);
