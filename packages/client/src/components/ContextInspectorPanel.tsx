@@ -232,32 +232,55 @@ function TokenSummary({
               </div>
             );
           })()}
+        {/* Lifetime billing components on their own lines.
+            Combining them into a single "Prompt billed" sum
+            (previous iteration) made the number look implausible:
+            39 turns × pi's ~12k system prompt + tool defs is ~470k
+            of "input" alone, which is correct but offers no
+            insight into where the bytes went. Each component on
+            its own line lets the user see the actual story:
+            usually the cache-served line is dominant because every
+            turn re-reads prior context from cache (billed at ~10%
+            of input rate). The "Total cost" below is the
+            bottom-line dollar amount that normalises everything. */}
         <div className="flex items-center justify-between text-[11px]">
           <span
             className="text-neutral-500"
-            title="Sum of every turn's full prompt (input + cacheRead + cacheWrite). Each turn re-sends prior context, so this grows ~quadratically with conversation length — that's normal LLM behavior, not a bug. Useful for billing analysis."
+            title="Sum of `usage.input` per turn — NEW non-cached input the LLM saw across the session. Excludes cached portions (tracked separately below)."
           >
-            Prompt billed (lifetime)
+            Input (lifetime)
           </span>
-          {/* Single sum that matches the per-turn Prompt column's
-              formula, so the lifetime row equals sum-of-rows. Hover
-              for the input/cR/cW breakdown — same pattern as the
-              per-turn cell. The previous format showed the three
-              components separately and read as three independent
-              metrics, inviting mental-math errors. */}
+          <span className="font-mono text-neutral-400">{formatTokens(data.totalInputTokens)}</span>
+        </div>
+        <div className="flex items-center justify-between text-[11px]">
           <span
-            className="font-mono text-neutral-400"
-            title={`input ${formatTokens(data.totalInputTokens)} + cR ${formatTokens(
-              data.totalCacheReadTokens,
-            )} + cW ${formatTokens(data.totalCacheWriteTokens)}`}
+            className="text-neutral-500"
+            title="Sum of `usage.cacheRead` per turn — prior context served from the prompt cache. Counted ONCE PER API CALL: every turn re-reads the same cached content and re-pays the (discounted) read fee, so this number grows ~quadratically with conversation length. Billed at ~10% of input rate on most providers."
           >
-            {formatTokens(
-              data.totalInputTokens + data.totalCacheReadTokens + data.totalCacheWriteTokens,
-            )}
+            Cache served (lifetime)
+          </span>
+          <span className="font-mono text-neutral-400">
+            {formatTokens(data.totalCacheReadTokens)}
           </span>
         </div>
         <div className="flex items-center justify-between text-[11px]">
-          <span className="text-neutral-500">Output (lifetime)</span>
+          <span
+            className="text-neutral-500"
+            title="Sum of `usage.cacheWrite` per turn — portions cached for reuse on subsequent turns. Billed at ~125% of input rate; small premium up front for big savings on the cache-served line."
+          >
+            Cache written (lifetime)
+          </span>
+          <span className="font-mono text-neutral-400">
+            {formatTokens(data.totalCacheWriteTokens)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between text-[11px]">
+          <span
+            className="text-neutral-500"
+            title="Sum of `usage.output` per turn — assistant tokens generated."
+          >
+            Output (lifetime)
+          </span>
           <span className="font-mono text-neutral-400">{formatTokens(data.totalOutputTokens)}</span>
         </div>
         <div className="flex items-center justify-between text-[11px] font-medium">
