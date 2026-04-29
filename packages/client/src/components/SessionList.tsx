@@ -1,6 +1,7 @@
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { EMPTY_SESSIONS, useSessionStore } from "../store/session-store";
 import { useProjectStore } from "../store/project-store";
+import { ConfirmDialog } from "./Modal";
 
 interface Props {
   projectId: string;
@@ -41,6 +42,37 @@ export function SessionList({ projectId }: Props) {
   // Inline rename state — only one row at a time.
   const [renamingId, setRenamingId] = useState<string | undefined>(undefined);
   const [renameDraft, setRenameDraft] = useState("");
+
+  /**
+   * Delete-session dialog state. Live and cold rows hit the same
+   * × button but the underlying behavior differs:
+   *   - live: dispose-only (preserves the JSONL); session can be
+   *     resumed later by clicking it again.
+   *   - cold: actually deletes the JSONL from disk; the row goes
+   *     away forever. Presented in a danger-toned modal.
+   */
+  const [deleteDialog, setDeleteDialog] = useState<
+    { sessionId: string; label: string; isLive: boolean } | undefined
+  >(undefined);
+
+  const submitDelete = async (): Promise<void> => {
+    if (deleteDialog === undefined) return;
+    const { sessionId } = deleteDialog;
+    // Re-read isLive from the store at submit time. The dialog state
+    // captures it at click time, but a session can transition live →
+    // cold between click and confirm (idle GC, server restart, etc.).
+    // If we trusted the captured flag and sent `hard: false` while the
+    // session is now cold, the route's "cold + no hard → 404" branch
+    // would surface — better than the older behavior where a stale
+    // flag could silently delete a file. But we can do one better:
+    // consult the freshest state and use the right `hard` flag.
+    const fresh = sessions.find((x) => x.sessionId === sessionId);
+    const isLiveNow = fresh?.isLive ?? deleteDialog.isLive;
+    setDeleteDialog(undefined);
+    // Live path: dispose without hard delete. Cold path: hard delete
+    // (also removes the on-disk JSONL).
+    void disposeSession(sessionId, { hard: !isLiveNow });
+  };
 
   useEffect(() => {
     void loadSessionsForProject(projectId);
@@ -132,13 +164,13 @@ export function SessionList({ projectId }: Props) {
             )}
             {!isRenaming && (
               <button
-                onClick={() => {
-                  if (confirm(`Dispose session "${label}"? The on-disk JSONL is preserved.`)) {
-                    void disposeSession(s.sessionId);
-                  }
-                }}
+                onClick={() => setDeleteDialog({ sessionId: s.sessionId, label, isLive: s.isLive })}
                 className="hidden text-neutral-500 hover:text-red-400 group-hover:inline"
-                title="Dispose live session"
+                title={
+                  s.isLive
+                    ? "Dispose live session (file preserved)"
+                    : "Delete session JSONL from disk"
+                }
               >
                 ×
               </button>
@@ -146,6 +178,23 @@ export function SessionList({ projectId }: Props) {
           </div>
         );
       })}
+      <ConfirmDialog
+        open={deleteDialog !== undefined}
+        onClose={() => setDeleteDialog(undefined)}
+        onConfirm={() => void submitDelete()}
+        title={
+          deleteDialog?.isLive === false
+            ? `Delete session "${deleteDialog.label}"`
+            : `Dispose session "${deleteDialog?.label ?? ""}"`
+        }
+        message={
+          deleteDialog?.isLive === false
+            ? `Permanently delete the on-disk JSONL for "${deleteDialog.label}"? This cannot be undone — the session is no longer in memory and the file is the only copy.`
+            : `Dispose the live session "${deleteDialog?.label ?? ""}"? The on-disk JSONL is preserved; you can resume the session later by clicking it.`
+        }
+        primaryLabel={deleteDialog?.isLive === false ? "Delete from disk" : "Dispose"}
+        tone={deleteDialog?.isLive === false ? "danger" : "default"}
+      />
     </div>
   );
 }

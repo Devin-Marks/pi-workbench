@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { getProject, readProjects } from "../project-manager.js";
 import {
   createSession,
+  deleteColdSession,
   disposeSession,
   findSessionLocation,
   getSession,
@@ -345,31 +346,93 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.delete<{ Params: { id: string } }>(
+  fastify.delete<{ Params: { id: string }; Querystring: { hard?: string } }>(
     "/sessions/:id",
     {
       schema: {
         description:
-          "Dispose the in-memory live session. The on-disk JSONL is " +
-          "preserved; the session can be resumed later via the SSE stream " +
-          "endpoint. 404 if it was never live (deleting an on-disk-only " +
-          "session is not currently supported — see DEFERRED.md).",
+          "Dispose the live session AND/OR delete the on-disk JSONL. The " +
+          "`hard` query param is the destructive-intent toggle:\n" +
+          "  - live + no `hard` → dispose, file preserved → 204\n" +
+          "  - live + `hard=1` → dispose AND delete the JSONL → 204\n" +
+          "  - cold + `hard=1` → delete the JSONL → 204\n" +
+          "  - cold + no `hard` → 404 (nothing to dispose; pass `hard=1` " +
+          "if you mean to delete the file)\n" +
+          "  - not found anywhere → 404\n" +
+          "The `hard=1`-required-for-cold rule keeps DELETE without `hard` " +
+          "non-destructive in every case: programmatic clients hammering " +
+          "DELETE in a cleanup loop won't accidentally remove on-disk " +
+          "session files.",
         tags: ["sessions"],
         params: {
           type: "object",
           required: ["id"],
           properties: { id: { type: "string" } },
         },
+        querystring: {
+          type: "object",
+          properties: {
+            hard: { type: "string", enum: ["0", "1", "true", "false"] },
+          },
+        },
         response: {
           204: { type: "null" },
           404: errorSchema,
+          500: errorSchema,
         },
       },
     },
     async (req, reply) => {
-      const ok = disposeSession(req.params.id);
-      if (!ok) return notFound(reply);
-      return reply.code(204).send();
+      const hard = req.query.hard === "1" || req.query.hard === "true";
+      const wasLive = disposeSession(req.params.id);
+      if (wasLive && !hard) return reply.code(204).send();
+      if (!wasLive && !hard) {
+        // Cold session, no destructive intent — 404. The user/client
+        // has to opt in via `?hard=1` to delete a cold session's
+        // JSONL. Mirrors the live-with-no-hard "non-destructive"
+        // semantic in the cold case.
+        return notFound(reply);
+      }
+      // Hard delete (live OR cold). After dispose, the registry no
+      // longer has the entry; deleteColdSession's "live" guard
+      // doesn't trip on the ordinary case.
+      let r: "deleted" | "live" | "not_found";
+      try {
+        r = await deleteColdSession(req.params.id);
+      } catch (err) {
+        // Real fs failure (permissions, IO) — distinguish from
+        // not_found so the operator sees a 500 not a misleading 404.
+        req.log.error({ err }, "deleteColdSession failed");
+        return reply.code(500).send({ error: "session_delete_failed" });
+      }
+      if (r === "deleted") return reply.code(204).send();
+      if (r === "live") {
+        // Race: another client resumed the session between our
+        // dispose and the cold-delete file lookup. The user asked
+        // for hard delete; honor that by retrying once.
+        const live2 = disposeSession(req.params.id);
+        if (live2) {
+          try {
+            const r2 = await deleteColdSession(req.params.id);
+            if (r2 === "deleted" || r2 === "not_found") return reply.code(204).send();
+          } catch (err) {
+            req.log.error({ err }, "deleteColdSession failed on retry");
+            return reply.code(500).send({ error: "session_delete_failed" });
+          }
+        }
+        // Couldn't reach a steady state — the resumer keeps winning.
+        // Single-tenant + this race is extremely rare; surface as 500
+        // rather than silently lying about the outcome.
+        return reply.code(500).send({ error: "session_delete_failed" });
+      }
+      // r === "not_found"
+      if (wasLive) {
+        // Dispose succeeded but no JSONL on disk — the live session
+        // had no persisted entries (nothing was written). Treat as
+        // success; the live state IS gone.
+        return reply.code(204).send();
+      }
+      return notFound(reply);
     },
   );
 };

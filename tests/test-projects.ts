@@ -66,12 +66,18 @@ interface RunningServer {
   child: ChildProcess;
   workspacePath: string;
   configDir: string;
+  dataDir: string;
   stop: () => Promise<void>;
 }
 
 async function startServer(): Promise<RunningServer> {
   const workspacePath = await mkdtemp(join(tmpdir(), "pi-workbench-ws-"));
   const configDir = await mkdtemp(join(tmpdir(), "pi-workbench-cfg-"));
+  // WORKBENCH_DATA_DIR isolates the projects.json this test reads
+  // and writes. Without it the test would touch the dev's actual
+  // ~/.pi-workbench/projects.json, leaking state across test runs
+  // (and clobbering the user's real project list).
+  const dataDir = await mkdtemp(join(tmpdir(), "pi-workbench-data-"));
   const port = await pickFreePort();
   const child = spawn(process.execPath, [serverEntry], {
     cwd: repoRoot,
@@ -82,6 +88,7 @@ async function startServer(): Promise<RunningServer> {
       NODE_ENV: "test",
       WORKSPACE_PATH: workspacePath,
       PI_CONFIG_DIR: configDir,
+      WORKBENCH_DATA_DIR: dataDir,
       UI_PASSWORD: undefined,
       JWT_SECRET: undefined,
       API_KEY: undefined,
@@ -101,6 +108,7 @@ async function startServer(): Promise<RunningServer> {
     }
     await rm(workspacePath, { recursive: true, force: true });
     await rm(configDir, { recursive: true, force: true });
+    await rm(dataDir, { recursive: true, force: true });
   };
 
   try {
@@ -109,7 +117,7 @@ async function startServer(): Promise<RunningServer> {
     await stop();
     throw err;
   }
-  return { base, child, workspacePath, configDir, stop };
+  return { base, child, workspacePath, configDir, dataDir, stop };
 }
 
 interface Project {
@@ -288,16 +296,73 @@ async function main(): Promise<void> {
       );
     }
 
-    // 9. DELETE removes the record but leaves the folder intact
+    // 9. DELETE removes the record but leaves the project folder intact
+    //    (cascade defaults to false; that path is exercised below).
     {
-      const { status } = await jsend("DELETE", `${base}/api/v1/projects/${created.id}`);
-      assert("DELETE /projects/:id → 204", status === 204);
+      const { status, body } = await jsend("DELETE", `${base}/api/v1/projects/${created.id}`);
+      assert("DELETE /projects/:id → 200", status === 200);
+      assert(
+        "  default delete returns { cascaded: false }",
+        (body as { cascaded?: boolean }).cascaded === false,
+      );
       const list = (await jget(`${base}/api/v1/projects`)).body as { projects: Project[] };
       assert("  list is empty after delete", list.projects.length === 0);
       const folderStat = await stat(repoFolder).catch(() => undefined);
       assert(
         "  on-disk folder still exists after delete",
         folderStat !== undefined && folderStat.isDirectory(),
+      );
+    }
+
+    // 9b. DELETE with ?cascade=1 also removes the project's session dir.
+    //     Re-create the project, plant a fake JSONL under the session
+    //     dir, then delete with cascade and verify both are gone.
+    {
+      const { body: cb } = await jsend("POST", `${base}/api/v1/projects`, {
+        name: "to-cascade",
+        path: repoFolder,
+      });
+      const cascadeId = (cb as Project).id;
+      const sessionDir = join(workspacePath, ".pi", "sessions", cascadeId);
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(join(sessionDir, "abc.jsonl"), `{"type":"session"}\n`);
+      const { status, body } = await jsend(
+        "DELETE",
+        `${base}/api/v1/projects/${cascadeId}?cascade=1`,
+      );
+      assert("DELETE /projects/:id?cascade=1 → 200", status === 200);
+      assert(
+        "  cascade delete returns { cascaded: true }",
+        (body as { cascaded?: boolean }).cascaded === true,
+      );
+      const dirStat = await stat(sessionDir).catch(() => undefined);
+      assert("  session dir removed by cascade", dirStat === undefined);
+      const folderStat = await stat(repoFolder).catch(() => undefined);
+      assert(
+        "  project folder still on disk after cascade",
+        folderStat !== undefined && folderStat.isDirectory(),
+      );
+    }
+
+    // 9c. DELETE ?cascade=1 on a project that never had any sessions.
+    //     The most common real-world case — `rm({ force: true })` on a
+    //     missing dir should still report `cascaded: true`.
+    {
+      const emptyFolder = join(workspacePath, "empty-cascade");
+      await mkdir(emptyFolder, { recursive: true });
+      const { body: cb } = await jsend("POST", `${base}/api/v1/projects`, {
+        name: "empty-cascade",
+        path: emptyFolder,
+      });
+      const emptyId = (cb as Project).id;
+      const { status, body } = await jsend(
+        "DELETE",
+        `${base}/api/v1/projects/${emptyId}?cascade=1`,
+      );
+      assert("cascade on project with no sessions → 200", status === 200);
+      assert(
+        "  cascaded: true even when no session dir existed",
+        (body as { cascaded?: boolean }).cascaded === true,
       );
     }
 
@@ -332,7 +397,7 @@ async function main(): Promise<void> {
         srv.child.once("exit", () => res());
         srv.child.kill("SIGTERM");
       });
-      // re-spawn against same workspace+config dirs
+      // re-spawn against same workspace+config+data dirs
       const port = await pickFreePort();
       const child2 = spawn(process.execPath, [serverEntry], {
         cwd: repoRoot,
@@ -343,6 +408,7 @@ async function main(): Promise<void> {
           NODE_ENV: "test",
           WORKSPACE_PATH: workspacePath,
           PI_CONFIG_DIR: configDir,
+          WORKBENCH_DATA_DIR: srv.dataDir,
           // Ambient auth env from the dev's shell would otherwise enable auth
           // on the restarted server, turning the rename-survives assertion
           // into a confusing 401-vs-200 mismatch.

@@ -143,27 +143,44 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.delete<{ Params: { id: string } }>(
+  fastify.delete<{ Params: { id: string }; Querystring: { cascade?: string } }>(
     "/projects/:id",
     {
       schema: {
-        description: "Delete the project record. Never touches the filesystem.",
+        description:
+          "Delete the project record. With `?cascade=1` ALSO removes the " +
+          "project's on-disk session directory (under `${SESSION_DIR}/<id>/`); " +
+          "without it, those files are left in place and become orphaned. " +
+          "Cascade cleanup is best-effort — a missing dir is not an error, " +
+          "and an rm failure does NOT fail the delete (the project record " +
+          "is already gone at that point).",
         tags: ["projects"],
         params: {
           type: "object",
           required: ["id"],
           properties: { id: { type: "string" } },
         },
+        querystring: {
+          type: "object",
+          properties: {
+            cascade: { type: "string", enum: ["0", "1", "true", "false"] },
+          },
+        },
         response: {
-          204: { type: "null" },
+          200: {
+            type: "object",
+            required: ["cascaded"],
+            properties: { cascaded: { type: "boolean" } },
+          },
           404: errorSchema,
         },
       },
     },
     async (req, reply) => {
       try {
-        await deleteProject(req.params.id);
-        return reply.code(204).send();
+        const cascade = req.query.cascade === "1" || req.query.cascade === "true";
+        const result = await deleteProject(req.params.id, { cascadeSessionDir: cascade });
+        return reply.code(200).send(result);
       } catch (err) {
         return handleError(reply, err);
       }

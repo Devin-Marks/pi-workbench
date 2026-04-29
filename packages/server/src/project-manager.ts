@@ -1,7 +1,16 @@
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
+
+/**
+ * Project ids are always `randomUUID()` output. Mirrors the same
+ * regex used in session-registry's `sessionDirFor()` validator.
+ * Codified here too because the cascade rm path builds a
+ * filesystem destination from the id and should reject anything
+ * that could escape `${SESSION_DIR}`.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * One-time migration of the legacy `projects.json` location. Up through the
@@ -226,13 +235,50 @@ export async function renameProject(id: string, name: string): Promise<Project> 
   });
 }
 
-export async function deleteProject(id: string): Promise<void> {
+export async function deleteProject(
+  id: string,
+  opts: { cascadeSessionDir?: boolean } = {},
+): Promise<{ cascaded: boolean }> {
+  let cascaded = false;
   await withProjectsLock(async () => {
     const projects = await readProjects();
     const next = projects.filter((p) => p.id !== id);
     if (next.length === projects.length) throw new ProjectNotFoundError(id);
     await writeProjects(next);
   });
+  if (opts.cascadeSessionDir === true) {
+    // Wipe the project's session directory. Best-effort — a missing
+    // dir (no sessions ever recorded) is not an error.
+    //
+    // SAFETY: validate the id is UUID-shaped (the only shape
+    // `createProject()` ever produces) BEFORE building the path.
+    // `rm({ recursive: true, force: true })` is destructive enough
+    // that any path-traversal in `id` would be catastrophic — a
+    // hypothetical `id === ".."` would resolve to the parent of
+    // `${SESSION_DIR}` and wipe it. Today the only id source is
+    // `randomUUID()`, but the validator codifies that invariant
+    // against any future code path that imports/restores ids from
+    // the wire or a manually-edited projects.json.
+    if (!UUID_RE.test(id)) {
+      // Should be unreachable — the project record we just deleted
+      // had this id, so it passed creation-time validation. Log and
+      // skip the cascade rather than rm something dangerous.
+      console.warn(`[project-manager] refusing cascade rm for non-UUID id ${JSON.stringify(id)}`);
+      return { cascaded };
+    }
+    const dir = join(config.sessionDir, id);
+    try {
+      await rm(dir, { recursive: true, force: true });
+      cascaded = true;
+    } catch (err) {
+      // Don't fail the delete itself if cascade cleanup fails — the
+      // project record is gone, the session files are just orphaned
+      // (the same state that exists when cascade isn't requested).
+      // But DO log so a permissions issue isn't silently invisible.
+      console.warn(`[project-manager] cascade rm failed for ${dir}:`, err);
+    }
+  }
+  return { cascaded };
 }
 
 export async function getProject(id: string): Promise<Project | undefined> {

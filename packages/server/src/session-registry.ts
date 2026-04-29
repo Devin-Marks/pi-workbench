@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   AgentSession,
@@ -273,6 +273,50 @@ export async function resumeSession(
   live.unsubscribe = makeSubscribeHandler(live);
   registry.set(live.sessionId, live);
   return live;
+}
+
+/**
+ * Delete a cold (on-disk-only) session's JSONL file from disk. Refuses
+ * if the session is currently live in the registry — the caller should
+ * dispose first. Returns:
+ *   - "deleted" when the file was found and removed.
+ *   - "live" when the session is in the registry (caller must dispose
+ *      first; we don't auto-dispose because that would race the SSE
+ *      clients with no chance to close cleanly).
+ *   - "not_found" when no project owns a session with that id on disk.
+ */
+export async function deleteColdSession(
+  sessionId: string,
+): Promise<"deleted" | "live" | "not_found"> {
+  if (registry.has(sessionId)) return "live";
+  const projects = await readProjects();
+  for (const project of projects) {
+    const dir = sessionDirFor(project.id);
+    let infos: SessionInfo[];
+    try {
+      infos = await SessionManager.list(project.path, dir);
+    } catch {
+      continue;
+    }
+    const match = infos.find((s) => s.id === sessionId);
+    if (match !== undefined) {
+      try {
+        await rm(match.path, { force: true });
+      } catch (err) {
+        // ENOENT (vanished mid-flight) is fine — collapse to
+        // "deleted" since the file is now gone, which is what the
+        // caller asked for. Any other error (permissions, IO) is a
+        // real failure and should NOT silently look like
+        // "not_found" to the operator. Surface via thrown so the
+        // route can map to 500.
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") return "deleted";
+        throw err;
+      }
+      return "deleted";
+    }
+  }
+  return "not_found";
 }
 
 export function disposeSession(sessionId: string): boolean {
