@@ -609,15 +609,19 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.post<{ Body: { projectId: string; remote?: string; branch?: string } }>(
+  fastify.post<{
+    Body: { projectId: string; remote?: string; branch?: string; setUpstream?: boolean };
+  }>(
     "/git/push",
     {
       schema: {
         description:
           "Push to a remote. With no `remote`/`branch` body fields, runs " +
-          "plain `git push` against the configured upstream. Returns 400 with " +
-          "git's stderr message on failure (no upstream set, auth refused, " +
-          "rejected non-fast-forward, etc.).",
+          "plain `git push` against the configured upstream. `setUpstream: " +
+          "true` adds `--set-upstream` so the remote/branch is recorded as " +
+          "the tracking ref (required on first push of a new local branch). " +
+          "Returns 400 with git's stderr message on failure (no upstream set, " +
+          "auth refused, rejected non-fast-forward, etc.).",
         tags: ["git"],
         body: {
           type: "object",
@@ -627,6 +631,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
             projectId: { type: "string", minLength: 1 },
             remote: { type: "string", minLength: 1 },
             branch: { type: "string", minLength: 1 },
+            setUpstream: { type: "boolean" },
           },
         },
         response: {
@@ -645,9 +650,10 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
       const project = await resolveProject(req.body.projectId, reply);
       if (project === undefined) return;
       try {
-        const opts: { remote?: string; branch?: string } = {};
+        const opts: { remote?: string; branch?: string; setUpstream?: boolean } = {};
         if (req.body.remote !== undefined) opts.remote = req.body.remote;
         if (req.body.branch !== undefined) opts.branch = req.body.branch;
+        if (req.body.setUpstream !== undefined) opts.setUpstream = req.body.setUpstream;
         const { stdout } = await push(project.path, opts);
         return { output: stdout };
       } catch (err) {

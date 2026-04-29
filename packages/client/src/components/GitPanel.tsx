@@ -125,6 +125,17 @@ export function GitPanel() {
   // staged status swaps the rendered diff cleanly.
   const [openDiffs, setOpenDiffs] = useState<Record<string, string | "loading" | "error">>({});
 
+  // Push form state — has to live above the early returns to keep
+  // hook order stable. `pushRemote === undefined` means "use the
+  // configured upstream"; explicit "origin"/etc. switches to a
+  // positional `git push <remote>`. `pushBranchOverride` likewise
+  // defaults to the current branch. Both are advanced affordances —
+  // most users hit Push and never expand the form.
+  const [pushRemote, setPushRemote] = useState<string | undefined>(undefined);
+  const [pushBranchOverride, setPushBranchOverride] = useState("");
+  const [pushSetUpstream, setPushSetUpstream] = useState(false);
+  const [showPushOptions, setShowPushOptions] = useState(false);
+
   // Prune diff cache entries whose file is no longer in the latest
   // status (e.g. user ran `git checkout -- file` from the integrated
   // terminal). Without this, the diff card stayed open with stale
@@ -289,12 +300,31 @@ export function GitPanel() {
     }
   };
 
-  const pushUpstream = async (): Promise<void> => {
+  // Distinct remote names parsed out of the existing branches list:
+  // remote refs are `<remote>/<branch>` so the leading segment IS the
+  // remote name. Avoids a second route call.
+  const knownRemotes = (() => {
+    if (branches === undefined) return [] as string[];
+    const set = new Set<string>();
+    for (const b of branches) {
+      if (!b.remote) continue;
+      const slash = b.name.indexOf("/");
+      if (slash > 0) set.add(b.name.slice(0, slash));
+    }
+    return Array.from(set).sort();
+  })();
+
+  const handlePush = async (): Promise<void> => {
     setBusy(true);
     setOpError(undefined);
     setOpResult(undefined);
     try {
-      const { output } = await api.gitPush(project.id);
+      const opts: { remote?: string; branch?: string; setUpstream?: boolean } = {};
+      if (pushRemote !== undefined) opts.remote = pushRemote;
+      const overrideName = pushBranchOverride.trim();
+      if (overrideName.length > 0) opts.branch = overrideName;
+      if (pushSetUpstream) opts.setUpstream = true;
+      const { output } = await api.gitPush(project.id, opts);
       setOpResult(
         output.trim().length > 0 ? (output.trim().split("\n").pop() ?? "Pushed") : "Pushed",
       );
@@ -417,15 +447,91 @@ export function GitPanel() {
 
         {/* Push section. */}
         <div className="border-t border-neutral-800/60 px-3 py-3">
-          <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-neutral-500">
-            <Upload size={10} /> Push
+          <div className="mb-1 flex items-center justify-between gap-1 text-[10px] uppercase tracking-wider text-neutral-500">
+            <span className="flex items-center gap-1">
+              <Upload size={10} /> Push
+            </span>
+            <button
+              onClick={() => {
+                setShowPushOptions((v) => !v);
+                // Lazy-load branches (for the remote dropdown) the
+                // first time the user opens push options. Reuses the
+                // same effect that drives the Branches section, so
+                // either expansion warms the cache.
+                if (!showPushOptions && branches === undefined) {
+                  void api
+                    .gitBranches(project.id)
+                    .then((r) => setBranches(r.branches))
+                    .catch(() => undefined);
+                }
+              }}
+              className="rounded px-1 py-0.5 text-[10px] normal-case text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
+            >
+              {showPushOptions ? "Hide options" : "Options"}
+            </button>
           </div>
+          {showPushOptions && (
+            <div className="mb-2 space-y-1.5 rounded border border-neutral-800 bg-neutral-900/40 p-2">
+              <label className="flex items-center gap-2 text-[11px]">
+                <span className="w-16 shrink-0 text-neutral-400">Remote</span>
+                {knownRemotes.length > 0 ? (
+                  <select
+                    value={pushRemote ?? ""}
+                    onChange={(e) =>
+                      setPushRemote(e.target.value === "" ? undefined : e.target.value)
+                    }
+                    className="flex-1 rounded border border-neutral-700 bg-neutral-950 px-1 py-0.5 text-[11px] text-neutral-100 outline-none focus:border-neutral-500"
+                  >
+                    <option value="">configured upstream</option>
+                    {knownRemotes.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={pushRemote ?? ""}
+                    onChange={(e) =>
+                      setPushRemote(e.target.value.length === 0 ? undefined : e.target.value)
+                    }
+                    placeholder="origin"
+                    className="flex-1 rounded border border-neutral-700 bg-neutral-950 px-1 py-0.5 text-[11px] text-neutral-100 outline-none focus:border-neutral-500"
+                  />
+                )}
+              </label>
+              <label className="flex items-center gap-2 text-[11px]">
+                <span className="w-16 shrink-0 text-neutral-400">Branch</span>
+                <input
+                  type="text"
+                  value={pushBranchOverride}
+                  onChange={(e) => setPushBranchOverride(e.target.value)}
+                  placeholder={status?.branch ?? "current"}
+                  className="flex-1 rounded border border-neutral-700 bg-neutral-950 px-1 py-0.5 text-[11px] text-neutral-100 outline-none focus:border-neutral-500"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-[11px] text-neutral-300">
+                <input
+                  type="checkbox"
+                  checked={pushSetUpstream}
+                  onChange={(e) => setPushSetUpstream(e.target.checked)}
+                  className="h-3 w-3"
+                />
+                <span>Set upstream (first push of a new branch)</span>
+              </label>
+            </div>
+          )}
           <button
-            onClick={() => void pushUpstream()}
+            onClick={() => void handlePush()}
             disabled={busy}
             className="w-full rounded border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:border-neutral-500 disabled:opacity-50"
           >
-            Push to upstream
+            {pushRemote === undefined && pushBranchOverride.trim().length === 0
+              ? "Push to upstream"
+              : `Push ${pushRemote ?? "(upstream)"}${
+                  pushBranchOverride.trim().length > 0 ? ` ${pushBranchOverride.trim()}` : ""
+                }`}
           </button>
         </div>
 

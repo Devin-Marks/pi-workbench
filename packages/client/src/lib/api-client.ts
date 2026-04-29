@@ -911,10 +911,14 @@ export const api = {
       },
       { method: "POST", body: { projectId, message } },
     ),
-  gitPush: (projectId: string, opts?: { remote?: string; branch?: string }) => {
+  gitPush: (
+    projectId: string,
+    opts?: { remote?: string; branch?: string; setUpstream?: boolean },
+  ) => {
     const body: Record<string, unknown> = { projectId };
     if (opts?.remote !== undefined) body.remote = opts.remote;
     if (opts?.branch !== undefined) body.branch = opts.branch;
+    if (opts?.setUpstream !== undefined) body.setUpstream = opts.setUpstream;
     return request(
       "/api/v1/git/push",
       (v, s) => {

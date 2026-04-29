@@ -524,13 +524,37 @@ export async function deleteBranch(
 export interface PushOptions {
   remote?: string;
   branch?: string;
+  /**
+   * When true, adds `--set-upstream` so the push records the
+   * remote/branch as the tracking ref. Required on first push of a
+   * new branch — without this the user gets the default
+   * "fatal: The current branch has no upstream branch" error.
+   */
+  setUpstream?: boolean;
 }
 
 export async function push(cwd: string, opts: PushOptions = {}): Promise<{ stdout: string }> {
   const args = ["push"];
-  if (opts.remote !== undefined) args.push(opts.remote);
-  if (opts.branch !== undefined) args.push(opts.branch);
+  if (opts.setUpstream === true) args.push("--set-upstream");
+  if (opts.remote !== undefined) {
+    assertRemoteName(opts.remote);
+    args.push(opts.remote);
+  }
+  if (opts.branch !== undefined) {
+    assertBranchName(opts.branch);
+    args.push(opts.branch);
+  }
   // Push status info goes to stderr by default; we capture both.
   const { stdout, stderr } = await runGit(cwd, args);
   return { stdout: stdout.length > 0 ? stdout : stderr };
+}
+
+/**
+ * git remote names share most of git ref-name's restrictions but in
+ * practice users only ever name them `origin`, `upstream`, `fork`,
+ * etc. — short alphanumeric tokens. Same `assertBranchName` rules
+ * are conservative enough; alias it for clarity at call sites.
+ */
+function assertRemoteName(name: string): void {
+  assertBranchName(name);
 }
