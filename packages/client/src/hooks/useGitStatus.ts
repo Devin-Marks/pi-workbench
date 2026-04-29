@@ -5,11 +5,18 @@ import { useSessionStore } from "../store/session-store";
 const POLL_INTERVAL_MS = 5_000;
 
 /**
- * Polls `GET /git/status` every 5s for the given project. Pauses
- * while any active session is streaming (no point thrashing the
- * server while the agent is mid-turn — `git status` would race the
- * agent's writes anyway). Fires once after streaming flips back
- * to false (the agent_end proxy).
+ * Polls `GET /git/status` every 5s for the given project AND fires an
+ * extra refresh whenever the active session's `agentEndCount` ticks
+ * (i.e. an agent_end was just observed). The polling pauses while a
+ * session is streaming — no point thrashing the server while the
+ * agent is mid-turn since `git status` would race the agent's
+ * writes anyway. The agent_end signal then fires the moment streaming
+ * stops, so the panel updates within milliseconds instead of waiting
+ * up to 5s for the next poll.
+ *
+ * Terminal-induced changes (the user runs `git checkout -- file` in
+ * the integrated terminal) still wait for the 5s polling cycle —
+ * pushing those would require a new file-system signal we don't have.
  *
  * Returns `undefined` until the first response lands, then the
  * latest status snapshot. Errors are stored separately so a
@@ -35,6 +42,11 @@ export function useGitStatus(projectId: string | undefined): {
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const isStreaming = useSessionStore((s) =>
     activeSessionId !== undefined ? (s.streamingBySession[activeSessionId] ?? false) : false,
+  );
+  // Bumps once per agent_end on the active session — same signal
+  // App.tsx and TurnDiffPanel use to refresh after a turn finishes.
+  const agentEndCount = useSessionStore((s) =>
+    activeSessionId !== undefined ? (s.agentEndCountBySession[activeSessionId] ?? 0) : 0,
   );
 
   // Epoch bumps on every projectId transition. A refresh captures
@@ -78,6 +90,17 @@ export function useGitStatus(projectId: string | undefined): {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, isStreaming]);
+
+  // Push refresh on every agent_end. The polling effect above pauses
+  // during streaming and only fires once when isStreaming flips back
+  // — this catches the same edge but reacts to the explicit signal,
+  // closing the worst-case 5s lag right after the agent stops.
+  useEffect(() => {
+    if (projectId === undefined) return;
+    if (agentEndCount === 0) return; // initial value, no agent_end yet
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, agentEndCount]);
 
   return { status, error, refresh };
 }
