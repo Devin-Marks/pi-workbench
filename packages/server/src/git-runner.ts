@@ -533,6 +533,61 @@ export interface PushOptions {
   setUpstream?: boolean;
 }
 
+export interface FetchOptions {
+  remote?: string;
+  /** Add `--prune` so deleted upstream branches are removed locally too. */
+  prune?: boolean;
+}
+
+/**
+ * `git fetch [<remote>]` — never touches the working tree, so safe to
+ * call regardless of dirty state. Returns the captured output (mostly
+ * stderr — git's "Fetching origin\nFrom github.com:foo/bar..." text).
+ */
+export async function fetch(cwd: string, opts: FetchOptions = {}): Promise<{ stdout: string }> {
+  const args = ["fetch"];
+  if (opts.prune === true) args.push("--prune");
+  if (opts.remote !== undefined) {
+    assertRemoteName(opts.remote);
+    args.push(opts.remote);
+  }
+  const { stdout, stderr } = await runGit(cwd, args);
+  return { stdout: stdout.length > 0 ? stdout : stderr };
+}
+
+export interface PullOptions {
+  remote?: string;
+  branch?: string;
+  /**
+   * `--rebase` rebases local commits on top of the fetched ref instead
+   * of merging. Mirrors `git pull --rebase` semantics; the user can
+   * switch in the UI per-pull.
+   */
+  rebase?: boolean;
+}
+
+/**
+ * `git pull [<remote> [<branch>]]` — fetches AND merges (or rebases).
+ * Conflicts are NOT resolved by us — the underlying GitCommandError's
+ * stderr is surfaced verbatim (e.g. "CONFLICT (content): Merge
+ * conflict in foo.ts") so the user can drop to the integrated
+ * terminal to fix.
+ */
+export async function pull(cwd: string, opts: PullOptions = {}): Promise<{ stdout: string }> {
+  const args = ["pull"];
+  if (opts.rebase === true) args.push("--rebase");
+  if (opts.remote !== undefined) {
+    assertRemoteName(opts.remote);
+    args.push(opts.remote);
+  }
+  if (opts.branch !== undefined) {
+    assertBranchName(opts.branch);
+    args.push(opts.branch);
+  }
+  const { stdout, stderr } = await runGit(cwd, args);
+  return { stdout: stdout.length > 0 ? stdout : stderr };
+}
+
 export async function push(cwd: string, opts: PushOptions = {}): Promise<{ stdout: string }> {
   const args = ["push"];
   if (opts.setUpstream === true) args.push("--set-upstream");

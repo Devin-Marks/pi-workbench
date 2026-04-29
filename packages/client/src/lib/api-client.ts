@@ -911,6 +911,33 @@ export const api = {
       },
       { method: "POST", body: { projectId, message } },
     ),
+  gitFetch: (projectId: string, opts?: { remote?: string; prune?: boolean }) => {
+    const body: Record<string, unknown> = { projectId };
+    if (opts?.remote !== undefined) body.remote = opts.remote;
+    if (opts?.prune !== undefined) body.prune = opts.prune;
+    return request(
+      "/api/v1/git/fetch",
+      (v, s) => {
+        if (!isObject(v) || typeof v.output !== "string") fail(s, "expected { output }");
+        return { output: v.output };
+      },
+      { method: "POST", body },
+    );
+  },
+  gitPull: (projectId: string, opts?: { remote?: string; branch?: string; rebase?: boolean }) => {
+    const body: Record<string, unknown> = { projectId };
+    if (opts?.remote !== undefined) body.remote = opts.remote;
+    if (opts?.branch !== undefined) body.branch = opts.branch;
+    if (opts?.rebase !== undefined) body.rebase = opts.rebase;
+    return request(
+      "/api/v1/git/pull",
+      (v, s) => {
+        if (!isObject(v) || typeof v.output !== "string") fail(s, "expected { output }");
+        return { output: v.output };
+      },
+      { method: "POST", body },
+    );
+  },
   gitPush: (
     projectId: string,
     opts?: { remote?: string; branch?: string; setUpstream?: boolean },

@@ -7,6 +7,7 @@ import {
   commit,
   createBranch,
   deleteBranch,
+  fetch,
   getBranches,
   getDiff,
   getFileDiff,
@@ -14,6 +15,7 @@ import {
   getStagedDiff,
   getStatus,
   isGitRepo,
+  pull,
   push,
   revertPaths,
   stagePaths,
@@ -603,6 +605,95 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
       }
       try {
         return await commit(project.path, message);
+      } catch (err) {
+        return mapError(reply, err);
+      }
+    },
+  );
+
+  fastify.post<{ Body: { projectId: string; remote?: string; prune?: boolean } }>(
+    "/git/fetch",
+    {
+      schema: {
+        description:
+          "git fetch — never touches the working tree, safe regardless of " +
+          "dirty state. `prune: true` adds --prune so deleted upstream " +
+          "branches are removed locally. Returns the captured output.",
+        tags: ["git"],
+        body: {
+          type: "object",
+          required: ["projectId"],
+          additionalProperties: false,
+          properties: {
+            projectId: { type: "string", minLength: 1 },
+            remote: { type: "string", minLength: 1 },
+            prune: { type: "boolean" },
+          },
+        },
+        response: {
+          200: { type: "object", required: ["output"], properties: { output: { type: "string" } } },
+          400: errorSchema,
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const project = await resolveProject(req.body.projectId, reply);
+      if (project === undefined) return;
+      try {
+        const opts: { remote?: string; prune?: boolean } = {};
+        if (req.body.remote !== undefined) opts.remote = req.body.remote;
+        if (req.body.prune !== undefined) opts.prune = req.body.prune;
+        const { stdout } = await fetch(project.path, opts);
+        return { output: stdout };
+      } catch (err) {
+        return mapError(reply, err);
+      }
+    },
+  );
+
+  fastify.post<{
+    Body: { projectId: string; remote?: string; branch?: string; rebase?: boolean };
+  }>(
+    "/git/pull",
+    {
+      schema: {
+        description:
+          "git pull — fetches AND merges (or rebases with `rebase: true`). " +
+          "Conflicts are surfaced verbatim in the 400 message; the user can " +
+          "drop to the integrated terminal to resolve. No conflict-resolution " +
+          "UI in v1.",
+        tags: ["git"],
+        body: {
+          type: "object",
+          required: ["projectId"],
+          additionalProperties: false,
+          properties: {
+            projectId: { type: "string", minLength: 1 },
+            remote: { type: "string", minLength: 1 },
+            branch: { type: "string", minLength: 1 },
+            rebase: { type: "boolean" },
+          },
+        },
+        response: {
+          200: { type: "object", required: ["output"], properties: { output: { type: "string" } } },
+          400: errorSchema,
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const project = await resolveProject(req.body.projectId, reply);
+      if (project === undefined) return;
+      try {
+        const opts: { remote?: string; branch?: string; rebase?: boolean } = {};
+        if (req.body.remote !== undefined) opts.remote = req.body.remote;
+        if (req.body.branch !== undefined) opts.branch = req.body.branch;
+        if (req.body.rebase !== undefined) opts.rebase = req.body.rebase;
+        const { stdout } = await pull(project.path, opts);
+        return { output: stdout };
       } catch (err) {
         return mapError(reply, err);
       }

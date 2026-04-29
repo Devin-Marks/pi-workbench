@@ -314,6 +314,47 @@ export function GitPanel() {
     return Array.from(set).sort();
   })();
 
+  const handleFetch = async (): Promise<void> => {
+    setBusy(true);
+    setOpError(undefined);
+    setOpResult(undefined);
+    try {
+      const opts: { remote?: string } = {};
+      if (pushRemote !== undefined) opts.remote = pushRemote;
+      const { output } = await api.gitFetch(project.id, opts);
+      setOpResult(
+        output.trim().length > 0 ? (output.trim().split("\n").pop() ?? "Fetched") : "Fetched",
+      );
+    } catch (err) {
+      setOpError(err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePull = async (): Promise<void> => {
+    setBusy(true);
+    setOpError(undefined);
+    setOpResult(undefined);
+    try {
+      const opts: { remote?: string; branch?: string } = {};
+      if (pushRemote !== undefined) opts.remote = pushRemote;
+      const overrideName = pushBranchOverride.trim();
+      if (overrideName.length > 0) opts.branch = overrideName;
+      const { output } = await api.gitPull(project.id, opts);
+      setOpResult(
+        output.trim().length > 0 ? (output.trim().split("\n").pop() ?? "Pulled") : "Pulled",
+      );
+      // Pull can change the working tree; refresh status so the panel
+      // reflects the new state without waiting for the 5s poll.
+      refresh();
+    } catch (err) {
+      setOpError(err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handlePush = async (): Promise<void> => {
     setBusy(true);
     setOpError(undefined);
@@ -526,17 +567,42 @@ export function GitPanel() {
               </label>
             </div>
           )}
-          <button
-            onClick={() => void handlePush()}
-            disabled={busy}
-            className="w-full rounded border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:border-neutral-500 disabled:opacity-50"
-          >
-            {pushRemote === undefined && pushBranchOverride.trim().length === 0
-              ? "Push to upstream"
-              : `Push ${pushRemote ?? "(upstream)"}${
-                  pushBranchOverride.trim().length > 0 ? ` ${pushBranchOverride.trim()}` : ""
-                }`}
-          </button>
+          <div className="flex gap-1">
+            <button
+              onClick={() => void handleFetch()}
+              disabled={busy}
+              className="flex-1 rounded border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:border-neutral-500 disabled:opacity-50"
+              title={
+                pushRemote !== undefined
+                  ? `git fetch ${pushRemote}`
+                  : "git fetch (configured upstream)"
+              }
+            >
+              Fetch
+            </button>
+            <button
+              onClick={() => void handlePull()}
+              disabled={busy}
+              className="flex-1 rounded border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:border-neutral-500 disabled:opacity-50"
+              title="git pull — conflicts surface in the error banner; resolve via the integrated terminal"
+            >
+              Pull
+            </button>
+            <button
+              onClick={() => void handlePush()}
+              disabled={busy}
+              className="flex-1 rounded border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:border-neutral-500 disabled:opacity-50"
+              title={
+                pushRemote === undefined && pushBranchOverride.trim().length === 0
+                  ? "git push (configured upstream)"
+                  : `git push ${pushRemote ?? "(upstream)"}${
+                      pushBranchOverride.trim().length > 0 ? ` ${pushBranchOverride.trim()}` : ""
+                    }`
+              }
+            >
+              Push
+            </button>
+          </div>
         </div>
 
         {/* Log section. */}
