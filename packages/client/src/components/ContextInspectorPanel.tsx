@@ -156,7 +156,10 @@ function TokenSummary({
   // sum (which inflates with cache reads + every prior turn). When
   // the SDK doesn't have a fresh number (right after compaction),
   // we use the per-message breakdown total below as the estimate.
-  const breakdown = useMemo(() => categorizeContext(data.messages), [data.messages]);
+  const breakdown = useMemo(
+    () => categorizeContext(data.messages, cu.tokens),
+    [data.messages, cu.tokens],
+  );
   const usageTokens = cu.tokens ?? breakdown.total;
   const usagePct = cu.contextWindow > 0 ? Math.min(1, usageTokens / cu.contextWindow) : 0;
   const usageLabel = cu.tokens === undefined ? "estimate" : "current";
@@ -189,32 +192,30 @@ function TokenSummary({
           best-effort and may differ from the provider's true count. */}
       <ContextBreakdown breakdown={breakdown} contextWindow={cu.contextWindow} />
 
-      {/* Last turn + total cost. The earlier "lifetime input/output/
-          cacheRead/cacheWrite" grid was confusing because per-turn
-          input includes the entire re-sent context (LLMs are
-          stateless — every turn re-sends prior history). For a
-          5-turn session at 4.8k context, lifetime input compounds
-          to ~15-40k+ depending on caching, which read as a
-          contradiction next to "context window: 4.8k." We dropped
-          the grid; the per-turn table below has the same data with
-          the right per-row context. The two numbers worth showing
-          at a glance are: how big was the LAST turn (per-turn cost
-          intuition) and how much have we spent total. */}
+      {/* Last-turn line + cumulative cost. The earlier per-turn
+          format showed `<in> in · <out> out · <cache> cache` but
+          `usage.input` per turn IS the entire re-sent prior context
+          (LLMs are stateless), so the "in" number was indistinguishable
+          from "context size at that point" — meaningless as a per-turn
+          signal. Output + cost are the only genuinely per-turn numbers:
+          output is the fresh content the assistant produced, cost is
+          normalised across all the input/cache complexity. */}
       <div className="border-t border-neutral-800 pt-1.5">
-        {data.turns.length > 0 && (
-          <div className="mb-0.5 flex items-center justify-between text-[11px]">
-            <span className="text-neutral-500">Last turn</span>
-            <span
-              className="font-mono text-neutral-300"
-              title="Tokens consumed by the most recent assistant turn (in / out / cache-read)"
-            >
-              {(() => {
-                const last = data.turns[data.turns.length - 1]!;
-                return `${formatTokens(last.inputTokens)} in · ${formatTokens(last.outputTokens)} out · ${formatTokens(last.cacheReadTokens)} cache`;
-              })()}
-            </span>
-          </div>
-        )}
+        {data.turns.length > 0 &&
+          (() => {
+            const last = data.turns[data.turns.length - 1]!;
+            return (
+              <div className="mb-0.5 flex items-center justify-between text-[11px]">
+                <span className="text-neutral-500">Last turn</span>
+                <span
+                  className="font-mono text-neutral-300"
+                  title="Output tokens + cost from the most recent assistant turn. Input/cache numbers are dropped because they reflect the full re-sent context, not new work."
+                >
+                  {formatTokens(last.outputTokens)} tok · {formatUsd(last.cost)}
+                </span>
+              </div>
+            );
+          })()}
         <div className="flex items-center justify-between text-[11px] font-medium">
           <span className="text-neutral-300">Total cost</span>
           <span className="font-mono text-emerald-400">{formatUsd(data.totalCost)}</span>
@@ -241,6 +242,7 @@ function TokenSummary({
 /* ------------------------- context category breakdown ------------------------- */
 
 interface ContextBreakdownData {
+  systemAndTools: number;
   userPrompts: number;
   assistantText: number;
   thinking: number;
@@ -255,6 +257,10 @@ const BREAKDOWN_PALETTE: {
   label: string;
   color: string;
 }[] = [
+  // System prompt + tool schemas come first because they're the
+  // fixed cost of every turn — useful to see at a glance how much
+  // budget is "spent" before any user content.
+  { key: "systemAndTools", label: "System + tools", color: "#64748b" },
   { key: "userPrompts", label: "User prompts", color: "#0ea5e9" },
   { key: "assistantText", label: "Assistant text", color: "#a78bfa" },
   { key: "thinking", label: "Thinking", color: "#71717a" },
@@ -332,12 +338,23 @@ function ContextBreakdown({
  * This breakdown answers "where did the tokens go?", which is a
  * relative question that survives the heuristic.
  *
+ * `actualTotalTokens` (when known via the SDK's getContextUsage)
+ * lets us derive the system-prompt + tool-schema residual: the
+ * actual context contains all the message-array content PLUS the
+ * system instructions PLUS each tool's JSON schema, none of which
+ * appear in `session.messages`. Without the residual the breakdown
+ * sums to less than the bar, hiding what's often the biggest line
+ * item (pi's system prompt + tool defs are several thousand tokens).
+ *
  * Image content is counted as a per-attachment placeholder rather
  * than being measured byte-wise — provider image tokens scale with
  * resolution, not file size. (See Ctx3 in DEFERRED.md for the
  * proper fix.)
  */
-function categorizeContext(messages: Array<Record<string, unknown>>): ContextBreakdownData {
+function categorizeContext(
+  messages: Array<Record<string, unknown>>,
+  actualTotalTokens?: number,
+): ContextBreakdownData {
   let userChars = 0;
   let asstTextChars = 0;
   let thinkingChars = 0;
@@ -402,18 +419,39 @@ function categorizeContext(messages: Array<Record<string, unknown>>): ContextBre
   const toolCalls = tokens(toolCallChars);
   const toolResults = tokens(toolResultChars);
   const images = imageCount * 1500;
+  const messageTotal = userPrompts + assistantText + thinking + toolCalls + toolResults + images;
+  // System + tools = whatever the SDK reports as the actual context
+  // total minus what we accounted for in the message array. Falls
+  // back to 0 if the SDK didn't report (e.g. right after compaction)
+  // — better to under-show than to fabricate a number.
+  const systemAndTools =
+    actualTotalTokens !== undefined && actualTotalTokens > messageTotal
+      ? actualTotalTokens - messageTotal
+      : 0;
   return {
+    systemAndTools,
     userPrompts,
     assistantText,
     thinking,
     toolCalls,
     toolResults,
     images,
-    total: userPrompts + assistantText + thinking + toolCalls + toolResults + images,
+    total: messageTotal + systemAndTools,
   };
 }
 
 function TurnsTable({ turns }: { turns: ContextTurn[] }) {
+  // Per-turn columns deliberately exclude input + cacheRead +
+  // cacheWrite. `usage.input` per turn is the FULL re-sent prompt
+  // (LLMs are stateless; every turn ships the entire prior
+  // conversation), so it grows turn-over-turn just because the
+  // session accumulated — useful for the bill, useless as a
+  // per-turn signal of "what happened this turn." Output + cost
+  // are the genuinely-per-turn numbers: output is the assistant's
+  // fresh contribution, cost is normalised across all the
+  // input/cache complexity. Raw view (Code2 button on each
+  // message) shows the full Usage object for anyone debugging
+  // caching behavior.
   return (
     <div className="mt-1 overflow-x-auto">
       <table className="w-full font-mono text-[10px]">
@@ -421,13 +459,11 @@ function TurnsTable({ turns }: { turns: ContextTurn[] }) {
           <tr>
             <th className="pr-2 text-left font-normal">#</th>
             <th className="pr-2 text-left font-normal">Model</th>
-            <th className="pr-2 text-right font-normal">In</th>
-            <th className="pr-2 text-right font-normal">Out</th>
-            <th className="pr-2 text-right font-normal" title="Cache read">
-              CR
-            </th>
-            <th className="pr-2 text-right font-normal" title="Cache write">
-              CW
+            <th
+              className="pr-2 text-right font-normal"
+              title="Output tokens — the new content this turn"
+            >
+              Out
             </th>
             <th className="text-right font-normal">Cost</th>
           </tr>
@@ -436,13 +472,10 @@ function TurnsTable({ turns }: { turns: ContextTurn[] }) {
           {turns.map((t, i) => (
             <tr key={`${t.index}-${t.timestamp}`} className="border-t border-neutral-800/60">
               <td className="pr-2 text-neutral-600">{i + 1}</td>
-              <td className="max-w-[120px] truncate pr-2" title={`${t.provider}/${t.model}`}>
+              <td className="max-w-[160px] truncate pr-2" title={`${t.provider}/${t.model}`}>
                 {t.model}
               </td>
-              <td className="pr-2 text-right">{formatTokens(t.inputTokens)}</td>
               <td className="pr-2 text-right">{formatTokens(t.outputTokens)}</td>
-              <td className="pr-2 text-right">{formatTokens(t.cacheReadTokens)}</td>
-              <td className="pr-2 text-right">{formatTokens(t.cacheWriteTokens)}</td>
               <td className="text-right text-emerald-400">{formatUsd(t.cost)}</td>
             </tr>
           ))}
