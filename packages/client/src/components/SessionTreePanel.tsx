@@ -368,12 +368,7 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
               tree={tree}
               disabled={busy}
               onNavigate={(id) => navigate(id)}
-              onForkUser={(userMsgId, parentId, draft) =>
-                void fork(userMsgId, {
-                  ...(parentId !== null ? { parentId } : {}),
-                  editDraft: draft,
-                })
-              }
+              onForkAfterTurn={(lastEntryId) => void fork(lastEntryId)}
             />
           ) : null}
         </div>
@@ -850,7 +845,10 @@ interface TurnNode {
   parentId: string | null;
   /** Branch column index (0 = original conversation, +1 per divergence). */
   col: number;
-  /** Row index within this turn's column. */
+  /** Row index — chain-depth from root in the turn graph. Sibling
+   *  branches at the same depth share a row, which lets the layout
+   *  read as "depth = down, branch = right" instead of jittering on
+   *  global chronological sort. */
   row: number;
   isOnActivePath: boolean;
   isLeafTurn: boolean;
@@ -864,10 +862,18 @@ interface TurnNode {
   preview: string;
   /** Non-anchor entries inside this turn — counts per category. */
   insideCounts: { assistant: number; tool: number; thinking: number; meta: number };
-  /** True when the anchor is a user message (eligible for fork-edit). */
+  /** True when the anchor is a user message (eligible for fork). */
   isUserAnchor: boolean;
-  /** Anchor's parentId, used for the fork-from-parent edit flow. */
+  /** Anchor's parentId. */
   anchorParentId: string | null;
+  /**
+   * Last entry id within this turn (chronologically). The graph view's
+   * fork branches AT this id so the new session INCLUDES the turn's
+   * full output (user msg + assistant + tool results) — distinct
+   * semantic from the list view's edit-and-resubmit which forks at
+   * the user message's parent.
+   */
+  lastEntryId: string;
   /** ISO timestamp of the anchor. */
   timestamp: string;
 }
@@ -955,16 +961,25 @@ function buildTurns(tree: SessionTreeResponse): TurnNode[] {
       insideCounts: { assistant: 0, tool: 0, thinking: 0, meta: 0 },
       isUserAnchor: isUser,
       anchorParentId: e.parentId,
+      lastEntryId: e.id, // updated below as we tally non-anchor entries
       timestamp: e.timestamp,
     });
   }
 
   // Third pass: tally non-anchor entries into their turn's insideCounts.
+  // Also track the latest (max-timestamp) entry id per turn so the
+  // graph fork can branch AT it (= include the turn's full output).
   for (const e of tree.entries) {
     const owner = owningTurn.get(e.id)!;
-    if (owner === e.id) continue; // anchor itself
     const turn = turnsByAnchor.get(owner);
     if (turn === undefined) continue;
+    // Update lastEntryId across all entries (including the anchor),
+    // by timestamp comparison.
+    const currentLast = byId.get(turn.lastEntryId);
+    if (currentLast === undefined || e.timestamp.localeCompare(currentLast.timestamp) > 0) {
+      turn.lastEntryId = e.id;
+    }
+    if (owner === e.id) continue; // anchor itself — no inside-count tally
     if (e.type === "message" && e.role === "assistant") {
       turn.insideCounts.assistant += 1;
     } else if (e.type === "message" && (e.role === "tool" || e.role === "toolResult")) {
@@ -1049,31 +1064,59 @@ function buildTurns(tree: SessionTreeResponse): TurnNode[] {
     visit(root.id, root.col);
   });
 
-  // Row assignment: chronological global order. Walk turns in
-  // timestamp order and stack each one in its column. Within a
-  // column, this is just sequential. Across columns, branched
-  // turns can share a row if they'd otherwise collide — but
-  // simplest readable layout is "row = global chronological
-  // index", which gives each turn a unique y.
-  const sorted = [...turnsByAnchor.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  sorted.forEach((t, i) => {
-    t.row = i;
-  });
+  // Row assignment: chain-depth from root in the turn graph.
+  // Sibling branches at the same depth share a row, which gives the
+  // graph a structured "depth = down, branch = right" reading
+  // instead of jittering on global chronological sort. Multiple
+  // turns CAN share a row (different columns), and that's fine —
+  // it's how git log graphs convey "these happened at the same
+  // structural depth on different branches."
+  const computeDepth = (turn: TurnNode, memo: Map<string, number>): number => {
+    const cached = memo.get(turn.id);
+    if (cached !== undefined) return cached;
+    if (turn.parentId === null) {
+      memo.set(turn.id, 0);
+      return 0;
+    }
+    const parent = turnsByAnchor.get(turn.parentId);
+    if (parent === undefined) {
+      memo.set(turn.id, 0);
+      return 0;
+    }
+    const d = computeDepth(parent, memo) + 1;
+    memo.set(turn.id, d);
+    return d;
+  };
+  const depthMemo = new Map<string, number>();
+  for (const t of turnsByAnchor.values()) {
+    t.row = computeDepth(t, depthMemo);
+  }
 
-  return sorted;
+  // Sort the returned array by (row, col) so the renderer paints
+  // top-to-bottom, left-to-right. Stable for a deterministic DOM
+  // order regardless of insertion order.
+  return [...turnsByAnchor.values()].sort((a, b) =>
+    a.row !== b.row ? a.row - b.row : a.col - b.col,
+  );
 }
 
 function SessionTreeGraph({
   tree,
   disabled,
   onNavigate,
-  onForkUser,
+  onForkAfterTurn,
 }: {
   tree: SessionTreeResponse;
   disabled: boolean;
   onNavigate: (entryId: string) => void;
-  /** Called from the fork icon on user-anchor turn nodes. */
-  onForkUser: (userMsgId: string, parentId: string | null, draft: string) => void;
+  /**
+   * Graph-view fork. Branches AT the turn's last entry id so the
+   * new session INCLUDES the full turn (user message + assistant
+   * output + tool results). Distinct from the list view's fork
+   * which branches at the user message's parent for an
+   * edit-and-resubmit flow.
+   */
+  onForkAfterTurn: (lastEntryId: string) => void;
 }) {
   const turns = useMemo(() => buildTurns(tree), [tree]);
   const layout = useMemo(() => {
@@ -1097,10 +1140,12 @@ function SessionTreeGraph({
   const turnsById = new Map(turns.map((t) => [t.id, t]));
   return (
     <div className="relative" style={{ width: `${layout.width}px`, height: `${layout.height}px` }}>
-      {/* Edges: drawn first so nodes paint on top. Bezier curve from
-          parent's bottom-center to child's top-center; subtle gray
-          for active-path edges, dimmer for off-path. Branch divergence
-          shows up as the curve sweeping sideways. */}
+      {/* Edges: orthogonal routing with rounded corners. Same-column
+          edges are a straight vertical line; cross-column edges
+          drop from the parent's column to a midpoint, jog
+          horizontally to the child's column, then drop to the
+          child's top. Reads like a git log graph. Active-path
+          edges are bright neutral-400; off-path edges dim. */}
       <svg
         aria-hidden="true"
         className="pointer-events-none absolute left-0 top-0"
@@ -1115,11 +1160,36 @@ function SessionTreeGraph({
           const py = yOf(parent.row) + NODE_HEIGHT;
           const cx = xOf(t.col) + NODE_WIDTH / 2;
           const cy = yOf(t.row);
-          // Vertical control points for a clean S-curve when columns
-          // differ; straight line when same column.
-          const dy = (cy - py) * 0.5;
-          const d = `M ${px} ${py} C ${px} ${py + dy}, ${cx} ${cy - dy}, ${cx} ${cy}`;
           const onActive = t.isOnActivePath && parent.isOnActivePath;
+          // Same column → straight vertical. Cross column →
+          // L-shape with rounded corner at the bend, drawn via
+          // a quadratic curve segment. Bend happens halfway down
+          // the gap between the two rows so multiple branches
+          // diverging from the same parent don't overlap their
+          // horizontal segments.
+          const d =
+            px === cx
+              ? `M ${px} ${py} L ${cx} ${cy}`
+              : (() => {
+                  const bendY = py + (cy - py) / 2;
+                  const r = 8; // corner radius
+                  const goingRight = cx > px;
+                  const cornerInX = goingRight ? px + r : px - r;
+                  const cornerOutX = goingRight ? cx - r : cx + r;
+                  return [
+                    `M ${px} ${py}`,
+                    // Down to just before the bend
+                    `L ${px} ${bendY - r}`,
+                    // Round corner from vertical to horizontal
+                    `Q ${px} ${bendY} ${cornerInX} ${bendY}`,
+                    // Horizontal across to just before the second corner
+                    `L ${cornerOutX} ${bendY}`,
+                    // Round corner from horizontal back to vertical
+                    `Q ${cx} ${bendY} ${cx} ${bendY + r}`,
+                    // Down to the child's top
+                    `L ${cx} ${cy}`,
+                  ].join(" ");
+                })();
           return (
             <path
               key={t.id}
@@ -1141,14 +1211,7 @@ function SessionTreeGraph({
           y={yOf(t.row)}
           disabled={disabled}
           onNavigate={() => onNavigate(t.id)}
-          onForkUser={() => {
-            // For user-anchor turns, fork from the user message's
-            // parent so the user message itself is excluded — same
-            // edit-and-resubmit semantics the list view uses.
-            if (t.isUserAnchor) {
-              onForkUser(t.id, t.anchorParentId, t.preview);
-            }
-          }}
+          onForkAfterTurn={() => onForkAfterTurn(t.lastEntryId)}
         />
       ))}
     </div>
@@ -1161,14 +1224,14 @@ function GraphNode({
   y,
   disabled,
   onNavigate,
-  onForkUser,
+  onForkAfterTurn,
 }: {
   turn: TurnNode;
   x: number;
   y: number;
   disabled: boolean;
   onNavigate: () => void;
-  onForkUser: () => void;
+  onForkAfterTurn: () => void;
 }) {
   const dim = !turn.isOnActivePath;
   const borderClass = turn.isLeafTurn
@@ -1221,19 +1284,25 @@ function GraphNode({
               ⑂ {turn.childCount}
             </span>
           )}
-          {turn.isUserAnchor && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onForkUser();
-              }}
-              disabled={disabled}
-              className="ml-auto rounded p-0.5 text-neutral-500 hover:bg-neutral-800 hover:text-emerald-300 disabled:opacity-40"
-              title="Fork BEFORE this user message — opens a new session with the message text loaded for editing."
-            >
-              <GitBranch size={11} />
-            </button>
-          )}
+          {/* Graph-view fork: branches AT the turn's last entry so
+              the new session INCLUDES the full turn (user message +
+              assistant output + tool results). The user lands on
+              that branch with the next turn ready to type, NOT in
+              the middle of an unsent draft like the list view's
+              fork. Available on every turn, not just user-anchored
+              ones, since "branch from after this point" is the
+              graph's mental model. */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onForkAfterTurn();
+            }}
+            disabled={disabled}
+            className="ml-auto rounded p-0.5 text-neutral-500 hover:bg-neutral-800 hover:text-emerald-300 disabled:opacity-40"
+            title="Fork AFTER this turn — opens a new session that includes this turn's full output, ready for the next prompt."
+          >
+            <GitBranch size={11} />
+          </button>
         </div>
         <p className="line-clamp-2 flex-1 text-[11px] text-neutral-200">
           {turn.preview.length > 0 ? turn.preview : <em className="text-neutral-500">(no text)</em>}
