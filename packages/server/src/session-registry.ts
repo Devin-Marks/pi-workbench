@@ -390,9 +390,23 @@ export async function deleteColdSession(
   return "not_found";
 }
 
-export function disposeSession(sessionId: string): boolean {
+export async function disposeSession(sessionId: string): Promise<boolean> {
   const live = registry.get(sessionId);
   if (live === undefined) return false;
+  // Abort any in-flight prompt FIRST so the SDK's LLM call can stop
+  // cleanly before we tear down. Without this, a prompt that was
+  // mid-LLM-call when the session is deleted continues server-side
+  // (still racking up tokens) and the eventual response either drops
+  // silently or throws inside the SDK trying to write to the
+  // disposed SessionManager. Best-effort: if abort itself rejects,
+  // log and fall through to dispose.
+  try {
+    await live.session.abort();
+  } catch (err) {
+    // SDK doesn't currently throw from abort, but defend against
+    // future versions. The dispose path below still runs.
+    void err;
+  }
   // Always delete from the registry regardless of whether teardown throws,
   // so a misbehaving SDK update can't leak entries.
   try {
@@ -559,7 +573,19 @@ export async function findSessionLocation(
     let infos: SessionInfo[];
     try {
       infos = await SessionManager.list(project.path, dir);
-    } catch {
+    } catch (err) {
+      // Don't fail the whole search just because one project's session
+      // dir is corrupted, but DO log so the operator can see when a
+      // project's storage went bad — the previous silent skip meant
+      // a permissions/JSONL issue could persist undetected.
+      process.stderr.write(
+        JSON.stringify({
+          level: "warn",
+          msg: "findSessionLocation: skipping project due to SessionManager.list error",
+          projectId: project.id,
+          err: err instanceof Error ? err.message : String(err),
+        }) + "\n",
+      );
       continue;
     }
     if (infos.some((s) => s.id === sessionId)) {
@@ -691,9 +717,21 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
       // Log but don't fail the fork — the new session is fine.
       // The source is corrupted in memory; surface as a server log
       // so it shows up in diagnostics.
-      console.error(
-        `[forkSession] failed to restore source session ${sessionId} from ${originalSourceFile}:`,
-        err,
+      //
+      // Using a structured object on stderr (rather than the prior
+      // bare console.error template string) so log shippers parse
+      // it as a single JSON-shaped event instead of a 2-line garbled
+      // log entry. We don't have access to a fastify request logger
+      // here (forkSession is a registry-level helper), so this is
+      // the best stand-in.
+      process.stderr.write(
+        JSON.stringify({
+          level: "error",
+          msg: "forkSession: failed to restore source session",
+          sessionId,
+          originalSourceFile,
+          err: err instanceof Error ? err.message : String(err),
+        }) + "\n",
       );
     }
   }
@@ -707,8 +745,12 @@ export function sessionCount(): number {
 }
 
 /** Test/teardown helper — disposes every live session. */
-export function disposeAllSessions(): void {
-  for (const id of Array.from(registry.keys())) {
-    disposeSession(id);
-  }
+export async function disposeAllSessions(): Promise<void> {
+  await Promise.all(
+    Array.from(registry.keys()).map((id) =>
+      disposeSession(id).catch(() => {
+        // best-effort during shutdown; never fail the teardown loop
+      }),
+    ),
+  );
 }

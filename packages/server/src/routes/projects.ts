@@ -179,7 +179,10 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
     async (req, reply) => {
       try {
         const cascade = req.query.cascade === "1" || req.query.cascade === "true";
-        const result = await deleteProject(req.params.id, { cascadeSessionDir: cascade });
+        const result = await deleteProject(req.params.id, {
+          cascadeSessionDir: cascade,
+          logWarn: (obj, msg) => req.log.warn(obj, msg),
+        });
         return reply.code(200).send(result);
       } catch (err) {
         return handleError(reply, err);

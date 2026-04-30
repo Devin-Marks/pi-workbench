@@ -164,19 +164,27 @@ async function runGit(cwd: string, args: string[]): Promise<RunResult> {
     };
     if (e.code === "ENOENT") throw new GitNotInstalledError();
     const stderr = (e.stderr ?? "").toString();
-    const userMessage = sanitizeStderr(stderr);
+    const userMessage = sanitizeStderr(stderr, cwd);
     const exitCode = typeof e.code === "number" ? e.code : null;
     throw new GitCommandError(exitCode, userMessage, stderr || (e.message ?? "git failed"));
   }
 }
 
 /**
- * Trim git's stderr to a one-line user-visible message. Drops paths
- * that look like they include the workspace root (would leak
- * filesystem layout) and clamps to 200 chars.
+ * Trim git's stderr to a one-line user-visible message. Strips the
+ * project root path (would otherwise leak filesystem layout — `git
+ * push` failing with "fatal: unable to access '/Users/.../foo/.git/'"
+ * would echo the host path back to the browser). Also drops the
+ * common "fatal: "/"error: "/"warning: " prefix and clamps to 200
+ * chars. Single-tenant doesn't make this a security issue per se,
+ * but the previous comment claimed scrubbing happened when it didn't
+ * — bringing the implementation in line with the documented behavior.
  */
-function sanitizeStderr(stderr: string): string {
-  const firstLine = stderr.split("\n").find((l) => l.trim().length > 0) ?? "git error";
+function sanitizeStderr(stderr: string, cwd?: string): string {
+  let firstLine = stderr.split("\n").find((l) => l.trim().length > 0) ?? "git error";
+  if (cwd !== undefined && cwd.length > 0) {
+    firstLine = firstLine.split(cwd).join("<project>");
+  }
   // Drop common "fatal: " / "error: " prefixes that confuse users.
   const stripped = firstLine.replace(/^(fatal|error|warning):\s*/i, "");
   return stripped.length > 200 ? stripped.slice(0, 197) + "…" : stripped;

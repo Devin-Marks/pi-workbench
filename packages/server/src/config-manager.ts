@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { AuthStorage, ModelRegistry, type Skill, loadSkills } from "@mariozechner/pi-coding-agent";
@@ -84,7 +84,15 @@ async function atomicWriteJson(path: string, data: unknown): Promise<void> {
   await ensureConfigDir();
   const tmp = `${path}.${randomUUID()}.tmp`;
   await writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
-  await rename(tmp, path);
+  try {
+    await rename(tmp, path);
+  } catch (err) {
+    // Cross-fs rename, perms, source vanished — clean up the leftover
+    // tmp file before rethrowing. Without this, repeated failures would
+    // leave `<path>.<uuid>.tmp` files accumulating in the config dir.
+    await unlink(tmp).catch(() => undefined);
+    throw err;
+  }
 }
 
 async function readJsonOr<T>(path: string, fallback: T): Promise<T> {

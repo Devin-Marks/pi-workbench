@@ -265,13 +265,30 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
       socket.on("message", (raw: WebSocket.RawData) => {
         const msg = parseClientMessage(raw);
         if (msg === undefined) return;
+        // Both write() and resize() can throw synchronously if the
+        // underlying PTY died (user `exit`, kill -9, idle reaper)
+        // between attach and this message. Without the try/catch the
+        // throw bubbles up as an unhandled-rejection-style WS error
+        // with no diagnostic for the operator. Close the socket with
+        // a distinct code so the client surfaces "terminal died"
+        // rather than reconnecting indefinitely.
         if (msg.type === "input") {
-          managed.process.write(msg.data);
+          try {
+            managed.process.write(msg.data);
+          } catch (err) {
+            log.warn({ err, ptyId: managed.ptyId }, "pty write failed; closing socket");
+            if (socket.readyState === socket.OPEN) {
+              socket.close(CLOSE_INTERNAL_ERROR, "pty_dead");
+            }
+          }
         } else {
           try {
             managed.process.resize(msg.cols, msg.rows);
           } catch (err) {
             log.warn({ err }, "pty resize failed");
+            if (socket.readyState === socket.OPEN) {
+              socket.close(CLOSE_INTERNAL_ERROR, "pty_dead");
+            }
           }
         }
       });

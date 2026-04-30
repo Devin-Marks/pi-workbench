@@ -6,9 +6,50 @@ import {
   getSession,
   SessionNotFoundError,
 } from "../session-registry.js";
-import { readSettings, withSettingsLock, writeSettings } from "../config-manager.js";
+import {
+  liveProvidersListing,
+  readSettings,
+  withSettingsLock,
+  writeSettings,
+} from "../config-manager.js";
 import { config } from "../config.js";
 import { errorSchema, liveSummaryBody, liveSummarySchema } from "./_schemas.js";
+
+/**
+ * Wrap a Promise in a timeout. The SDK's compact / navigateTree calls
+ * await an LLM round-trip; without a timeout, a hung provider holds
+ * the HTTP request open indefinitely with no client cancellation path
+ * (the chat input shows "Compacting…" forever). We surface 504 on
+ * timeout so the client can recover by reload.
+ *
+ * Note: this does NOT abort the underlying SDK call — that needs an
+ * AbortSignal threaded through, which the current SDK API doesn't
+ * fully expose. The in-flight LLM call will eventually resolve or
+ * reject server-side; the route just returns to the client first.
+ */
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new TimeoutError(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+class TimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+
+const COMPACT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const NAVIGATE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes (with summarize)
 
 function notFound(reply: FastifyReply): FastifyReply {
   return reply.code(404).send({ error: "session_not_found" });
@@ -267,12 +308,20 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
         opts.customInstructions = req.body.customInstructions;
       if (req.body.label !== undefined) opts.label = req.body.label;
       try {
-        const result = await live.session.navigateTree(req.body.entryId, opts);
+        const result = await withTimeout(
+          live.session.navigateTree(req.body.entryId, opts),
+          NAVIGATE_TIMEOUT_MS,
+          "navigateTree",
+        );
         const out: Record<string, unknown> = { cancelled: result.cancelled };
         if (result.aborted !== undefined) out.aborted = result.aborted;
         if (result.editorText !== undefined) out.editorText = result.editorText;
         return out;
       } catch (err) {
+        if (err instanceof TimeoutError) {
+          req.log.warn({ err, sessionId: req.params.id }, "navigateTree timed out");
+          return reply.code(504).send({ error: "navigate_timeout", message: err.message });
+        }
         return mapSdkError(reply, err);
       }
     },
@@ -322,9 +371,29 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
       const live = getSession(req.params.id);
       if (live === undefined) return notFound(reply);
       try {
-        const result = await live.session.compact(req.body.customInstructions);
-        return result as unknown as Record<string, unknown>;
+        const result = await withTimeout(
+          live.session.compact(req.body.customInstructions),
+          COMPACT_TIMEOUT_MS,
+          "compact",
+        );
+        // Build the response shape explicitly (rather than the prior
+        // `result as unknown as Record<string, unknown>` cast). If the
+        // SDK adds new fields to its compact result, Fastify's
+        // serializer would otherwise strip them silently — and an
+        // undefined `summary` would surface as the string "undefined"
+        // in the chat banner. Defaulting + explicit cast keeps the
+        // wire shape stable and the response-schema validation honest.
+        const r = result as { summary?: unknown; tokensBefore?: unknown; tokensAfter?: unknown };
+        return {
+          summary: typeof r.summary === "string" ? r.summary : "",
+          tokensBefore: typeof r.tokensBefore === "number" ? r.tokensBefore : 0,
+          tokensAfter: typeof r.tokensAfter === "number" ? r.tokensAfter : 0,
+        };
       } catch (err) {
+        if (err instanceof TimeoutError) {
+          req.log.warn({ err, sessionId: req.params.id }, "compact timed out");
+          return reply.code(504).send({ error: "compact_timeout", message: err.message });
+        }
         return mapSdkError(reply, err);
       }
     },
@@ -376,6 +445,16 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
       // is the contract from pi-ai/dist/models.js. Without an explicit
       // undefined check, setModel(undefined) crashes with a TypeError that
       // leaks Node-internal detail.
+      //
+      // Two-stage lookup so a typo in the provider name produces a
+      // different diagnostic from a typo in the model id. Without
+      // this, both cases collapsed to `unknown_model` and the user
+      // had no hint which side was wrong.
+      const providers = liveProvidersListing().providers;
+      const providerEntry = providers.find((p) => p.provider === req.body.provider);
+      if (providerEntry === undefined) {
+        return reply.code(400).send({ error: "unknown_provider" });
+      }
       const dyn = getModel as unknown as (provider: string, modelId: string) => unknown;
       const model = dyn(req.body.provider, req.body.modelId);
       if (model === undefined) {

@@ -695,7 +695,7 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (req, reply) => {
       const hard = req.query.hard === "1" || req.query.hard === "true";
-      const wasLive = disposeSession(req.params.id);
+      const wasLive = await disposeSession(req.params.id);
       if (wasLive && !hard) return reply.code(204).send();
       if (!wasLive && !hard) {
         // Cold session, no destructive intent — 404. The user/client
@@ -725,7 +725,7 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
         // very rare — disposeSession sets a 1.5s no-revive window
         // that resumeSession enforces. The retry stays as defense
         // in depth for any non-SSE revival path.)
-        const live2 = disposeSession(req.params.id);
+        const live2 = await disposeSession(req.params.id);
         if (live2) {
           try {
             const r2 = await deleteColdSession(req.params.id);

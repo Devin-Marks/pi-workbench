@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
@@ -211,7 +211,15 @@ async function writeProjects(projects: Project[]): Promise<void> {
   const target = PROJECTS_FILE();
   const tmp = `${target}.${randomUUID()}.tmp`;
   await writeFile(tmp, JSON.stringify(projects, null, 2), "utf8");
-  await rename(tmp, target);
+  try {
+    await rename(tmp, target);
+  } catch (err) {
+    // See atomicWriteJson in config-manager.ts: same tmp-file leak
+    // cleanup. Without this, a rename failure (cross-fs, perms,
+    // target locked on Windows) leaves the .tmp orphan.
+    await unlink(tmp).catch(() => undefined);
+    throw err;
+  }
 }
 
 export async function createProject(name: string, path: string): Promise<Project> {
@@ -262,10 +270,20 @@ export async function renameProject(id: string, name: string): Promise<Project> 
   });
 }
 
+/**
+ * Caller-supplied warn channel. Routes pass `req.log.warn.bind(req.log)`
+ * so cascade-rm warnings flow through pino's structured JSON instead of
+ * the bare `console.warn` that would otherwise interleave with
+ * structured logs and break log parsers (Loki, Datadog).
+ */
+type WarnFn = (obj: object, msg: string) => void;
+const noopWarn: WarnFn = () => undefined;
+
 export async function deleteProject(
   id: string,
-  opts: { cascadeSessionDir?: boolean } = {},
+  opts: { cascadeSessionDir?: boolean; logWarn?: WarnFn } = {},
 ): Promise<{ cascaded: boolean }> {
+  const warn = opts.logWarn ?? noopWarn;
   let cascaded = false;
   await withProjectsLock(async () => {
     const projects = await readProjects();
@@ -290,7 +308,7 @@ export async function deleteProject(
       // Should be unreachable — the project record we just deleted
       // had this id, so it passed creation-time validation. Log and
       // skip the cascade rather than rm something dangerous.
-      console.warn(`[project-manager] refusing cascade rm for non-UUID id ${JSON.stringify(id)}`);
+      warn({ id }, "refusing cascade rm for non-UUID id");
       return { cascaded };
     }
     const dir = join(config.sessionDir, id);
@@ -302,7 +320,7 @@ export async function deleteProject(
       // project record is gone, the session files are just orphaned
       // (the same state that exists when cascade isn't requested).
       // But DO log so a permissions issue isn't silently invisible.
-      console.warn(`[project-manager] cascade rm failed for ${dir}:`, err);
+      warn({ err, dir }, "cascade rm failed");
     }
   }
   return { cascaded };

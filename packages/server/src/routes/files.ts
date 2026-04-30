@@ -137,6 +137,24 @@ function mapError(reply: FastifyReply, err: unknown): FastifyReply {
       message: `expected sha256 ${err.expected}, computed ${err.actual}`,
     });
   }
+  // Raw NodeJS.ErrnoException fallback. Without this, an EACCES on a
+  // perms-restricted file in the project tree, an EISDIR from trying to
+  // read a directory as a file, or a vanished file (ENOENT) all collapsed
+  // to a generic 500 — the user got no actionable diagnostic and the
+  // operator had to grep logs to figure out what happened.
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "ENOENT") {
+    return reply.code(404).send({ error: "not_found" });
+  }
+  if (code === "EACCES" || code === "EPERM") {
+    return reply.code(403).send({ error: "permission_denied" });
+  }
+  if (code === "EISDIR") {
+    return reply.code(400).send({ error: "not_a_file" });
+  }
+  if (code === "ENOTDIR") {
+    return reply.code(400).send({ error: "not_a_directory" });
+  }
   reply.log.error({ err }, "unmapped file-manager error");
   return reply.code(500).send({ error: "internal_error" });
 }
@@ -759,6 +777,15 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
             });
           } catch (err) {
             if (err instanceof AggregateLimitError) {
+              // Roll back every previously-written file in this same
+              // request. Without this, a 3-file upload where the 3rd
+              // trips the aggregate cap would leave the first two on
+              // disk; the user sees a 413 and (reasonably) thinks
+              // nothing was uploaded, then retries and gets confusing
+              // 409 target_exists for the first two.
+              for (const prior of written) {
+                await deleteEntry(prior.path, project.path).catch(() => undefined);
+              }
               return reply.code(413).send({
                 error: "aggregate_too_large",
                 message: `Total upload size exceeds the ${MAX_TOTAL_UPLOAD_BYTES / (1024 * 1024)} MB aggregate limit.`,

@@ -338,7 +338,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   // tests via `await fastify.close()`). Disposes every live session, which
   // will also become load-bearing in Phase 5 to flush SSE clients.
   fastify.addHook("onClose", async () => {
-    disposeAllSessions();
+    await disposeAllSessions();
     disposeAllPtys();
   });
 

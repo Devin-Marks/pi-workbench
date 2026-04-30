@@ -603,9 +603,17 @@ function applyEvent(
         // the next interaction. Bump the counter regardless — consumers
         // (file-tree refresh, etc.) should still react even if the
         // refetch failed: the on-disk state likely changed.
+        //
+        // Surface a per-session banner so the user knows the chat
+        // they're looking at is stale — without this, the spinner
+        // disappears and the chat looks healthy when it isn't.
         set((s) => ({
           streamingBySession: { ...s.streamingBySession, [sessionId]: false },
           activeToolBySession: { ...s.activeToolBySession, [sessionId]: undefined },
+          bannerBySession: {
+            ...s.bannerBySession,
+            [sessionId]: "Couldn't refresh messages after the agent finished — reload to sync",
+          },
           agentEndCountBySession: {
             ...s.agentEndCountBySession,
             [sessionId]: (s.agentEndCountBySession[sessionId] ?? 0) + 1,

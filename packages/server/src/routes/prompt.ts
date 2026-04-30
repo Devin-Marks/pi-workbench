@@ -70,6 +70,20 @@ async function parseMultipart(
   const images: ParsedImage[] = [];
   const textFiles: ParsedTextFile[] = [];
 
+  // Drain helper for early-return paths. Without this, when an early
+  // file-cap triggers a 400, the remaining MBs of the request body
+  // keep flowing in and Fastify buffers them before GC. For a
+  // pathological 8 × 10 MB upload that's ~70 MB of useless transit.
+  // Destroying the raw socket stream signals the client to stop and
+  // releases any in-flight buffers.
+  const drain = (): void => {
+    try {
+      req.raw.destroy();
+    } catch {
+      // already destroyed / closed
+    }
+  };
+
   for await (const part of req.parts()) {
     if (part.type === "field") {
       if (part.fieldname === "text") {
@@ -88,6 +102,7 @@ async function parseMultipart(
     const file = part as MultipartFile;
     const buf = await file.toBuffer();
     if (file.file.truncated) {
+      drain();
       return {
         error: "attachment_too_large",
         message: `Attachment "${file.filename}" exceeds the ${MAX_FILE_BYTES / (1024 * 1024)} MB per-file limit.`,
@@ -96,6 +111,7 @@ async function parseMultipart(
     const mime = (file.mimetype ?? "application/octet-stream").toLowerCase();
     if (IMAGE_MIME_TYPES.has(mime)) {
       if (images.length >= MAX_IMAGES_PER_PROMPT) {
+        drain();
         return {
           error: "too_many_images",
           message: `Up to ${MAX_IMAGES_PER_PROMPT} images per prompt; got more.`,
@@ -112,6 +128,7 @@ async function parseMultipart(
     // U+FFFD replacement chars and the model gets noise — better
     // than silently dropping the attachment.
     if (textFiles.length >= MAX_TEXT_FILES_PER_PROMPT) {
+      drain();
       return {
         error: "too_many_text_files",
         message: `Up to ${MAX_TEXT_FILES_PER_PROMPT} text attachments per prompt; got more.`,
@@ -365,18 +382,45 @@ export const promptRoutes: FastifyPluginAsync = async (fastify) => {
       // Fire-and-forget. Pre-flight already covered the common synchronous
       // failure modes; remaining rejections are LLM/network errors that
       // surface to the client as agent_end with errorMessage over SSE.
+      //
+      // The SDK's normal flow emits `agent_end` itself when a turn
+      // completes (success or SDK-tracked error). But certain failure
+      // modes — e.g. provider rejected the request synchronously,
+      // network down, malformed prompt — reject session.prompt() WITHOUT
+      // ever firing agent_start / agent_end. Connected SSE clients then
+      // sit on a "thinking…" spinner forever and the chat input stays
+      // disabled. To recover, we synthesize a terminal `agent_end`
+      // (with errorMessage) into the live session's fan-out so the
+      // browser releases the spinner and surfaces the error in chat.
+      const synthesizeFailureEvent = (err: unknown): void => {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        for (const client of live.clients) {
+          try {
+            client.send({
+              type: "agent_end",
+              sessionId: req.params.id,
+              errorMessage,
+            });
+          } catch {
+            // a single client send-failure shouldn't stop fan-out
+          }
+        }
+      };
+
       try {
         live.session.prompt(promptText, opts).catch((err: unknown) => {
           fastify.log.warn(
             { err: err instanceof Error ? err.message : String(err), sessionId: req.params.id },
             "session.prompt rejected",
           );
+          synthesizeFailureEvent(err);
         });
       } catch (err) {
         fastify.log.warn(
           { err: err instanceof Error ? err.message : String(err), sessionId: req.params.id },
           "session.prompt threw synchronously",
         );
+        synthesizeFailureEvent(err);
       }
       return reply.code(202).send({ accepted: true });
     },

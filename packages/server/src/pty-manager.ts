@@ -257,17 +257,43 @@ export function getPty(ptyId: string): ManagedPty | undefined {
   return ptys.get(ptyId)?.managed;
 }
 
+/**
+ * Grace window between SIGTERM and SIGKILL. Long enough for a
+ * well-behaved shell to clean up (zsh trap, bash exit handler), short
+ * enough that an unkillable shell doesn't linger past a deploy /
+ * shutdown for noticeable time.
+ */
+const SIGKILL_GRACE_MS = 2_000;
+
 export function killPty(ptyId: string): boolean {
   const entry = ptys.get(ptyId);
   if (entry === undefined) return false;
   ptys.delete(ptyId);
   if (entry.idleTimer !== undefined) clearTimeout(entry.idleTimer);
   if (entry.dataDisposable !== undefined) entry.dataDisposable.dispose();
+  // Try SIGTERM first (gives the shell a chance to flush, run trap
+  // handlers, release tty). Schedule a SIGKILL fallback for trapped
+  // / unresponsive shells. Without the fallback, a `trap '' TERM`
+  // bash leaves an orphan process holding the PTY fd.
+  let killed = false;
+  const exitDisposable = entry.managed.process.onExit(() => {
+    killed = true;
+  });
   try {
     entry.managed.process.kill("SIGTERM");
   } catch {
     // already exited between get + kill; nothing to do
+    return true;
   }
+  setTimeout(() => {
+    exitDisposable.dispose();
+    if (killed) return;
+    try {
+      entry.managed.process.kill("SIGKILL");
+    } catch {
+      // already exited
+    }
+  }, SIGKILL_GRACE_MS).unref();
   return true;
 }
 
