@@ -459,7 +459,7 @@ function ContextBreakdown({
  * proper fix.)
  */
 function categorizeContext(
-  messages: Array<Record<string, unknown>>,
+  messages: Record<string, unknown>[],
   actualTotalTokens?: number,
 ): ContextBreakdownData {
   let userChars = 0;
@@ -638,7 +638,7 @@ function MessageList({
   onSearchChange,
   streamingTail,
 }: {
-  messages: Array<Record<string, unknown>>;
+  messages: Record<string, unknown>[];
   showThinking: boolean;
   onToggleThinking: () => void;
   onViewRaw: (index: number, payload: unknown) => void;
@@ -852,10 +852,10 @@ function RawJsonModal({
           <span className="text-xs text-neutral-200">{title}</span>
           <button
             onClick={onClose}
-            className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+            className="rounded p-2 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
             title="Close (Esc)"
           >
-            <X size={14} />
+            <X size={20} />
           </button>
         </header>
         {/* Ctx5 — syntax-highlighted via prism-react-renderer (already
@@ -965,7 +965,7 @@ function estimateTokens(message: Record<string, unknown>): number {
  * the provider's authoritative input number alongside.
  */
 function computeNewDeltas(
-  messages: Array<Record<string, unknown>>,
+  messages: Record<string, unknown>[],
   turns: ContextTurn[],
 ): Map<number, number> {
   const result = new Map<number, number>();

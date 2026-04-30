@@ -183,10 +183,10 @@ function Tabs({
             </button>
             <button
               onClick={() => onClose(f.path)}
-              className="rounded p-0.5 text-neutral-600 opacity-0 hover:bg-neutral-800 hover:text-neutral-200 group-hover:opacity-100"
+              className="rounded p-1 text-neutral-600 opacity-0 hover:bg-neutral-800 hover:text-neutral-200 group-hover:opacity-100"
               title="Close (any unsaved changes are lost)"
             >
-              <X size={12} />
+              <X size={16} />
             </button>
           </div>
         );

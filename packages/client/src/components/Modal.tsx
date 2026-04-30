@@ -145,11 +145,11 @@ export function Modal({
           </h2>
           <button
             onClick={onClose}
-            className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200"
+            className="rounded p-2 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200"
             title="Close (Esc)"
             aria-label="Close"
           >
-            <X size={14} />
+            <X size={20} />
           </button>
         </header>
         {children}

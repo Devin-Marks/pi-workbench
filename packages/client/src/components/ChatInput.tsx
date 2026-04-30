@@ -20,14 +20,14 @@ import { EMPTY_MESSAGES, useSessionStore, type AgentMessageLike } from "../store
  * trimmed string here, so the consecutive-duplicate dedupe collapses
  * the brief overlap to a single history entry.
  */
-function userHistory(messages: ReadonlyArray<AgentMessageLike>): string[] {
+function userHistory(messages: readonly AgentMessageLike[]): string[] {
   const out: string[] = [];
   let last: string | undefined;
   // Iterate newest-to-oldest so the resulting array is ordered for
   // direct indexing: out[0] = most recent.
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    if (m === undefined || m.role !== "user") continue;
+    if (m?.role !== "user") continue;
     let text = "";
     if (typeof m.content === "string") {
       text = m.content;
@@ -131,7 +131,7 @@ export function ChatInput({ sessionId }: Props) {
   // the chat input show a clarifying placeholder so the user knows a
   // new prompt during a retry will be queued (rather than discarded
   // or replacing the in-flight message).
-  const isAutoRetrying = banner !== undefined && /^Retrying \(/.test(banner);
+  const isAutoRetrying = banner !== undefined && banner.startsWith("Retrying (");
   const sendPrompt = useSessionStore((s) => s.sendPrompt);
   const sendSteer = useSessionStore((s) => s.sendSteer);
   const abortSession = useSessionStore((s) => s.abortSession);
@@ -756,10 +756,10 @@ function AttachmentPreview({
             </span>
             <button
               onClick={() => onRemove(f)}
-              className="ml-1 rounded p-0.5 text-neutral-500 hover:bg-neutral-800 hover:text-red-300"
+              className="ml-1 rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-red-300"
               title={`Remove ${f.name}`}
             >
-              <X size={11} />
+              <X size={16} />
             </button>
           </div>
         );

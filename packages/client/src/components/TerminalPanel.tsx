@@ -74,7 +74,7 @@ export function TerminalPanel() {
   const closeTab = useTerminalStore((s) => s.closeTab);
   const setActiveTab = useTerminalStore((s) => s.setActiveTab);
   const projects = useProjectStore((s) => s.projects);
-  const projectTabs = tabs.filter((t) => project !== undefined && t.projectId === project.id);
+  const projectTabs = tabs.filter((t) => t.projectId === project?.id);
   const activeTab = projectTabs.find((t) => t.id === activeTabId) ?? projectTabs[0];
 
   // Project-path lookup for cross-project tabs. We keep TerminalHost
@@ -132,10 +132,10 @@ export function TerminalPanel() {
                 </button>
                 <button
                   onClick={() => onCloseTab(t.id)}
-                  className="rounded p-0.5 text-neutral-600 opacity-0 hover:bg-neutral-800 hover:text-neutral-200 group-hover:opacity-100"
+                  className="rounded p-1 text-neutral-600 opacity-0 hover:bg-neutral-800 hover:text-neutral-200 group-hover:opacity-100"
                   title="Close terminal (kills the PTY)"
                 >
-                  <X size={10} />
+                  <X size={16} />
                 </button>
               </div>
             );
@@ -145,7 +145,7 @@ export function TerminalPanel() {
             className="ml-1 flex items-center gap-1 rounded px-2 py-0.5 text-xs text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
             title="New terminal"
           >
-            <Plus size={11} />
+            <Plus size={14} />
             New
           </button>
         </div>
@@ -202,15 +202,27 @@ function TerminalHost({
     const existing = live.get(tab.id);
     if (existing !== undefined) {
       try {
-        existing.term.open(host);
+        // xterm 5's `term.open(newParent)` doesn't reliably move its
+        // root DOM element to the new parent on a second call — it
+        // short-circuits because the terminal is already "opened",
+        // leaving the root attached to the prior (now-detached) host.
+        // Explicitly relocate the root ourselves so the terminal
+        // contents become visible after a panel-toggle re-mount.
+        const root = existing.term.element;
+        if (root !== undefined && root.parentNode !== host) {
+          host.appendChild(root);
+        } else {
+          existing.term.open(host);
+        }
         // visibility:hidden (not display:none) is used for tab
         // switching, so `host` has real layout dimensions on every
         // mount — fit always returns correct cols/rows.
         existing.fit.fit();
       } catch {
-        // open() can throw transiently if the host hasn't been laid
-        // out yet; the visibility-change effect below also calls
-        // fit() so this isn't load-bearing on success.
+        // open() / appendChild can throw transiently if the host
+        // hasn't been laid out yet; the visibility-change effect
+        // below also calls fit() so this isn't load-bearing on
+        // success.
       }
       const observer = new ResizeObserver(() => {
         try {
@@ -301,7 +313,7 @@ function TerminalHost({
     // would silently dead-letter into the original (closed) WS object.
     const dataDisposable = term.onData((data) => {
       const sock = live.get(tab.id)?.ws;
-      if (sock !== undefined && sock.readyState === WebSocket.OPEN) {
+      if (sock?.readyState === WebSocket.OPEN) {
         sock.send(JSON.stringify({ type: "input", data }));
       }
     });

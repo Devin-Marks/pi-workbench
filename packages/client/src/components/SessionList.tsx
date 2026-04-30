@@ -1,4 +1,5 @@
 import { useEffect, useState, type KeyboardEvent } from "react";
+import { X } from "lucide-react";
 import { EMPTY_SESSIONS, useSessionStore } from "../store/session-store";
 import { useProjectStore } from "../store/project-store";
 import { ConfirmDialog } from "./Modal";
@@ -159,14 +160,14 @@ export function SessionList({ projectId }: Props) {
             {!isRenaming && (
               <button
                 onClick={() => setDeleteDialog({ sessionId: s.sessionId, label, isLive: s.isLive })}
-                className="hidden text-neutral-500 hover:text-red-400 group-hover:inline"
+                className="invisible inline-flex items-center p-1 text-neutral-500 hover:text-red-400 group-hover:visible"
                 title={
                   s.isLive
                     ? "Delete session — also kills the live shell"
                     : "Delete session JSONL from disk"
                 }
               >
-                ×
+                <X size={16} />
               </button>
             )}
           </div>

@@ -272,7 +272,13 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex h-full max-h-[640px] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-neutral-800 bg-neutral-950 shadow-2xl"
+        // Sized larger than other modals so the graph view can render
+        // wide branching trees without immediate horizontal scroll.
+        // The viewport caps (vh/vw) keep it sane on small screens; the
+        // px caps cap growth on large monitors so the modal doesn't
+        // expand to fill 4K. Graph nodes are 220px × 80px with 64px
+        // gaps, so ~6 columns fit comfortably at 1400px max-w.
+        className="flex h-[min(90vh,900px)] w-[min(95vw,1400px)] flex-col overflow-hidden rounded-lg border border-neutral-800 bg-neutral-950 shadow-2xl"
       >
         <header className="flex items-center justify-between border-b border-neutral-800 px-4 py-2.5">
           <div className="flex items-center gap-2">
@@ -318,10 +324,10 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
             </button>
             <button
               onClick={onClose}
-              className="rounded p-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+              className="rounded p-2 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
               title="Close (Esc)"
             >
-              <X size={14} />
+              <X size={20} />
             </button>
           </div>
         </header>

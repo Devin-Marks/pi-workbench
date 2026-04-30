@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, X, ChevronDown, ChevronRight } from "lucide-react";
 import { useProjectStore } from "../store/project-store";
 import { useSessionStore } from "../store/session-store";
 import { ProjectPicker } from "./ProjectPicker";
@@ -151,17 +151,17 @@ export function ProjectSidebar() {
                 )}
                 <button
                   onClick={() => void handleNewSession(p.id)}
-                  className="hidden p-0.5 text-neutral-500 hover:text-neutral-200 group-hover:inline-flex"
+                  className="invisible inline-flex p-1 text-neutral-500 hover:text-neutral-200 group-hover:visible"
                   title="New session in this project"
                 >
-                  <Plus size={12} />
+                  <Plus size={16} />
                 </button>
                 <button
                   onClick={() => handleDelete(p.id, p.name)}
-                  className="hidden text-xs text-neutral-500 hover:text-red-400 group-hover:inline"
+                  className="invisible inline-flex items-center p-1 text-neutral-500 hover:text-red-400 group-hover:visible"
                   title="Delete project (blocked while live sessions exist)"
                 >
-                  ×
+                  <X size={16} />
                 </button>
               </div>
               {!isCollapsed && <SessionList projectId={p.id} />}
