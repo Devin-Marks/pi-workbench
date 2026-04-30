@@ -70,7 +70,11 @@ const controllers = new Map<string, AbortController>();
  * version and bloat it; the runtime check at the renderer boundary is
  * cheaper.
  */
-export type AgentMessageLike = { role?: string; type?: string; [k: string]: unknown };
+export interface AgentMessageLike {
+  role?: string;
+  type?: string;
+  [k: string]: unknown;
+}
 
 /**
  * Compact summary of the tool currently running on the agent. We pull a
@@ -107,7 +111,7 @@ export interface IncomingEvent {
  * lifetime of the page. Called on rollback, on canonical refetch,
  * and on dispose so the same URL never outlives its usefulness.
  */
-function revokeOptimisticBlobUrls(messages: ReadonlyArray<AgentMessageLike>): void {
+function revokeOptimisticBlobUrls(messages: readonly AgentMessageLike[]): void {
   for (const m of messages) {
     if (m.role !== "user") continue;
     if (!Array.isArray(m.content)) continue;
@@ -391,7 +395,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // for user messages with attachments — text content + image
     // blocks — so the renderer doesn't have to special-case the
     // pre-refetch state.
-    const optimisticContent: Array<Record<string, unknown>> = [{ type: "text", text }];
+    const optimisticContent: Record<string, unknown>[] = [{ type: "text", text }];
     if (attachments !== undefined) {
       for (const f of attachments) {
         if (f.type.startsWith("image/")) {

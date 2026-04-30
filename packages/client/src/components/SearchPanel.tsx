@@ -199,7 +199,7 @@ function joinProjectPath(projectAbsPath: string, relPath: string): string {
   return `${projectAbsPath}${sep}${relPath}`;
 }
 
-function groupByPath(matches: SearchMatch[]): Array<[string, SearchMatch[]]> {
+function groupByPath(matches: SearchMatch[]): [string, SearchMatch[]][] {
   const map = new Map<string, SearchMatch[]>();
   for (const m of matches) {
     const list = map.get(m.path);

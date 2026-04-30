@@ -207,7 +207,7 @@ async function searchWithRipgrep(projectPath: string, opts: SearchOptions): Prom
           | {
               lines?: { text?: string };
               line_number?: number;
-              submatches?: Array<{ start?: number; end?: number; match?: { text?: string } }>;
+              submatches?: { start?: number; end?: number; match?: { text?: string } }[];
             }
           | undefined;
         if (data === undefined || currentFile === undefined) return;

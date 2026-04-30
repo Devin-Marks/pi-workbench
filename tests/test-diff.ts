@@ -250,7 +250,7 @@ async function unitTests(): Promise<void> {
     assert("only most-recent-turn entries returned", entries.length === 1);
     if (entries.length === 1) {
       const e = entries[0];
-      assert("recent entry is the newer.ts one", e !== undefined && e.file === newFile);
+      assert("recent entry is the newer.ts one", e?.file === newFile);
     }
   }
 

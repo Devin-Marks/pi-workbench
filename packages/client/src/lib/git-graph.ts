@@ -23,7 +23,7 @@ export interface CommitLayout {
   /** Lanes that joined into this commit (drawn as edges from above). */
   incomingLanes: number[];
   /** Lanes carrying onward (from this row to the next), with the parent hash they track. */
-  outgoingLanes: Array<{ lane: number; parent: string }>;
+  outgoingLanes: { lane: number; parent: string }[];
   /** Lanes that pass through this row without being created or consumed. */
   through: number[];
   /** Total lane count needed to render this row (incl. all of the above). */
@@ -51,7 +51,7 @@ export interface CommitLayout {
  * The result is a stable, narrow layout for typical histories and
  * a correct (if wider) layout for parallel branches.
  */
-export function layoutCommits(commits: ReadonlyArray<GitLogEntry>): CommitLayout[] {
+export function layoutCommits(commits: readonly GitLogEntry[]): CommitLayout[] {
   // Mutable lane state — `undefined` slots are "free" (available
   // to reuse). Compressed periodically so we don't grow forever.
   const activeLanes: (string | undefined)[] = [];
@@ -91,7 +91,7 @@ export function layoutCommits(commits: ReadonlyArray<GitLogEntry>): CommitLayout
     //    First parent stays in this commit's lane.
     //    Additional parents (merge inputs) reuse existing lanes that
     //    already track them, OR claim a free slot, OR extend.
-    const outgoingLanes: Array<{ lane: number; parent: string }> = [];
+    const outgoingLanes: { lane: number; parent: string }[] = [];
     if (commit.parents.length > 0) {
       const firstParent = commit.parents[0]!;
       activeLanes[lane] = firstParent;

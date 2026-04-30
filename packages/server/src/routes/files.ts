@@ -1,5 +1,4 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
-import type { MultipartFile } from "@fastify/multipart";
 import {
   ChecksumMismatchError,
   DirectoryNotEmptyError,
@@ -175,13 +174,23 @@ function mapError(reply: FastifyReply, err: unknown): FastifyReply {
  * doesn't exist. Returns the project on success; the route handler should
  * return immediately if `undefined` comes back.
  */
+/**
+ * Resolve the project for a request.
+ *
+ * Contract: returns the project on success. On miss, sends a 404
+ * via `reply` AND returns undefined — caller MUST `if (project ===
+ * undefined) return;` immediately to avoid double-send. The 404
+ * response is intentionally awaited (Fastify reply.send returns the
+ * reply object; awaiting it ensures any onSend hooks have run before
+ * the route handler proceeds).
+ */
 async function resolveProject(
   projectId: string,
   reply: FastifyReply,
 ): Promise<{ id: string; path: string } | undefined> {
   const project = await getProject(projectId);
   if (project === undefined) {
-    void reply.code(404).send({ error: "project_not_found" });
+    await reply.code(404).send({ error: "project_not_found", message: "no project with that id" });
     return undefined;
   }
   return { id: project.id, path: project.path };
@@ -719,7 +728,7 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
       let overwrite = false;
       let aggregateBytes = 0;
       const expectedHashes = new Map<string, string>();
-      const written: Array<{ path: string; size: number; sha256: string }> = [];
+      const written: { path: string; size: number; sha256: string }[] = [];
       try {
         const parts = req.parts({
           limits: {
@@ -744,7 +753,7 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
           }
           // File part. Project + parent must already be parsed — the
           // FormData field-order contract is documented above.
-          const file = part as MultipartFile;
+          const file = part;
           if (projectId === undefined) {
             return reply.code(400).send({
               error: "missing_field",

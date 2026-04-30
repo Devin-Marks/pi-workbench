@@ -803,7 +803,7 @@ function AppearanceTab() {
           return (
             <button
               key={def.id}
-              onClick={() => setTheme(def.id as ThemeId)}
+              onClick={() => setTheme(def.id)}
               className={`flex items-center justify-between gap-3 rounded border px-3 py-2 text-left ${
                 active
                   ? "border-neutral-400 bg-neutral-800"

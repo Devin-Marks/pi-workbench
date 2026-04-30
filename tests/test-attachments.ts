@@ -36,7 +36,7 @@ function assert(label: string, ok: boolean, detail?: string): void {
 
 interface PromptCall {
   text: string;
-  opts: { images?: Array<{ data: string; mimeType: string; type: string }> } | undefined;
+  opts: { images?: { data: string; mimeType: string; type: string }[] } | undefined;
 }
 
 /**

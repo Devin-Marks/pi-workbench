@@ -327,8 +327,8 @@ function Message({ message }: { message: AgentMessageLike }) {
   if (message.role === "user") {
     const text = extractText(message);
     const blocks = Array.isArray(message.content) ? message.content : [];
-    const images: Array<{ src: string; key: string }> = [];
-    const files: Array<{ name: string; size?: number; key: string }> = [];
+    const images: { src: string; key: string }[] = [];
+    const files: { name: string; size?: number; key: string }[] = [];
     for (let i = 0; i < blocks.length; i++) {
       const b = blocks[i] as Record<string, unknown>;
       if (b.type === "image") {

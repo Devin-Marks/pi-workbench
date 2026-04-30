@@ -256,7 +256,7 @@ export async function createProject(name: string, path: string): Promise<Project
   // sees the same shape.
   const resolvedPath = realPath;
   const st = await stat(resolvedPath).catch(() => undefined);
-  if (st === undefined || !st.isDirectory()) {
+  if (!st?.isDirectory()) {
     throw new NotADirectoryError(resolvedPath);
   }
   return withProjectsLock(async () => {
@@ -374,7 +374,7 @@ export async function browseDirectory(requested: string | undefined): Promise<Br
     throw new PathOutsideWorkspaceError(target);
   }
   const st = await stat(target).catch(() => undefined);
-  if (st === undefined || !st.isDirectory()) {
+  if (!st?.isDirectory()) {
     throw new NotADirectoryError(target);
   }
   const dirents = await readdir(target, { withFileTypes: true });

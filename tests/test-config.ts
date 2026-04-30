@@ -212,8 +212,7 @@ async function main(): Promise<void> {
     {
       const r = await jget(base, "/api/v1/config/providers");
       assert("GET /config/providers → 200", r.status === 200);
-      const list = (r.body as { providers: Array<{ provider: string; models: unknown[] }> })
-        .providers;
+      const list = (r.body as { providers: { provider: string; models: unknown[] }[] }).providers;
       assert("  providers list is non-empty", Array.isArray(list) && list.length > 0);
       assert(
         "  custom provider 'my-vllm' shows up",
@@ -277,9 +276,8 @@ async function main(): Promise<void> {
 
       const list = await jget(base, `/api/v1/config/skills?projectId=${projectId}`);
       assert("GET /config/skills → 200", list.status === 200);
-      const skills = (
-        list.body as { skills: Array<{ name: string; enabled: boolean; source: string }> }
-      ).skills;
+      const skills = (list.body as { skills: { name: string; enabled: boolean; source: string }[] })
+        .skills;
       const hello = skills.find((s) => s.name === "hello");
       assert("project-local 'hello' skill discovered", hello !== undefined);
       assert("  source is 'project'", hello?.source === "project");
@@ -292,7 +290,7 @@ async function main(): Promise<void> {
         { enabled: true },
       );
       assert("PUT /config/skills/hello/enabled true → 200", enable.status === 200);
-      const enabledSkills = (enable.body as { skills: Array<{ name: string; enabled: boolean }> })
+      const enabledSkills = (enable.body as { skills: { name: string; enabled: boolean }[] })
         .skills;
       const hello2 = enabledSkills.find((s) => s.name === "hello");
       assert("  hello.enabled === true after toggle", hello2?.enabled === true);
@@ -309,7 +307,7 @@ async function main(): Promise<void> {
         `/api/v1/config/skills/hello/enabled?projectId=${projectId}`,
         { enabled: false },
       );
-      const disabledSkills = (disable.body as { skills: Array<{ name: string; enabled: boolean }> })
+      const disabledSkills = (disable.body as { skills: { name: string; enabled: boolean }[] })
         .skills;
       assert(
         "PUT enabled: false re-disables the skill",

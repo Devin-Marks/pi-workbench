@@ -542,7 +542,7 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
         }
       }
       const messages = live.session.messages;
-      const turns: Array<Record<string, unknown>> = [];
+      const turns: Record<string, unknown>[] = [];
       let totalInput = 0;
       let totalOutput = 0;
       let totalCacheRead = 0;

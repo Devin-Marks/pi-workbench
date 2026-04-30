@@ -67,7 +67,7 @@ interface TestSession {
   sessionManager: {
     appendMessage: (msg: unknown) => string;
     getSessionFile: () => string | undefined;
-    getEntries: () => Array<{ id: string }>;
+    getEntries: () => { id: string }[];
   };
   setSessionName: (name: string) => void;
 }

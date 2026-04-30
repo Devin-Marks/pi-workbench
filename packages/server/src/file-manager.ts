@@ -266,7 +266,7 @@ export async function getTree(rootPath: string, opts: GetTreeOptions = {}): Prom
   // Verify root exists + is a directory; the caller already filtered by
   // project, so this is a sanity check, not a security check.
   const st = await stat(root).catch(() => undefined);
-  if (st === undefined || !st.isDirectory()) {
+  if (!st?.isDirectory()) {
     throw new NotFoundError(root);
   }
   const maxDepth = opts.maxDepth ?? DEFAULT_TREE_DEPTH;

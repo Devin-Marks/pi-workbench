@@ -115,7 +115,7 @@ interface FileState {
       overwrite?: boolean;
       onHashProgress?: (hashed: number, total: number) => void;
     },
-  ) => Promise<Array<{ path: string; size: number; sha256: string }>>;
+  ) => Promise<{ path: string; size: number; sha256: string }[]>;
   renameEntry: (projectId: string, absPath: string, newName: string) => Promise<string>;
   /**
    * Move `srcAbsPath` to `destAbsPath`. Caller is responsible for

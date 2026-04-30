@@ -81,7 +81,7 @@ interface ToolCallResultPair {
  * emitted `agent_start` since the server booted.
  */
 export function collectTurnTouches(
-  messages: ReadonlyArray<unknown>,
+  messages: readonly unknown[],
   explicitStartIndex?: number,
 ): ToolCallResultPair[] {
   let startIndex = 0;
