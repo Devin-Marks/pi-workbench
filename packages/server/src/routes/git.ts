@@ -17,7 +17,6 @@ import {
   getLog,
   getStagedDiff,
   getStatus,
-  isGitRepo,
   pull,
   push,
   revertPaths,
@@ -163,16 +162,49 @@ function mapError(reply: FastifyReply, err: unknown): FastifyReply {
   return reply.code(500).send({ error: "internal_error" });
 }
 
+/**
+ * Resolve the project for a request. On miss, sends 404 + returns
+ * undefined; caller MUST `return` immediately. See files.ts:resolveProject
+ * for the same contract.
+ */
 async function resolveProject(
   projectId: string,
   reply: FastifyReply,
 ): Promise<{ id: string; path: string } | undefined> {
   const project = await getProject(projectId);
   if (project === undefined) {
-    void reply.code(404).send({ error: "project_not_found" });
+    await reply.code(404).send({ error: "project_not_found", message: "no project with that id" });
     return undefined;
   }
   return { id: project.id, path: project.path };
+}
+
+/**
+ * Resolve-then-run helper that collapses the project-not-found 404 +
+ * runner-error 4xx mapping every git GET route shares. Without this
+ * each route was 6 lines of identical boilerplate (resolveProject,
+ * undefined-check, try, runner call, catch, mapError); routes shrink
+ * to a one-liner.
+ *
+ * On project-not-found the resolveProject helper has already sent the
+ * 404 reply; we return its `undefined` so the route handler short-
+ * circuits without trying to return a value Fastify would re-send.
+ * On runner success the result is returned verbatim (Fastify
+ * serializes via the response schema). On runner throw we route to
+ * mapError for the typed-error → wire-shape mapping.
+ */
+async function withProject<T>(
+  projectId: string,
+  reply: FastifyReply,
+  fn: (project: { id: string; path: string }) => Promise<T>,
+): Promise<T | FastifyReply | undefined> {
+  const project = await resolveProject(projectId, reply);
+  if (project === undefined) return undefined;
+  try {
+    return await fn(project);
+  } catch (err) {
+    return mapError(reply, err);
+  }
 }
 
 /* ----------------------------- routes ----------------------------- */
@@ -181,6 +213,11 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get<{ Querystring: { projectId: string } }>(
     "/git/status",
     {
+      // Polled by the client every ~15s while a project is open. We
+      // silence the access logs for this route specifically so the
+      // poll doesn't drown out interesting events; errors still log
+      // at warn+.
+      logLevel: "warn",
       schema: {
         description:
           "Parsed `git status --porcelain=v1 -uall` for the project. Files " +
@@ -222,16 +259,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
         response: { 200: diffSchema, 400: errorSchema, 404: errorSchema, 500: errorSchema },
       },
     },
-    async (req, reply) => {
-      const project = await resolveProject(req.query.projectId, reply);
-      if (project === undefined) return;
-      try {
-        const diff = await getDiff(project.path);
-        return { isGitRepo: diff.length > 0 || (await isGitRepo(project.path)), diff };
-      } catch (err) {
-        return mapError(reply, err);
-      }
-    },
+    async (req, reply) => withProject(req.query.projectId, reply, (p) => getDiff(p.path)),
   );
 
   fastify.get<{ Querystring: { projectId: string } }>(
@@ -248,16 +276,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
         response: { 200: diffSchema, 400: errorSchema, 404: errorSchema, 500: errorSchema },
       },
     },
-    async (req, reply) => {
-      const project = await resolveProject(req.query.projectId, reply);
-      if (project === undefined) return;
-      try {
-        const diff = await getStagedDiff(project.path);
-        return { isGitRepo: diff.length > 0 || (await isGitRepo(project.path)), diff };
-      } catch (err) {
-        return mapError(reply, err);
-      }
-    },
+    async (req, reply) => withProject(req.query.projectId, reply, (p) => getStagedDiff(p.path)),
   );
 
   fastify.get<{ Querystring: { projectId: string; path: string; staged?: string } }>(
@@ -281,15 +300,10 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     async (req, reply) => {
-      const project = await resolveProject(req.query.projectId, reply);
-      if (project === undefined) return;
-      try {
-        const staged = req.query.staged === "1" || req.query.staged === "true";
-        const diff = await getFileDiff(project.path, req.query.path, staged);
-        return { isGitRepo: diff.length > 0 || (await isGitRepo(project.path)), diff };
-      } catch (err) {
-        return mapError(reply, err);
-      }
+      const staged = req.query.staged === "1" || req.query.staged === "true";
+      return withProject(req.query.projectId, reply, (p) =>
+        getFileDiff(p.path, req.query.path, staged),
+      );
     },
   );
 
@@ -312,18 +326,11 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     async (req, reply) => {
-      const project = await resolveProject(req.query.projectId, reply);
-      if (project === undefined) return;
-      try {
-        const limit =
-          req.query.limit !== undefined
-            ? Math.min(1000, Math.max(1, Number.parseInt(req.query.limit, 10)))
-            : 30;
-        const commits = await getLog(project.path, limit);
-        return { isGitRepo: commits.length > 0 || (await isGitRepo(project.path)), commits };
-      } catch (err) {
-        return mapError(reply, err);
-      }
+      const limit =
+        req.query.limit !== undefined
+          ? Math.min(1000, Math.max(1, Number.parseInt(req.query.limit, 10)))
+          : 30;
+      return withProject(req.query.projectId, reply, (p) => getLog(p.path, limit));
     },
   );
 
@@ -341,17 +348,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
         response: { 200: branchesSchema, 400: errorSchema, 404: errorSchema, 500: errorSchema },
       },
     },
-    async (req, reply) => {
-      const project = await resolveProject(req.query.projectId, reply);
-      if (project === undefined) return;
-      try {
-        const result = await getBranches(project.path);
-        const isGit = result.branches.length > 0 || (await isGitRepo(project.path));
-        return { isGitRepo: isGit, current: result.current, branches: result.branches };
-      } catch (err) {
-        return mapError(reply, err);
-      }
-    },
+    async (req, reply) => withProject(req.query.projectId, reply, (p) => getBranches(p.path)),
   );
 
   fastify.get<{ Querystring: { projectId: string } }>(
@@ -370,17 +367,7 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
         response: { 200: remotesSchema, 400: errorSchema, 404: errorSchema, 500: errorSchema },
       },
     },
-    async (req, reply) => {
-      const project = await resolveProject(req.query.projectId, reply);
-      if (project === undefined) return;
-      try {
-        const remotes = await getRemotes(project.path);
-        const isGit = remotes.length > 0 || (await isGitRepo(project.path));
-        return { isGitRepo: isGit, remotes };
-      } catch (err) {
-        return mapError(reply, err);
-      }
-    },
+    async (req, reply) => withProject(req.query.projectId, reply, (p) => getRemotes(p.path)),
   );
 
   fastify.post<{ Body: { projectId: string; name: string; url: string } }>(

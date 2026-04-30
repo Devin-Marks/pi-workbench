@@ -112,6 +112,7 @@ export interface BranchEntry {
 }
 
 export interface BranchesResult {
+  isGitRepo: boolean;
   current: string | undefined;
   branches: BranchEntry[];
 }
@@ -370,23 +371,34 @@ export async function getStatus(cwd: string): Promise<StatusResult> {
  * "isGitRepo" flag the route can use to decide between 200 empty and
  * 200 with content). Empty repo / non-repo → empty string.
  */
-async function diffArgs(cwd: string, args: string[]): Promise<string> {
-  if (!(await isGitRepo(cwd))) return "";
-  const baseArgs = ["diff", "--no-color", "--no-ext-diff", ...args];
-  const { stdout } = await runGit(cwd, baseArgs);
-  return stdout;
+/**
+ * Diff result that includes the `isGitRepo` flag the route returns
+ * verbatim. Wrapping the flag here means a single `isGitRepo` probe
+ * inside the runner — the route doesn't need to call `isGitRepo`
+ * a second time after the runner returned an empty diff.
+ */
+export interface DiffResult {
+  isGitRepo: boolean;
+  diff: string;
 }
 
-export function getDiff(cwd: string): Promise<string> {
+async function diffArgs(cwd: string, args: string[]): Promise<DiffResult> {
+  if (!(await isGitRepo(cwd))) return { isGitRepo: false, diff: "" };
+  const baseArgs = ["diff", "--no-color", "--no-ext-diff", ...args];
+  const { stdout } = await runGit(cwd, baseArgs);
+  return { isGitRepo: true, diff: stdout };
+}
+
+export function getDiff(cwd: string): Promise<DiffResult> {
   return diffArgs(cwd, []);
 }
 
-export function getStagedDiff(cwd: string): Promise<string> {
+export function getStagedDiff(cwd: string): Promise<DiffResult> {
   return diffArgs(cwd, ["--cached"]);
 }
 
-export async function getFileDiff(cwd: string, path: string, staged: boolean): Promise<string> {
-  if (!(await isGitRepo(cwd))) return "";
+export async function getFileDiff(cwd: string, path: string, staged: boolean): Promise<DiffResult> {
+  if (!(await isGitRepo(cwd))) return { isGitRepo: false, diff: "" };
   // Belt-and-suspenders lexical guard. git itself rejects paths outside
   // the working tree, but routing every path through the same check
   // file-manager uses keeps the boundary obvious in one place. `path`
@@ -397,13 +409,18 @@ export async function getFileDiff(cwd: string, path: string, staged: boolean): P
   if (staged) args.push("--cached");
   args.push("--", path);
   const { stdout } = await runGit(cwd, args);
-  return stdout;
+  return { isGitRepo: true, diff: stdout };
 }
 
 /* ----------------------------- log ----------------------------- */
 
-export async function getLog(cwd: string, limit = 30): Promise<LogEntry[]> {
-  if (!(await isGitRepo(cwd))) return [];
+export interface LogResult {
+  isGitRepo: boolean;
+  commits: LogEntry[];
+}
+
+export async function getLog(cwd: string, limit = 30): Promise<LogResult> {
+  if (!(await isGitRepo(cwd))) return { isGitRepo: false, commits: [] };
   // Custom format with NUL field separators and RS record separator.
   // Avoids ambiguity if a commit message has any character we'd
   // otherwise pick as a delimiter. New fields:
@@ -430,8 +447,8 @@ export async function getLog(cwd: string, limit = 30): Promise<LogEntry[]> {
     `--max-count=${Math.max(1, Math.min(limit, 1000))}`,
     `--pretty=format:${fmt}`,
   ]);
-  if (stdout.length === 0) return [];
-  return stdout
+  if (stdout.length === 0) return { isGitRepo: true, commits: [] };
+  const commits = stdout
     .split(RS)
     .map((rec) => rec.replace(/^\n/, ""))
     .filter((rec) => rec.length > 0)
@@ -449,6 +466,7 @@ export async function getLog(cwd: string, limit = 30): Promise<LogEntry[]> {
           : [];
       return { hash, message, author, date, parents, refs };
     });
+  return { isGitRepo: true, commits };
 }
 
 /* ----------------------------- remotes ----------------------------- */
@@ -473,8 +491,13 @@ export interface RemoteEntry {
  * We parse both forms into a single entry per remote so the UI doesn't
  * render duplicates. Empty array for non-git or no-remotes-configured.
  */
-export async function getRemotes(cwd: string): Promise<RemoteEntry[]> {
-  if (!(await isGitRepo(cwd))) return [];
+export interface RemotesResult {
+  isGitRepo: boolean;
+  remotes: RemoteEntry[];
+}
+
+export async function getRemotes(cwd: string): Promise<RemotesResult> {
+  if (!(await isGitRepo(cwd))) return { isGitRepo: false, remotes: [] };
   const { stdout } = await runGit(cwd, ["remote", "-v"]);
   const map = new Map<string, RemoteEntry>();
   for (const line of stdout.split("\n")) {
@@ -497,7 +520,8 @@ export async function getRemotes(cwd: string): Promise<RemoteEntry[]> {
       existing.fetchUrl = url;
     }
   }
-  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  const remotes = Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  return { isGitRepo: true, remotes };
 }
 
 /**
@@ -536,7 +560,7 @@ export async function removeRemote(cwd: string, name: string): Promise<void> {
 /* ----------------------------- branches ----------------------------- */
 
 export async function getBranches(cwd: string): Promise<BranchesResult> {
-  if (!(await isGitRepo(cwd))) return { current: undefined, branches: [] };
+  if (!(await isGitRepo(cwd))) return { isGitRepo: false, current: undefined, branches: [] };
   const { stdout } = await runGit(cwd, ["branch", "-a", "--format=%(HEAD)\x1F%(refname:short)"]);
   const branches: BranchEntry[] = [];
   let current: string | undefined;
@@ -555,7 +579,7 @@ export async function getBranches(cwd: string): Promise<BranchesResult> {
     branches.push({ name: cleanName, current: isCurrent, remote });
     if (isCurrent) current = cleanName;
   }
-  return { current, branches };
+  return { isGitRepo: true, current, branches };
 }
 
 /* ----------------------------- mutations ----------------------------- */

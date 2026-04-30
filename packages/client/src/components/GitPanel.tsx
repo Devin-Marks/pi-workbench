@@ -40,7 +40,7 @@ import { laneColor, layoutCommits, type CommitLayout } from "../lib/git-graph";
  *     expand to keep the initial render cheap).
  *   - Branches: collapsible list (lazy-loaded the same way).
  *
- * Polls `GET /git/status` every 5s via `useGitStatus` (pauses while
+ * Polls `GET /git/status` every 15s via `useGitStatus` (pauses while
  * the active session is streaming).
  */
 export function GitPanel() {
@@ -140,7 +140,7 @@ export function GitPanel() {
     try {
       await api.gitCheckout(project.id, branch);
       await reloadBranches();
-      refresh();
+      void refresh();
     } catch (err) {
       setOpError(err instanceof ApiError ? err.code : (err as Error).message);
     } finally {
@@ -159,7 +159,7 @@ export function GitPanel() {
       // branches panel.
       await api.gitBranchCreate(project.id, name, { checkout: true });
       await reloadBranches();
-      refresh();
+      void refresh();
     } catch (err) {
       setOpError(err instanceof ApiError ? err.code : (err as Error).message);
     } finally {
@@ -459,7 +459,7 @@ export function GitPanel() {
       );
       // Pull can change the working tree; refresh status so the panel
       // reflects the new state without waiting for the 5s poll.
-      refresh();
+      void refresh();
     } catch (err) {
       setOpError(err instanceof ApiError ? err.message : (err as Error).message);
     } finally {
@@ -540,7 +540,7 @@ export function GitPanel() {
       <div className="flex-1 overflow-y-auto">
         {status === undefined && <p className="px-3 py-3 italic text-neutral-500">Loading…</p>}
 
-        {status !== undefined && status.files.length === 0 && (
+        {status?.files.length === 0 && (
           <p className="px-3 py-3 italic text-neutral-500">Working tree clean.</p>
         )}
 
@@ -1282,7 +1282,7 @@ function GraphCell({
   const dotX = layout.lane * LANE_W + LANE_W / 2;
   const dotY = h / 2;
 
-  const lines: Array<{ x1: number; y1: number; x2: number; y2: number; color: string }> = [];
+  const lines: { x1: number; y1: number; x2: number; y2: number; color: string }[] = [];
 
   // Through lanes — full-height verticals. Color by lane index so
   // lanes are visually distinct as they pass through.

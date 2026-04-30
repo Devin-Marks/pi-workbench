@@ -2,21 +2,26 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type GitStatus } from "../lib/api-client";
 import { useSessionStore } from "../store/session-store";
 
-const POLL_INTERVAL_MS = 5_000;
+const POLL_INTERVAL_MS = 15_000;
 
 /**
- * Polls `GET /git/status` every 5s for the given project AND fires an
+ * Polls `GET /git/status` every 15s for the given project AND fires an
  * extra refresh whenever the active session's `agentEndCount` ticks
  * (i.e. an agent_end was just observed). The polling pauses while a
  * session is streaming — no point thrashing the server while the
  * agent is mid-turn since `git status` would race the agent's
  * writes anyway. The agent_end signal then fires the moment streaming
  * stops, so the panel updates within milliseconds instead of waiting
- * up to 5s for the next poll.
+ * up to 15s for the next poll.
  *
  * Terminal-induced changes (the user runs `git checkout -- file` in
- * the integrated terminal) still wait for the 5s polling cycle —
+ * the integrated terminal) still wait for the 15s polling cycle —
  * pushing those would require a new file-system signal we don't have.
+ *
+ * Note: each consumer of this hook owns its own interval. Currently
+ * App.tsx (for the changed-files badge) and GitPanel.tsx both call
+ * it, so the effective server-side rate is ~2× the per-consumer
+ * interval when the git panel is open.
  *
  * Returns `undefined` until the first response lands, then the
  * latest status snapshot. Errors are stored separately so a
