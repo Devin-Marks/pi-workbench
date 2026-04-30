@@ -1106,8 +1106,12 @@ export const api = {
       method: "POST",
       body: { name },
     }),
-  getSessionContext: (id: string) =>
-    request(`/api/v1/sessions/${encodeURIComponent(id)}/context`, vSessionContext),
+  getSessionContext: (id: string, signal?: AbortSignal) =>
+    request(
+      `/api/v1/sessions/${encodeURIComponent(id)}/context`,
+      vSessionContext,
+      signal !== undefined ? { signal } : {},
+    ),
   getSessionTree: (id: string) =>
     request(`/api/v1/sessions/${encodeURIComponent(id)}/tree`, vSessionTree),
   navigateSession: (

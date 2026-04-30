@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type ReactElement } from "react";
-import { ChevronDown, ChevronRight, Code2, Loader2, RefreshCw, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { ChevronDown, ChevronRight, Code2, Loader2, RefreshCw, Search, X } from "lucide-react";
+import { Highlight, themes as prismThemes } from "prism-react-renderer";
 import { api, ApiError, type ContextTurn, type SessionContextResponse } from "../lib/api-client";
 import { useSessionStore } from "../store/session-store";
 
@@ -26,27 +27,53 @@ export function ContextInspectorPanel() {
   const agentEndCount = useSessionStore((s) =>
     sessionId !== undefined ? (s.agentEndCountBySession[sessionId] ?? 0) : 0,
   );
+  // Ctx1 — live updates between agent_end events. Subscribe to the
+  // session-store's streaming text + flag so we can synthesize a
+  // tail "streaming assistant" row in the message list while the
+  // turn is in flight. Cost / token totals update on agent_end as
+  // before; this just keeps the message list from looking frozen
+  // mid-turn.
+  const isStreaming = useSessionStore((s) =>
+    sessionId !== undefined ? (s.streamingBySession[sessionId] ?? false) : false,
+  );
+  const streamingText = useSessionStore((s) =>
+    sessionId !== undefined ? (s.streamingTextBySession[sessionId] ?? "") : "",
+  );
 
   const [data, setData] = useState<SessionContextResponse | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [turnsExpanded, setTurnsExpanded] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
+  const [search, setSearch] = useState(""); // Ctx6 — filter the message list
   const [rawView, setRawView] = useState<{ index: number; payload: unknown } | undefined>(
     undefined,
   );
+  // Ctx2 — abort any in-flight refresh when a new one starts so a
+  // slow earlier response can't clobber a fresh one. Mirrors the
+  // pattern in SearchPanel.
+  const abortRef = useRef<AbortController | undefined>(undefined);
 
   const refresh = async (): Promise<void> => {
     if (sessionId === undefined) {
       setData(undefined);
       return;
     }
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     setError(undefined);
     try {
-      const r = await api.getSessionContext(sessionId);
+      const r = await api.getSessionContext(sessionId, controller.signal);
+      if (controller.signal.aborted) return;
       setData(r);
     } catch (err) {
+      // Aborts (from a newer refresh racing the older one) are
+      // expected; never surface as errors.
+      if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
+        return;
+      }
       // 404 just means the session isn't loaded yet — clear state
       // rather than scaring the user with a red banner.
       if (err instanceof ApiError && err.status === 404) {
@@ -56,7 +83,7 @@ export function ContextInspectorPanel() {
         setError(err instanceof ApiError ? err.code : (err as Error).message);
       }
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   };
 
@@ -66,6 +93,14 @@ export function ContextInspectorPanel() {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, agentEndCount]);
+
+  // Cancel any in-flight request on unmount.
+  useEffect(
+    () => () => {
+      abortRef.current?.abort();
+    },
+    [],
+  );
 
   if (sessionId === undefined) {
     return (
@@ -117,6 +152,11 @@ export function ContextInspectorPanel() {
               showThinking={showThinking}
               onToggleThinking={() => setShowThinking((v) => !v)}
               onViewRaw={(index, payload) => setRawView({ index, payload })}
+              search={search}
+              onSearchChange={setSearch}
+              {...(isStreaming && streamingText.length > 0
+                ? { streamingTail: { content: streamingText } }
+                : {})}
             />
           </>
         )}
@@ -594,17 +634,41 @@ function MessageList({
   showThinking,
   onToggleThinking,
   onViewRaw,
+  search,
+  onSearchChange,
+  streamingTail,
 }: {
   messages: Array<Record<string, unknown>>;
   showThinking: boolean;
   onToggleThinking: () => void;
   onViewRaw: (index: number, payload: unknown) => void;
+  /** Ctx6 — case-insensitive substring filter against role + preview. */
+  search: string;
+  onSearchChange: (next: string) => void;
+  /** Ctx1 — synthetic tail row for the streaming-in-progress assistant. */
+  streamingTail?: { content: string };
 }) {
+  // Ctx6 — case-insensitive search across role + preview text. Empty
+  // query means "no filter" (the common case). Indexes are
+  // preserved in the filtered view so onViewRaw still passes the
+  // ORIGINAL message index to the raw-JSON modal.
+  const q = search.trim().toLowerCase();
+  const filtered = useMemo(() => {
+    if (q.length === 0) return messages.map((m, i) => ({ msg: m, originalIndex: i }));
+    return messages
+      .map((m, i) => ({ msg: m, originalIndex: i }))
+      .filter(({ msg }) => {
+        const role = typeof msg.role === "string" ? msg.role.toLowerCase() : "";
+        if (role.includes(q)) return true;
+        const preview = extractPreview(msg, true).toLowerCase();
+        return preview.includes(q);
+      });
+  }, [messages, q]);
   return (
     <div className="px-2 py-2">
-      <div className="mb-1 flex items-center justify-between px-1">
-        <span className="text-[10px] uppercase tracking-wider text-neutral-400">
-          Messages ({messages.length})
+      <div className="mb-1 flex items-center justify-between gap-2 px-1">
+        <span className="shrink-0 text-[10px] uppercase tracking-wider text-neutral-400">
+          Messages ({q.length > 0 ? `${filtered.length}/${messages.length}` : messages.length})
         </span>
         <label className="flex items-center gap-1 text-[10px] text-neutral-500 hover:text-neutral-300">
           <input
@@ -616,16 +680,56 @@ function MessageList({
           Show thinking blocks
         </label>
       </div>
+      {/* Ctx6 — search box. Mounts only when there are enough
+          messages to make scrolling annoying; below ~10, scrolling
+          is fine and the input is just clutter. */}
+      {messages.length >= 10 && (
+        <div className="relative mb-1 px-1">
+          <Search
+            size={11}
+            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500"
+          />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Find in messages…"
+            className="w-full rounded border border-neutral-800 bg-neutral-950 py-1 pl-6 pr-2 text-[11px] text-neutral-200 placeholder:text-neutral-600 focus:border-neutral-600 focus:outline-none"
+          />
+        </div>
+      )}
       <ul className="space-y-1">
-        {messages.map((m, i) => (
+        {filtered.map(({ msg, originalIndex }) => (
           <MessageRow
-            key={i}
-            index={i}
-            message={m}
+            key={originalIndex}
+            index={originalIndex}
+            message={msg}
             showThinking={showThinking}
-            onViewRaw={() => onViewRaw(i, m)}
+            onViewRaw={() => onViewRaw(originalIndex, msg)}
           />
         ))}
+        {/* Ctx1 — streaming tail row. Only renders when the agent is
+            actively generating; transitions to a real assistant
+            message in `messages` on agent_end (route refetches
+            within the same effect). The truncate matches the rest
+            of the list visually; the row is non-interactive (no
+            raw-view button) since the underlying message doesn't
+            exist yet. */}
+        {streamingTail !== undefined && q.length === 0 && (
+          <li className="rounded border border-violet-700/40 bg-violet-900/10">
+            <div className="flex items-start gap-2 px-2 py-1.5">
+              <Loader2 size={11} className="mt-0.5 shrink-0 animate-spin text-violet-300" />
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="rounded bg-violet-900/40 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-violet-300">
+                    assistant (streaming)
+                  </span>
+                </div>
+                <p className="line-clamp-2 text-[11px] text-neutral-300">{streamingTail.content}</p>
+              </div>
+            </div>
+          </li>
+        )}
       </ul>
     </div>
   );
@@ -644,7 +748,12 @@ function MessageRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const role = typeof message.role === "string" ? message.role : "unknown";
-  const isCompacted = role === "system" && typeof message.compacted === "boolean";
+  // Pi's compaction emits a synthesized message via
+  // `createCompactionSummaryMessage` with `role: "compactionSummary"`
+  // — distinct from any standard role. The earlier heuristic
+  // (`role: "system" && message.compacted: boolean`) never matched
+  // because the SDK doesn't tag system messages that way.
+  const isCompacted = role === "compactionSummary";
   // Synthesize a compact preview from the message — the full content
   // (and JSON) is one click away via the raw-view button.
   const preview = useMemo(() => extractPreview(message, showThinking), [message, showThinking]);
@@ -749,9 +858,32 @@ function RawJsonModal({
             <X size={14} />
           </button>
         </header>
-        <pre className="flex-1 overflow-auto whitespace-pre p-3 font-mono text-[11px] text-neutral-200">
-          {json}
-        </pre>
+        {/* Ctx5 — syntax-highlighted via prism-react-renderer (already
+            a dep from the diff palette). vsDark theme reads cleanly
+            on neutral-950 and matches the rest of the dark-themed
+            surfaces. The library renders its own <pre>/<code>; we
+            wrap in a flex container so the pre fills the modal and
+            scrolls. */}
+        <Highlight code={json} language="json" theme={prismThemes.vsDark}>
+          {({ style, tokens, getLineProps, getTokenProps }) => (
+            <pre
+              className="flex-1 overflow-auto whitespace-pre p-3 font-mono text-[11px]"
+              style={{ ...style, background: "transparent" }}
+            >
+              {tokens.map((line, i) => {
+                const lineProps = getLineProps({ line });
+                return (
+                  <div key={i} {...lineProps}>
+                    {line.map((token, key) => {
+                      const tokenProps = getTokenProps({ token });
+                      return <span key={key} {...tokenProps} />;
+                    })}
+                  </div>
+                );
+              })}
+            </pre>
+          )}
+        </Highlight>
       </div>
     </div>
   );
@@ -763,6 +895,7 @@ function roleClass(role: string): string {
   if (role === "user") return "bg-sky-900/40 text-sky-300";
   if (role === "assistant") return "bg-violet-900/40 text-violet-300";
   if (role === "tool" || role === "toolResult") return "bg-amber-900/40 text-amber-300";
+  if (role === "compactionSummary") return "bg-fuchsia-900/40 text-fuchsia-300";
   if (role === "system") return "bg-neutral-800 text-neutral-400";
   return "bg-neutral-800 text-neutral-400";
 }
