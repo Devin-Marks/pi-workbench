@@ -428,6 +428,12 @@ export async function downloadStream(
         gzip: true,
         cwd: dirname(resolved),
         portable: true,
+        // Explicitly preserve symlinks AS symlinks rather than dereferencing
+        // them. The default in tar@7 is already false, but state it here
+        // so a future major bump or copy/paste can't silently flip the
+        // behavior — a project containing a symlink to /etc/passwd would
+        // otherwise silently archive that file's contents.
+        follow: false,
         filter: (path: string) => {
           for (const part of path.split(/[/\\]/)) {
             if (TREE_SKIP_DIRS.has(part)) return false;

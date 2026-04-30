@@ -19,6 +19,7 @@ import {
   writeFile,
   writeFileBytes,
 } from "../file-manager.js";
+import { config } from "../config.js";
 import { getProject } from "../project-manager.js";
 import { searchFiles } from "../file-searcher.js";
 import { errorSchema } from "./_schemas.js";
@@ -515,6 +516,12 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
   }>(
     "/files/search",
     {
+      config: {
+        rateLimit: {
+          max: config.rateLimits.searchMax,
+          timeWindow: config.rateLimits.searchWindowMs,
+        },
+      },
       schema: {
         description:
           "Cross-project text + regex search. Uses ripgrep when available " +
@@ -625,6 +632,12 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
   }>(
     "/files/upload",
     {
+      config: {
+        rateLimit: {
+          max: config.rateLimits.uploadMax,
+          timeWindow: config.rateLimits.uploadWindowMs,
+        },
+      },
       schema: {
         description:
           `Upload one or more files into a project folder via multipart/form-data. ` +

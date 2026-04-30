@@ -4,7 +4,7 @@ import {
   liveProvidersListing,
   listSkills,
   readAuthSummary,
-  readModelsJson,
+  readModelsJsonRedacted,
   readSettings,
   removeApiKey,
   setSkillEnabled,
@@ -131,14 +131,19 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
     "/config/models",
     {
       schema: {
-        description: "Read the raw `models.json` (custom provider configurations).",
+        description:
+          "Read `models.json` (custom provider configurations). Inline `apiKey` " +
+          "and `apiKeyCommand` fields are returned as `***REDACTED***` so the " +
+          "raw secret never leaves the server. The persisted file is unchanged " +
+          "— PUT /config/models takes the actual values; the redaction is on " +
+          "the read path only.",
         tags: ["config"],
         response: { 200: modelsJsonSchema, 500: errorSchema },
       },
     },
     async (_req, reply) => {
       try {
-        return await readModelsJson();
+        return await readModelsJsonRedacted();
       } catch (err) {
         return internalError(reply, err);
       }

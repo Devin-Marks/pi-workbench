@@ -13,19 +13,54 @@ spec:
       labels:
         app: pi-workbench
     spec:
+      # Pod-level security context — these apply to every container.
+      # `fsGroup` + `fsGroupChangePolicy: OnRootMismatch` lets the kubelet
+      # chown the volume mounts to GID 1000 on first attach, replacing
+      # the previous `chmod -R 777` init container (which was a wildly
+      # permissive mode that defeated the purpose of fsGroup).
       securityContext:
+        runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         - name: volume-permissions
+          # Init container kept for clusters whose CSI driver doesn't
+          # honor fsGroup. Replaces the previous `chmod -R 777` with the
+          # narrower `chown 1000:1000` + `chmod 700` (writes only by
+          # owner) so a container escape can't read /home/pi/.pi/agent's
+          # auth.json from another UID. If your CSI driver applies
+          # fsGroup correctly, you can delete this init container
+          # entirely — kubelet will do the chown for you.
           image: busybox:1.36
           command:
             [
               "sh",
               "-c",
-              "mkdir -p /workspace /home/pi/.pi/agent /home/pi/.pi-workbench && chmod -R 777 /workspace /home/pi/.pi/agent /home/pi/.pi-workbench || true",
+              "mkdir -p /workspace /home/pi/.pi/agent /home/pi/.pi-workbench && chown -R 1000:1000 /workspace /home/pi/.pi/agent /home/pi/.pi-workbench && chmod 700 /workspace /home/pi/.pi/agent /home/pi/.pi-workbench || true",
             ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              # CHOWN is required for `chown -R 1000:1000`. Without it
+              # the init container fails on the chown step. We don't
+              # need to run as root for this — the busybox shell does
+              # the chown via its own UID.
+              add: ["CHOWN", "FOWNER"]
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              memory: 32Mi
+              cpu: 10m
+            limits:
+              memory: 64Mi
+              cpu: 100m
           volumeMounts:
             - name: workspace
               mountPath: /workspace
@@ -37,6 +72,17 @@ spec:
         - name: pi-workbench
           image: pi-workbench:latest
           imagePullPolicy: IfNotPresent
+          # Container-level security context. The application only writes
+          # to bind-mounted volumes (workspace, pi-config, workbench-data),
+          # so the root filesystem can be read-only.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
           ports:
             - containerPort: 3000
               name: http

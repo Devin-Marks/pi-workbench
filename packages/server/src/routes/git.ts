@@ -24,6 +24,7 @@ import {
   stagePaths,
   unstagePaths,
 } from "../git-runner.js";
+import { config } from "../config.js";
 import { getProject } from "../project-manager.js";
 import { errorSchema } from "./_schemas.js";
 
@@ -599,7 +600,17 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
           additionalProperties: false,
           properties: {
             projectId: { type: "string", minLength: 1 },
-            paths: { type: "array", items: { type: "string", minLength: 1 }, minItems: 1 },
+            paths: {
+              type: "array",
+              items: { type: "string", minLength: 1, maxLength: 4096 },
+              minItems: 1,
+              // Hard cap to keep argv under typical OS limits (~128KB on
+              // Linux). Single-tenant + trusted user, so this is mostly
+              // a guard against accidental loops or oversized JSON
+              // bodies; legitimate stage/unstage/revert operations on
+              // even a very wide repo land well under 1000 paths.
+              maxItems: 1000,
+            },
           },
         },
         response: {
@@ -634,7 +645,17 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
           additionalProperties: false,
           properties: {
             projectId: { type: "string", minLength: 1 },
-            paths: { type: "array", items: { type: "string", minLength: 1 }, minItems: 1 },
+            paths: {
+              type: "array",
+              items: { type: "string", minLength: 1, maxLength: 4096 },
+              minItems: 1,
+              // Hard cap to keep argv under typical OS limits (~128KB on
+              // Linux). Single-tenant + trusted user, so this is mostly
+              // a guard against accidental loops or oversized JSON
+              // bodies; legitimate stage/unstage/revert operations on
+              // even a very wide repo land well under 1000 paths.
+              maxItems: 1000,
+            },
           },
         },
         response: {
@@ -675,7 +696,17 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
           additionalProperties: false,
           properties: {
             projectId: { type: "string", minLength: 1 },
-            paths: { type: "array", items: { type: "string", minLength: 1 }, minItems: 1 },
+            paths: {
+              type: "array",
+              items: { type: "string", minLength: 1, maxLength: 4096 },
+              minItems: 1,
+              // Hard cap to keep argv under typical OS limits (~128KB on
+              // Linux). Single-tenant + trusted user, so this is mostly
+              // a guard against accidental loops or oversized JSON
+              // bodies; legitimate stage/unstage/revert operations on
+              // even a very wide repo land well under 1000 paths.
+              maxItems: 1000,
+            },
           },
         },
         response: {
@@ -837,6 +868,12 @@ export const gitRoutes: FastifyPluginAsync = async (fastify) => {
   }>(
     "/git/push",
     {
+      config: {
+        rateLimit: {
+          max: config.rateLimits.pushMax,
+          timeWindow: config.rateLimits.pushWindowMs,
+        },
+      },
       schema: {
         description:
           "Push to a remote. With no `remote`/`branch` body fields, runs " +

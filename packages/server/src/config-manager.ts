@@ -113,6 +113,33 @@ export async function readModelsJson(): Promise<ModelsJson> {
   return { providers: r.providers as Record<string, ProviderConfig> };
 }
 
+/**
+ * Like readModelsJson but with secret-shaped fields replaced with a literal
+ * sentinel. Used by the GET /config/models route so an inline `apiKey` in
+ * models.json (the pi SDK accepts both inline keys and `apiKeyCommand`) is
+ * never echoed back to a browser or to an operator's log shipper.
+ *
+ * The persisted file is unchanged — writeModelsJson takes the actual
+ * shape; this redaction is purely on the read path.
+ */
+const SECRET_PLACEHOLDER = "***REDACTED***";
+export async function readModelsJsonRedacted(): Promise<ModelsJson> {
+  const raw = await readModelsJson();
+  const out: Record<string, ProviderConfig> = {};
+  for (const [name, provider] of Object.entries(raw.providers)) {
+    out[name] = redactProviderConfig(provider);
+  }
+  return { providers: out };
+}
+
+function redactProviderConfig(p: ProviderConfig): ProviderConfig {
+  const { apiKey, apiKeyCommand, ...rest } = p;
+  const redacted: ProviderConfig = { ...rest };
+  if (apiKey !== undefined) redacted.apiKey = SECRET_PLACEHOLDER;
+  if (apiKeyCommand !== undefined) redacted.apiKeyCommand = SECRET_PLACEHOLDER;
+  return redacted;
+}
+
 export async function writeModelsJson(data: ModelsJson): Promise<void> {
   await atomicWriteJson(MODELS_FILE(), data);
 }

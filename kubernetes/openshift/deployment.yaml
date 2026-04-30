@@ -13,11 +13,40 @@ spec:
         app: pi-workbench
     spec:
       serviceAccountName: pi-workbench
+      # Pod-level security context. OpenShift's `restricted-v2` SCC will
+      # typically inject a UID for you, but specifying these here gives
+      # a stable, audit-friendly baseline that works on clusters with
+      # looser SCC defaults too. Verify your cluster's SCC binding
+      # accepts these (see kubernetes/DEPLOY.md).
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         - name: volume-permissions
+          # Replaces the previous `chmod -R 777` with the narrower
+          # `chown 1000:1000` + `chmod 700`. See kubernetes/kube/deployment.yaml
+          # for the rationale (security review 2026-04-30).
           image: busybox:1.36
           command:
-            ["chmod", "-R", "777", "/workspace", "/home/pi/.pi/agent", "/home/pi/.pi-workbench"]
+            [
+              "sh",
+              "-c",
+              "mkdir -p /workspace /home/pi/.pi/agent /home/pi/.pi-workbench && chown -R 1000:1000 /workspace /home/pi/.pi/agent /home/pi/.pi-workbench && chmod 700 /workspace /home/pi/.pi/agent /home/pi/.pi-workbench || true",
+            ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER"]
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              memory: 32Mi
+              cpu: 10m
+            limits:
+              memory: 64Mi
+              cpu: 100m
           volumeMounts:
             - name: workspace
               mountPath: /workspace
@@ -29,6 +58,12 @@ spec:
         - name: pi-workbench
           image: image-registry.openshift-image-registry.svc:5000/pi-workbench/pi-workbench:latest
           imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
           ports:
             - containerPort: 3000
               name: http

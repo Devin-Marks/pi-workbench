@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import type { MultipartFile } from "@fastify/multipart";
+import { config } from "../config.js";
 import { getSession, type LiveSession } from "../session-registry.js";
 import { errorSchema } from "./_schemas.js";
 
@@ -17,6 +18,7 @@ import { errorSchema } from "./_schemas.js";
 
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const MAX_IMAGES_PER_PROMPT = 4;
+const MAX_TEXT_FILES_PER_PROMPT = 4;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 /**
  * Cap how much a single text attachment can contribute to the prompt
@@ -26,6 +28,14 @@ const MAX_FILE_BYTES = 10 * 1024 * 1024;
  * silently blowing past the model's context window.
  */
 const MAX_TEXT_PREPEND_BYTES = 256 * 1024;
+/**
+ * Hard cap on the assembled prompt text (user input + every prepended
+ * text-file body) before it goes to the SDK. 1 MB is well above the
+ * largest reasonable single-prompt payload and well below most model
+ * context windows; anything beyond it is almost certainly an attempt
+ * to burn LLM tokens / context budget.
+ */
+const MAX_COMPOSED_PROMPT_BYTES = 1024 * 1024;
 
 interface ParsedImage {
   /** Base64-encoded image data (no data URL prefix). */
@@ -101,6 +111,12 @@ async function parseMultipart(
     // best-effort UTF-8 decode below converts garbled binary to
     // U+FFFD replacement chars and the model gets noise — better
     // than silently dropping the attachment.
+    if (textFiles.length >= MAX_TEXT_FILES_PER_PROMPT) {
+      return {
+        error: "too_many_text_files",
+        message: `Up to ${MAX_TEXT_FILES_PER_PROMPT} text attachments per prompt; got more.`,
+      };
+    }
     let content = buf.toString("utf8");
     let truncated = false;
     if (content.length > MAX_TEXT_PREPEND_BYTES) {
@@ -206,6 +222,15 @@ export const promptRoutes: FastifyPluginAsync = async (fastify) => {
   }>(
     "/sessions/:id/prompt",
     {
+      config: {
+        // Cost cap: each prompt costs LLM tokens. The default of 60/min is
+        // far above interactive use; a leaked-token loop hits the cap fast.
+        // Tune via RATE_LIMIT_PROMPT_*.
+        rateLimit: {
+          max: config.rateLimits.promptMax,
+          timeWindow: config.rateLimits.promptWindowMs,
+        },
+      },
       schema: {
         description:
           "Send a prompt to the session. Returns 202 immediately; the agent " +
@@ -308,6 +333,19 @@ export const promptRoutes: FastifyPluginAsync = async (fastify) => {
       } else {
         promptText = req.body.text;
         streamingBehavior = req.body.streamingBehavior;
+      }
+
+      // Hard cap on the assembled prompt text. Per-file caps already
+      // exist (10 MB upload, ~256 KB text-prepend per file, max 4 text
+      // files) but a 4-attachment prompt with a long pasted user text
+      // could still cumulatively exceed what's reasonable to send to
+      // an LLM. 1 MB is well above any realistic single prompt.
+      const promptBytes = Buffer.byteLength(promptText, "utf8");
+      if (promptBytes > MAX_COMPOSED_PROMPT_BYTES) {
+        return reply.code(413).send({
+          error: "prompt_too_large",
+          message: `Composed prompt is ${promptBytes} bytes; limit is ${MAX_COMPOSED_PROMPT_BYTES}.`,
+        });
       }
 
       const opts: Parameters<typeof live.session.prompt>[1] = {};

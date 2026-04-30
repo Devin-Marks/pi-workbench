@@ -7,6 +7,7 @@ import {
   SessionNotFoundError,
 } from "../session-registry.js";
 import { readSettings, withSettingsLock, writeSettings } from "../config-manager.js";
+import { config } from "../config.js";
 import { errorSchema, liveSummaryBody, liveSummarySchema } from "./_schemas.js";
 
 function notFound(reply: FastifyReply): FastifyReply {
@@ -58,6 +59,12 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
   }>(
     "/sessions/:id/steer",
     {
+      config: {
+        rateLimit: {
+          max: config.rateLimits.promptMax,
+          timeWindow: config.rateLimits.promptWindowMs,
+        },
+      },
       schema: {
         description:
           'Queue a message for an in-progress agent run. `mode: "steer"` ' +
@@ -206,6 +213,12 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
   }>(
     "/sessions/:id/navigate",
     {
+      config: {
+        rateLimit: {
+          max: config.rateLimits.promptMax,
+          timeWindow: config.rateLimits.promptWindowMs,
+        },
+      },
       schema: {
         description:
           "Navigate the session leaf to a different entry on its tree. " +
@@ -268,6 +281,12 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post<{ Params: { id: string }; Body: { customInstructions?: string } }>(
     "/sessions/:id/compact",
     {
+      config: {
+        rateLimit: {
+          max: config.rateLimits.promptMax,
+          timeWindow: config.rateLimits.promptWindowMs,
+        },
+      },
       schema: {
         description:
           "Manually compact the session context. Aborts any in-flight " +

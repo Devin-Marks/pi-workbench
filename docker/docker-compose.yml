@@ -26,7 +26,12 @@ services:
     container_name: ${CONTAINER_NAME:-pi-workbench}
     restart: unless-stopped
     ports:
-      - "${HOST_PORT:-3000}:3000"
+      # Bind to localhost ONLY by default. Operators who want LAN access
+      # can change this to "${HOST_PORT:-3000}:3000" (no 127.0.0.1: prefix)
+      # — but should ALSO set UI_PASSWORD/JWT_SECRET (or API_KEY) first,
+      # since the container speaks plain HTTP. Per SECURITY.md, never
+      # network-expose without TLS at a reverse proxy.
+      - "127.0.0.1:${HOST_PORT:-3000}:3000"
     volumes:
       # User code lives here. Projects are subfolders. Keep this on a
       # disk you back up.

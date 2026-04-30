@@ -60,6 +60,27 @@ export async function buildServer(): Promise<FastifyInstance> {
           };
         },
       },
+      // Belt-and-suspenders redaction of secret-shaped log fields. Pino's
+      // redact runs across every log line (not just the `req` serializer),
+      // so an operator-supplied API key in a request body — or a JWT in
+      // an Authorization header that bypasses the serializer — never lands
+      // in stdout / journald / log shippers in cleartext.
+      //
+      // Wildcard syntax (`body.providers["*"].apiKey`) follows pino's
+      // documented JSONPath-lite — only key segments separated by `.` and
+      // `[*]` patterns work; deeper nesting needs explicit paths.
+      redact: {
+        paths: [
+          "headers.authorization",
+          "req.headers.authorization",
+          "body.password",
+          "body.apiKey",
+          'body.providers["*"].apiKey',
+          'body.providers["*"].apiKeyCommand',
+        ],
+        censor: "[REDACTED]",
+        remove: false,
+      },
     },
     disableRequestLogging: config.isTest,
     trustProxy: config.trustProxy,
@@ -92,6 +113,47 @@ export async function buildServer(): Promise<FastifyInstance> {
   // route applies its own limit via route-level `config.rateLimit`.
   await fastify.register(rateLimit, { global: false });
 
+  // Security headers — set on every response, both API and static.
+  // Done as an onSend hook rather than via @fastify/helmet to avoid the
+  // extra dep; the set we need is small and stable.
+  //
+  // CSP rationale (see also packages/client/index.html):
+  //   - script-src 'self' — Vite's bundle. No inline-script is rendered.
+  //   - style-src 'self' 'unsafe-inline' — required for Tailwind v4's
+  //     inline @style emission and the CodeMirror inline cursor styles.
+  //   - img-src 'self' data: blob: — chat attachments + diff inline icons.
+  //   - connect-src 'self' ws: wss: — WebSocket terminal. ws/wss broad
+  //     (rather than self) because operators behind a TLS-terminating
+  //     proxy may speak wss while the browser sees the proxy's host.
+  //   - worker-src 'self' blob: — Vite PWA service worker.
+  //   - object-src 'none', base-uri 'self', frame-ancestors 'none' —
+  //     defense in depth against legacy / clickjacking surfaces.
+  fastify.addHook("onSend", async (_req, reply) => {
+    reply.header("X-Content-Type-Options", "nosniff");
+    reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
+    reply.header("X-Frame-Options", "DENY");
+    // HSTS is harmless on plain HTTP (browsers ignore it without TLS),
+    // useful behind a TLS proxy. 180 days is a balance: long enough to
+    // matter, short enough that an operator can recover from accidentally
+    // setting up HTTPS wrong.
+    reply.header("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+    reply.header(
+      "Content-Security-Policy",
+      [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: blob:",
+        "font-src 'self' data:",
+        "connect-src 'self' ws: wss:",
+        "worker-src 'self' blob:",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "frame-ancestors 'none'",
+      ].join("; "),
+    );
+  });
+
   // WebSocket support for the integrated terminal (Phase 11). Must be
   // registered before any route uses `{ websocket: true }`. Inherits
   // the same listening server as Fastify; no extra port needed.
@@ -105,7 +167,12 @@ export async function buildServer(): Promise<FastifyInstance> {
   await fastify.register(multipart, {
     limits: {
       fileSize: 10 * 1024 * 1024, // 10 MB / file (matches dev plan)
-      files: 8, // 4 image cap × 2 headroom for mixed image+text uploads
+      // Tightened from 8 → 6 after security review: the prompt route
+      // accepts at most 4 images + 4 text files, so 6 is the smallest
+      // cap that doesn't constrain real use (one operator may hit
+      // 4-images / 2-text or vice versa). Keeps multipart parsing
+      // bounded as defense in depth.
+      files: 6,
       fields: 8,
     },
     attachFieldsToBody: false,
@@ -151,8 +218,16 @@ export async function buildServer(): Promise<FastifyInstance> {
 
     // /api/docs* gating — these are not Fastify-defined routes (they're
     // injected by @fastify/swagger-ui) so we can't rely on route config.
+    // Three layered checks:
+    //   1. EXPOSE_DOCS=false → 404 unconditionally (production default).
+    //   2. Auth disabled + EXPOSE_DOCS=true → open (dev default).
+    //   3. Auth enabled → require a valid token even when docs are exposed.
     const isDocs = path === "/api/docs" || path.startsWith("/api/docs/");
     if (isDocs) {
+      if (!config.exposeDocs) {
+        reply.code(404).send({ error: "not_found" });
+        return;
+      }
       if (!authEnabled()) return;
       const presented = extractBearer(req.headers.authorization);
       if (

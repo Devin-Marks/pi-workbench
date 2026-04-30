@@ -95,7 +95,12 @@ if (UI_PASSWORD !== undefined && JWT_SECRET === undefined) {
 
 export const config = Object.freeze({
   port: readInt("PORT", 3000),
-  host: readEnv("HOST") ?? "0.0.0.0",
+  // HOST default depends on NODE_ENV. Production binds 0.0.0.0 (Docker
+  // image's normal mode); dev binds 127.0.0.1 so a `npm run dev` on a
+  // laptop doesn't silently expose the agent's shell + filesystem to
+  // anyone on the same WiFi/VLAN. Operators who want LAN access in dev
+  // can set HOST=0.0.0.0 explicitly.
+  host: readEnv("HOST") ?? (process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1"),
   logLevel: readEnv("LOG_LEVEL") ?? "info",
   isTest: (readEnv("NODE_ENV") ?? "") === "test",
   trustProxy: readBool("TRUST_PROXY", false),
@@ -115,6 +120,18 @@ export const config = Object.freeze({
    * where provider config is managed at the deploy level.
    */
   minimalUi: readBool("MINIMAL_UI", false),
+  /**
+   * Whether `/api/docs` (Swagger UI + OpenAPI JSON spec) is reachable.
+   * Defaults to true so Docker / production deploys keep working without
+   * extra config (the README quickstart documents `/api/docs`). When
+   * auth is enabled, the existing token check still gates the docs;
+   * when auth is disabled, the docs are an info-leak surface (route
+   * catalogue, body schemas), so security-conscious operators in
+   * unauthenticated public-internet deployments should set
+   * `EXPOSE_DOCS=false` — though that combo is itself discouraged
+   * (see SECURITY.md: never network-expose without auth + TLS).
+   */
+  exposeDocs: readBool("EXPOSE_DOCS", true),
   auth: Object.freeze({
     uiPassword: UI_PASSWORD,
     jwtSecret: JWT_SECRET,
@@ -122,6 +139,31 @@ export const config = Object.freeze({
     jwtExpiresInSeconds: readInt("JWT_EXPIRES_IN_SECONDS", 60 * 60 * 24 * 7),
     loginRateLimitMax: readInt("RATE_LIMIT_LOGIN_MAX", 10),
     loginRateLimitWindowMs: readInt("RATE_LIMIT_LOGIN_WINDOW_MS", 60_000),
+  }),
+  /**
+   * Per-route rate limits applied to the cost-heavy / disk-heavy / CPU-heavy
+   * routes. Defaults are conservative — enough headroom for an interactive
+   * user, low enough that a leaked-token spam loop hits the cap fast.
+   * Operators with higher legitimate volume can raise via env.
+   */
+  rateLimits: Object.freeze({
+    // /sessions/:id/{prompt,steer,compact,navigate} — per-user prompt
+    // floor. 60 / minute = 1 / second sustained, far above interactive
+    // typing speed; a runaway script gets capped in roughly 1 minute.
+    promptMax: readInt("RATE_LIMIT_PROMPT_MAX", 60),
+    promptWindowMs: readInt("RATE_LIMIT_PROMPT_WINDOW_MS", 60_000),
+    // /files/upload — disk fill. 30 / minute keeps an attentive user
+    // unblocked while capping a fill-the-disk loop.
+    uploadMax: readInt("RATE_LIMIT_UPLOAD_MAX", 30),
+    uploadWindowMs: readInt("RATE_LIMIT_UPLOAD_WINDOW_MS", 60_000),
+    // /files/search — CPU. ripgrep walks the workspace; each search is
+    // bounded by ripgrep but a tight loop still spins a CPU core.
+    searchMax: readInt("RATE_LIMIT_SEARCH_MAX", 60),
+    searchWindowMs: readInt("RATE_LIMIT_SEARCH_WINDOW_MS", 60_000),
+    // /git/push — network amplification + rate-limited by the git remote.
+    // Conservative — pushing 10x in a minute is almost always a mistake.
+    pushMax: readInt("RATE_LIMIT_PUSH_MAX", 10),
+    pushWindowMs: readInt("RATE_LIMIT_PUSH_WINDOW_MS", 60_000),
   }),
   corsOrigin: CORS_ORIGIN,
 } as const);
