@@ -70,6 +70,8 @@ spec:
           env:
             - name: NODE_ENV
               value: production
+            - name: HOME
+              value: /home/pi
             - name: HOST
               value: 0.0.0.0
             - name: PORT
@@ -92,21 +94,43 @@ spec:
               value: ""
             - name: MINIMAL_UI
               value: "false"
+            # When `true` (default) and the user logs in with the
+            # secret-supplied UI_PASSWORD AND no on-disk hash exists
+            # yet, the issued token is scoped to POST /auth/change-
+            # password — the UI forces the user to pick a new password
+            # before any other API call works. The new password's
+            # scrypt hash is persisted to
+            # ${WORKBENCH_DATA_DIR}/password-hash on the data-dir PVC
+            # and the secret-supplied UI_PASSWORD is ignored on
+            # subsequent logins. Set to "false" to keep the
+            # secret-supplied password as the canonical credential
+            # (e.g. when it's rotated by an external operator).
+            - name: REQUIRE_PASSWORD_CHANGE
+              value: "true"
+            # JWT_SECRET is OPTIONAL. When UI_PASSWORD is set and
+            # JWT_SECRET is unset, the server generates one on first
+            # boot and persists it to ${WORKBENCH_DATA_DIR}/jwt-secret
+            # on the data-dir PVC, so issued tokens survive restarts.
+            # Set it explicitly only if you want to manage rotation
+            # out-of-band.
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: pi-workbench-secret
                   key: JWT_SECRET
+                  optional: true
             - name: UI_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: pi-workbench-secret
                   key: UI_PASSWORD
+                  optional: true
             - name: API_KEY
               valueFrom:
                 secretKeyRef:
                   name: pi-workbench-secret
                   key: API_KEY
+                  optional: true
           livenessProbe:
             httpGet:
               path: /api/v1/health

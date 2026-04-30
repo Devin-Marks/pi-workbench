@@ -27,8 +27,9 @@ workspace root. The threat model assumes:
 - The HTTP surface is **not** safe to expose to the public internet over
   plain HTTP. Always terminate TLS at a reverse proxy (Caddy, nginx,
   Traefik) when network-exposing the workbench, and always set
-  `UI_PASSWORD` + `JWT_SECRET` (or `API_KEY`) for any non-loopback
-  deployment.
+  `UI_PASSWORD` (or `API_KEY`) for any non-loopback deployment.
+  `JWT_SECRET` is auto-generated and persisted to the data-dir PVC /
+  bind-mount on first boot — set it explicitly only to override.
 - Cross-project / cross-tenant isolation is **out of scope**. The project
   registry trusts every project path the user adds; once added, the agent
   can read and modify anything inside that path.

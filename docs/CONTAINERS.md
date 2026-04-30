@@ -98,8 +98,8 @@ container-relevant ones:
 | `WORKSPACE_PATH` | `/workspace` | Fixed inside the container. |
 | `PI_CONFIG_DIR` | `/home/pi/.pi/agent` | Fixed inside the container. |
 | `WORKBENCH_DATA_DIR` | `/home/pi/.pi-workbench` | Fixed inside the container. |
-| `UI_PASSWORD` | (unset) | Browser login password. Requires `JWT_SECRET`. |
-| `JWT_SECRET` | (unset) | HS256 signing key. Generate with `openssl rand -hex 32`. |
+| `UI_PASSWORD` | (unset) | Browser login password. `JWT_SECRET` auto-generates if not set. |
+| `JWT_SECRET` | (unset, auto-generated) | HS256 signing key. When `UI_PASSWORD` is set and this is empty, persisted to `${WORKBENCH_DATA_DIR}/jwt-secret` on first boot. Override by setting this env (`openssl rand -hex 32`). |
 | `API_KEY` | (unset) | Static bearer token for programmatic clients. |
 | `LOG_LEVEL` | `info` | Pino level: `trace` / `debug` / `info` / `warn` / `error`. |
 | `TRUST_PROXY` | `false` | Set to `true` when behind a reverse proxy so login rate-limit applies per real client IP. |
@@ -118,7 +118,7 @@ single-host deploy. Quickstart:
 ```bash
 cp docker/.env.example docker/.env
 # edit docker/.env — at minimum set HOST_PORT and (for any non-loopback
-# deploy) UI_PASSWORD + JWT_SECRET, or API_KEY
+# deploy) UI_PASSWORD (JWT_SECRET auto-generates), or API_KEY
 cd docker && docker compose up -d --build
 ```
 

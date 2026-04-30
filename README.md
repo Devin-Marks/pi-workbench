@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/icon.png" alt="pi-workbench" width="120" height="120"/>
+</p>
+
 # pi-workbench
 
 A browser-based workbench for the [pi coding agent](https://github.com/badlogic/pi-mono).
@@ -39,7 +43,8 @@ covers production deploy with TLS + reverse proxy.
 git clone https://github.com/Devin-Marks/pi-workbench.git
 cd pi-workbench
 cp docker/.env.example docker/.env
-# edit docker/.env — set UI_PASSWORD + JWT_SECRET, or API_KEY, or leave both
+# edit docker/.env — set UI_PASSWORD (JWT_SECRET is auto-generated and
+# persisted to the data dir on first boot), or API_KEY, or leave both
 # blank for local-only no-auth use
 cd docker && docker compose up -d --build
 ```
@@ -101,8 +106,9 @@ node-pty against the runtime Node version automatically.
 | `CLIENT_DIST_PATH` | `<server-dist>/../../client/dist` | Built Vite output served by Fastify in production. |
 | `SERVE_CLIENT` | `true` | Set to `false` to skip static-serving (useful when running the dev Vite server in front of the API). |
 | `SESSION_DIR` | `${WORKSPACE_PATH}/.pi/sessions` | JSONL session storage. |
-| `UI_PASSWORD` | (unset) | If set, enables browser JWT auth. Requires `JWT_SECRET`. |
-| `JWT_SECRET` | (unset) | HS256 signing key. Generate with `openssl rand -hex 32`. Rotating immediately invalidates all sessions. |
+| `UI_PASSWORD` | (unset) | If set, enables browser JWT auth. `JWT_SECRET` is auto-generated on first boot if not supplied. After the user changes it via the UI, a scrypt hash is persisted to `${WORKBENCH_DATA_DIR}/password-hash` and this env var is ignored on subsequent logins. |
+| `REQUIRE_PASSWORD_CHANGE` | `true` | When the user logs in with the env-supplied `UI_PASSWORD` and no on-disk hash exists yet, the issued token is scoped to `POST /auth/change-password` and the UI forces the user to pick a new password before continuing. Set to `false` to keep the env-supplied password as-is (useful when `UI_PASSWORD` is itself sourced from a sealed secret you rotate out-of-band). |
+| `JWT_SECRET` | (unset, auto-generated) | HS256 signing key. **Optional** — when `UI_PASSWORD` is set and `JWT_SECRET` is not, the server generates one and persists it to `${WORKBENCH_DATA_DIR}/jwt-secret` (mode 0600). The data dir is already a PVC / bind-mount in K8s and Docker, so tokens survive restarts with no extra wiring. Set this env var to override (e.g. `openssl rand -hex 32`). Delete the file to rotate. |
 | `API_KEY` | (unset) | Static bearer token for programmatic access. |
 | `JWT_EXPIRES_IN_SECONDS` | `604800` | JWT lifetime (default 7 d). |
 | `RATE_LIMIT_LOGIN_MAX` | `10` | Max `/auth/login` attempts per window. |

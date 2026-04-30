@@ -284,7 +284,25 @@ export async function buildServer(): Promise<FastifyInstance> {
       reply.code(401).send({ error: "missing_token" });
       return;
     }
-    if (verifyToken(presented) !== undefined || verifyApiKey(presented)) return;
+    const tokenPayload = verifyToken(presented);
+    if (tokenPayload !== undefined) {
+      // Initial-login tokens (issued because the user authenticated
+      // with the env-supplied UI_PASSWORD and REQUIRE_PASSWORD_CHANGE
+      // is on) are scoped to the change-password endpoint only. Every
+      // other API call returns 403 with a stable code the client uses
+      // to render the change-password screen.
+      if (tokenPayload.mustChangePassword) {
+        reply.code(403).send({
+          error: "must_change_password",
+          message:
+            "this token is scoped to POST /auth/change-password — change " +
+            "the initial password before calling other endpoints",
+        });
+        return;
+      }
+      return;
+    }
+    if (verifyApiKey(presented)) return;
     reply.code(401).send({ error: "invalid_token" });
   });
 

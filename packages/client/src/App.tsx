@@ -6,6 +6,7 @@ import { useSessionStore } from "./store/session-store";
 import { useFileStore } from "./store/file-store";
 import { useUiConfigStore } from "./store/ui-config-store";
 import { LoginScreen } from "./components/LoginScreen";
+import { ChangePasswordScreen } from "./components/ChangePasswordScreen";
 import { ProjectSidebar } from "./components/ProjectSidebar";
 import { ProjectPicker } from "./components/ProjectPicker";
 import { ChatView } from "./components/ChatView";
@@ -73,6 +74,7 @@ const noop = (): void => undefined;
 export function App() {
   const ready = useAuthStore((s) => s.ready);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
   const bootstrap = useAuthStore((s) => s.bootstrap);
   const logout = useAuthStore((s) => s.logout);
 
@@ -247,8 +249,12 @@ export function App() {
   }, [loadUiConfig]);
 
   useEffect(() => {
-    if (isAuthenticated) void loadProjects();
-  }, [isAuthenticated, loadProjects]);
+    // Don't fetch projects with a `must_change_password` token — that
+    // call would 403 and (currently) does nothing useful for the user.
+    // The change-password screen reloads projects on its own success
+    // path by transitioning isAuthenticated→true with mustChange→false.
+    if (isAuthenticated && !mustChangePassword) void loadProjects();
+  }, [isAuthenticated, mustChangePassword, loadProjects]);
 
   if (!ready) {
     return (
@@ -259,6 +265,7 @@ export function App() {
   }
 
   if (!isAuthenticated) return <LoginScreen />;
+  if (mustChangePassword) return <ChangePasswordScreen />;
 
   return (
     <div className="flex h-screen flex-col bg-neutral-950 text-neutral-100">

@@ -1,340 +1,59 @@
 import { createSHA256 } from "hash-wasm";
-import { clearStoredToken, getStoredToken } from "./auth-client";
+import { clearStoredToken, getStoredToken } from "../auth-client";
+import {
+  ApiError,
+  UNAUTHORIZED_EVENT,
+  type AuthStatusResponse,
+  type LoginResponse,
+  type ChangePasswordResponse,
+  type Project,
+  type BrowseEntry,
+  type BrowseResponse,
+  type HealthResponse,
+  type UiConfigResponse,
+  type UnifiedSession,
+  type SessionSummary,
+  type SkillSummary,
+  type ProvidersListing,
+  type AuthSummary,
+  type FileTreeNode,
+  type FileReadResponse,
+  type TurnDiffEntry,
+  type GitFileStatusKind,
+  type GitFileStatus,
+  type GitStatus,
+  type GitDiffResponse,
+  type GitLogEntry,
+  type GitLogResponse,
+  type GitBranch,
+  type GitBranchesResponse,
+  type GitRemote,
+  type GitRemotesResponse,
+  type SearchMatch,
+  type SearchResponse,
+  type SearchOptions,
+  type SessionTreeEntry,
+  type ContextTurn,
+  type ContextUsageStats,
+  type SessionContextResponse,
+  type SessionTreeResponse,
+  type UploadedFile,
+  type UploadResponse,
+  type RequestOpts,
+  type Validator,
+} from "./types";
 
-/**
- * Window event dispatched whenever an authenticated request returns 401
- * (and after the SSE reader sees a 401). The auth store subscribes to this
- * to clear `isAuthenticated` and surface the login screen. Exported so the
- * SSE reader uses the same constant — keeps the wire-name in one place.
- */
-export const UNAUTHORIZED_EVENT = "pi-workbench:unauthorized";
-
-export class ApiError extends Error {
-  readonly status: number;
-  readonly code: string;
-  constructor(status: number, code: string, message?: string) {
-    super(message ?? `${status} ${code}`);
-    this.status = status;
-    this.code = code;
-  }
-}
-
-export interface AuthStatusResponse {
-  authEnabled: boolean;
-}
-
-export interface LoginResponse {
-  token: string;
-  expiresAt: string;
-}
-
-export interface Project {
-  id: string;
-  name: string;
-  path: string;
-  createdAt: string;
-}
-
-export interface BrowseEntry {
-  name: string;
-  path: string;
-  isGitRepo: boolean;
-}
-
-export interface BrowseResponse {
-  path: string;
-  parentPath: string | null;
-  entries: BrowseEntry[];
-}
-
-export interface HealthResponse {
-  status: "ok";
-  activeSessions: number;
-  activePtys: number;
-}
-
-export interface UiConfigResponse {
-  /** Frontend "minimal" mode — see server config.minimalUi. */
-  minimal: boolean;
-  /** Absolute path to the workspace root, used by minimal-mode project create. */
-  workspaceRoot: string;
-}
-
-export interface UnifiedSession {
-  sessionId: string;
-  projectId: string;
-  isLive: boolean;
-  name?: string;
-  workspacePath: string;
-  lastActivityAt: string;
-  createdAt: string;
-  messageCount: number;
-  firstMessage: string;
-}
-
-export interface SessionSummary {
-  sessionId: string;
-  projectId: string;
-  workspacePath: string;
-  createdAt: string;
-  lastActivityAt: string;
-  isLive: boolean;
-  name?: string;
-  messageCount: number;
-  isStreaming: boolean;
-}
-
-export interface SkillSummary {
-  name: string;
-  description: string;
-  source: "global" | "project";
-  filePath: string;
-  enabled: boolean;
-  disableModelInvocation: boolean;
-}
-
-export interface ProviderModelEntry {
-  id: string;
-  name: string;
-  contextWindow: number;
-  maxTokens: number;
-  reasoning: boolean;
-  input: Array<"text" | "image">;
-  hasAuth: boolean;
-}
-
-export interface ProvidersListing {
-  providers: Array<{ provider: string; models: ProviderModelEntry[] }>;
-}
-
-export interface AuthSummary {
-  providers: Record<string, { configured: boolean; source?: string; label?: string }>;
-}
-
-export interface FileTreeNode {
-  name: string;
-  path: string;
-  type: "file" | "directory";
-  children?: FileTreeNode[];
-  truncated?: boolean;
-}
-
-export interface FileReadResponse {
-  path: string;
-  content: string;
-  size: number;
-  language: string;
-  binary: boolean;
-}
-
-export interface TurnDiffEntry {
-  file: string;
-  tool: "write" | "edit";
-  diff: string;
-  additions: number;
-  deletions: number;
-  isPureAddition: boolean;
-}
-
-export type GitFileStatusKind =
-  | "modified"
-  | "added"
-  | "deleted"
-  | "renamed"
-  | "copied"
-  | "untracked"
-  | "ignored"
-  | "conflicted"
-  | "unknown";
-
-export interface GitFileStatus {
-  path: string;
-  staged: boolean;
-  unstaged: boolean;
-  kind: GitFileStatusKind;
-  code: string;
-  originalPath?: string;
-}
-
-export interface GitStatus {
-  isGitRepo: boolean;
-  branch?: string;
-  files: GitFileStatus[];
-}
-
-export interface GitDiffResponse {
-  isGitRepo: boolean;
-  diff: string;
-}
-
-export interface GitLogEntry {
-  hash: string;
-  message: string;
-  author: string;
-  date: string;
-  /** Parent commit hashes — empty for the root, two for merges. */
-  parents: string[];
-  /** git ref decorations (e.g. "HEAD -> main", "tag: v1", "origin/main"). */
-  refs: string[];
-}
-
-export interface GitLogResponse {
-  isGitRepo: boolean;
-  commits: GitLogEntry[];
-}
-
-export interface GitBranch {
-  name: string;
-  current: boolean;
-  remote: boolean;
-}
-
-export interface GitBranchesResponse {
-  isGitRepo: boolean;
-  current?: string;
-  branches: GitBranch[];
-}
-
-export interface GitRemote {
-  name: string;
-  fetchUrl: string;
-  pushUrl: string;
-}
-
-export interface GitRemotesResponse {
-  isGitRepo: boolean;
-  remotes: GitRemote[];
-}
-
-export interface SearchMatch {
-  /** Project-relative POSIX path. */
-  path: string;
-  /** 1-based line number. */
-  line: number;
-  /** 1-based column where the match starts on that line. */
-  column: number;
-  /** Number of UTF-16 units the match spans (0 if unavailable). */
-  length: number;
-  /** Full text of the matching line, with no trailing newline. */
-  lineSnippet: string;
-}
-
-export interface SearchResponse {
-  engine: "ripgrep" | "node";
-  matches: SearchMatch[];
-  /** True when the result hit the limit and more matches exist. */
-  truncated: boolean;
-}
-
-export interface SearchOptions {
-  query: string;
-  regex?: boolean;
-  caseSensitive?: boolean;
-  includeGitignored?: boolean;
-  include?: string;
-  exclude?: string;
-  limit?: number;
-}
-
-export interface SessionTreeEntry {
-  id: string;
-  parentId: string | null;
-  /** SDK entry type — "message", "thinking_level_change", "compaction", "branch_summary", etc. */
-  type: string;
-  timestamp: string;
-  /** Set on `type === "message"` entries. */
-  role?: string;
-  /** Truncated text preview (≤200 chars). Set on text-bearing message entries. */
-  preview?: string;
-  /** User-supplied bookmark label, if present. */
-  label?: string;
-}
-
-export interface ContextTurn {
-  /** Index into the messages array of this assistant turn. */
-  index: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  totalTokens: number;
-  /** Cost in USD for this turn (sum of per-token costs). */
-  cost: number;
-  model: string;
-  provider: string;
-  /** Unix epoch ms. */
-  timestamp: number;
-  stopReason?: string;
-}
-
-export interface ContextUsageStats {
-  /** Total context window the model supports (max input tokens). */
-  contextWindow: number;
-  /** Estimated current context tokens, omitted when SDK reports unknown. */
-  tokens?: number;
-  /** Usage as fraction of contextWindow (0..1), omitted when unknown. */
-  percent?: number;
-}
-
-export interface SessionContextResponse {
-  /** Full message array as the LLM sees it (post-compaction). */
-  messages: Array<Record<string, unknown>>;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  totalCacheReadTokens: number;
-  totalCacheWriteTokens: number;
-  /** Sum of input + output + cache reads + cache writes across every turn. */
-  totalTokens: number;
-  /** Cumulative USD cost across every turn. */
-  totalCost: number;
-  /** Per-turn breakdown derived from each AssistantMessage.usage. */
-  turns: ContextTurn[];
-  contextUsage: ContextUsageStats;
-}
-
-export interface SessionTreeResponse {
-  /** Current leaf id of the session — the active branch tip. */
-  leafId: string | null;
-  /** Entry ids on the active branch path, root → leaf. Used for highlighting. */
-  branchIds: string[];
-  /** Every entry across every branch. Build the tree client-side via parentId. */
-  entries: SessionTreeEntry[];
-}
-
-export interface UploadedFile {
-  /** Absolute path the file was written to. */
-  path: string;
-  size: number;
-  /** Lowercase hex SHA-256 of the bytes the server actually wrote. */
-  sha256: string;
-}
-
-export interface UploadResponse {
-  files: UploadedFile[];
-}
+// Public type surface lives in ./types so consumers and the request
+// machinery can both import without coupling. Re-exported here so the
+// existing `import { ApiError, ... } from "../lib/api-client"` calls
+// across components continue to work without path changes.
+export * from "./types";
 
 export function onUnauthorized(handler: () => void): () => void {
   const fn = (): void => handler();
   window.addEventListener(UNAUTHORIZED_EVENT, fn);
   return () => window.removeEventListener(UNAUTHORIZED_EVENT, fn);
 }
-
-interface RequestOpts {
-  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  body?: unknown;
-  signal?: AbortSignal;
-  /** Skip the auth header even if a token is present (used by login itself). */
-  skipAuth?: boolean;
-}
-
-/**
- * A typed validator that asserts a runtime shape and produces a typed value
- * (or throws ApiError(status, "invalid_response_body")). Used at the
- * api-client boundary so we never `as T` server responses without checking.
- *
- * Use `vVoid` for routes that intentionally return an empty body.
- */
-type Validator<T> = (value: unknown, status: number) => T;
 
 function fail(status: number, hint: string): never {
   throw new ApiError(status, "invalid_response_body", hint);
@@ -364,10 +83,23 @@ function vAuthStatus(value: unknown, status: number): AuthStatusResponse {
 }
 
 function vLogin(value: unknown, status: number): LoginResponse {
-  if (!isObject(value) || typeof value.token !== "string" || typeof value.expiresAt !== "string") {
-    fail(status, "expected { token, expiresAt }");
+  if (
+    !isObject(value) ||
+    typeof value.token !== "string" ||
+    typeof value.expiresAt !== "string" ||
+    typeof value.mustChangePassword !== "boolean"
+  ) {
+    fail(status, "expected { token, expiresAt, mustChangePassword }");
   }
-  return { token: value.token, expiresAt: value.expiresAt };
+  return {
+    token: value.token,
+    expiresAt: value.expiresAt,
+    mustChangePassword: value.mustChangePassword,
+  };
+}
+
+function vChangePassword(value: unknown, status: number): ChangePasswordResponse {
+  return vLogin(value, status);
 }
 
 function vUiConfig(value: unknown, status: number): UiConfigResponse {
@@ -792,7 +524,7 @@ function vSessionContext(value: unknown, status: number): SessionContextResponse
     if (typeof t.stopReason === "string") out.stopReason = t.stopReason;
     return out;
   });
-  const cu = value.contextUsage as Record<string, unknown>;
+  const cu = value.contextUsage;
   const contextUsage: ContextUsageStats = {
     contextWindow: typeof cu.contextWindow === "number" ? cu.contextWindow : 0,
   };
@@ -1071,6 +803,11 @@ export const api = {
       body: { password },
       skipAuth: true,
     }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request("/api/v1/auth/change-password", vChangePassword, {
+      method: "POST",
+      body: { currentPassword, newPassword },
+    }),
   health: () => request("/api/v1/health", vHealth, { skipAuth: true }),
   uiConfig: () => request("/api/v1/ui-config", vUiConfig, { skipAuth: true }),
   listProjects: () => request("/api/v1/projects", vProjectList),
@@ -1119,7 +856,7 @@ export const api = {
       if (!isObject(v) || !Array.isArray(v.messages)) {
         fail(s, "expected { messages: [...] }");
       }
-      return { messages: v.messages as Array<Record<string, unknown>> };
+      return { messages: v.messages as Record<string, unknown>[] };
     }),
   disposeSession: (id: string, opts?: { hard?: boolean }) => {
     const qs = opts?.hard === true ? "?hard=1" : "";
@@ -1234,7 +971,7 @@ export const api = {
         if (!isObject(v) || typeof v.provider !== "string" || v.configured !== true) {
           fail(s, "expected { provider, configured: true }");
         }
-        return { provider: v.provider as string, configured: true as const };
+        return { provider: v.provider, configured: true as const };
       },
       { method: "PUT", body: { apiKey } },
     ),

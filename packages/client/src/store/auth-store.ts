@@ -9,10 +9,20 @@ interface AuthState {
   authRequired: boolean;
   /** True when we have a valid stored token (or auth is not required). */
   isAuthenticated: boolean;
+  /**
+   * True when the current token was issued via the env-supplied
+   * UI_PASSWORD and the server requires the user to set a new
+   * password before any other API call will succeed. The App-level
+   * gate routes to the change-password screen when this is true.
+   */
+  mustChangePassword: boolean;
   loginError: string | undefined;
   loginPending: boolean;
+  changePasswordError: string | undefined;
+  changePasswordPending: boolean;
   bootstrap: () => Promise<void>;
   login: (password: string) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -20,13 +30,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   ready: false,
   authRequired: false,
   isAuthenticated: false,
+  mustChangePassword: false,
   loginError: undefined,
   loginPending: false,
+  changePasswordError: undefined,
+  changePasswordPending: false,
   bootstrap: async () => {
     try {
       const { authEnabled } = await api.authStatus();
       if (!authEnabled) {
-        set({ ready: true, authRequired: false, isAuthenticated: true });
+        set({
+          ready: true,
+          authRequired: false,
+          isAuthenticated: true,
+          mustChangePassword: false,
+        });
         return;
       }
       const stored = getStoredToken();
@@ -34,12 +52,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         ready: true,
         authRequired: true,
         isAuthenticated: stored !== undefined,
+        mustChangePassword: stored?.mustChangePassword ?? false,
       });
     } catch (err) {
       set({
         ready: true,
         authRequired: true,
         isAuthenticated: false,
+        mustChangePassword: false,
         loginError: err instanceof Error ? err.message : "bootstrap_failed",
       });
     }
@@ -49,16 +69,44 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ loginPending: true, loginError: undefined });
     try {
       const res = await api.login(password);
-      setStoredToken({ token: res.token, expiresAt: res.expiresAt });
-      set({ isAuthenticated: true, loginPending: false });
+      setStoredToken({
+        token: res.token,
+        expiresAt: res.expiresAt,
+        mustChangePassword: res.mustChangePassword,
+      });
+      set({
+        isAuthenticated: true,
+        mustChangePassword: res.mustChangePassword,
+        loginPending: false,
+      });
     } catch (err) {
       const code = err instanceof ApiError ? err.code : "login_failed";
       set({ loginPending: false, loginError: code });
     }
   },
+  changePassword: async (currentPassword: string, newPassword: string) => {
+    if (get().changePasswordPending) return;
+    set({ changePasswordPending: true, changePasswordError: undefined });
+    try {
+      const res = await api.changePassword(currentPassword, newPassword);
+      setStoredToken({
+        token: res.token,
+        expiresAt: res.expiresAt,
+        mustChangePassword: res.mustChangePassword,
+      });
+      set({
+        isAuthenticated: true,
+        mustChangePassword: res.mustChangePassword,
+        changePasswordPending: false,
+      });
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : "change_password_failed";
+      set({ changePasswordPending: false, changePasswordError: code });
+    }
+  },
   logout: () => {
     clearStoredToken();
-    set({ isAuthenticated: false, loginError: undefined });
+    set({ isAuthenticated: false, mustChangePassword: false, loginError: undefined });
   },
 }));
 

@@ -99,7 +99,11 @@ function authorize(req: FastifyRequest): boolean {
       : undefined;
   const presented = headerToken ?? queryToken;
   if (presented === undefined) return false;
-  return verifyToken(presented) !== undefined || verifyApiKey(presented);
+  const payload = verifyToken(presented);
+  // Initial-login tokens (mustChangePassword:true) are scoped to the
+  // change-password endpoint only — refuse to open a PTY for them.
+  if (payload !== undefined && !payload.mustChangePassword) return true;
+  return verifyApiKey(presented);
 }
 
 export const terminalRoutes: FastifyPluginAsync = async (fastify) => {

@@ -13,11 +13,15 @@ For the container itself (image, volumes, resources, troubleshooting) see
 
 A short checklist that catches the common foot-guns:
 
-- [ ] `UI_PASSWORD` + `JWT_SECRET` set, OR `API_KEY` set, OR both — never
-      run a network-exposed deploy with both unset.
-- [ ] `JWT_SECRET` is from `openssl rand -hex 32` (or equivalent), not a
-      memorable string. Rotating invalidates all sessions immediately,
-      which is what you want after a key leak.
+- [ ] `UI_PASSWORD` set, OR `API_KEY` set, OR both — never run a
+      network-exposed deploy with both unset. `JWT_SECRET` is
+      auto-generated and persisted to `${WORKBENCH_DATA_DIR}/jwt-secret`
+      on first boot (override by setting `JWT_SECRET` env explicitly).
+- [ ] `JWT_SECRET` either auto-generated (recommended; the persisted
+      file is mode 0600 inside your already-mounted data dir) or, if
+      overriding, from `openssl rand -hex 32` — not a memorable string.
+      Rotating (delete the file or change the env) invalidates all
+      sessions immediately, which is what you want after a key leak.
 - [ ] Reverse proxy (Caddy / nginx / Traefik) terminates TLS in front of
       the workbench. Plain HTTP is fine on `127.0.0.1`; never on a routable
       interface.
@@ -176,9 +180,9 @@ Production-relevant guidance:
 
 | Variable | Production value | Why |
 |---|---|---|
-| `UI_PASSWORD` | A strong shared secret if multiple humans share the deploy, OR a personal password for solo use | Required for browser login. Combined with `JWT_SECRET`. |
-| `JWT_SECRET` | `$(openssl rand -hex 32)` | Signing key for browser session JWTs. Rotate to invalidate all sessions. |
-| `API_KEY` | A separate `$(openssl rand -hex 32)` from JWT_SECRET | Static bearer token for scripts / CI. Different secret than the browser login. |
+| `UI_PASSWORD` | A strong shared secret if multiple humans share the deploy, OR a personal password for solo use | Required for browser login. |
+| `JWT_SECRET` | (leave empty for auto-generation) or `$(openssl rand -hex 32)` to override | Signing key for browser session JWTs. When `UI_PASSWORD` is set and `JWT_SECRET` is empty, the server generates one and persists it to `${WORKBENCH_DATA_DIR}/jwt-secret` (mode 0600); the data dir is already a PVC / bind-mount so tokens survive restarts. Rotate by deleting the file (or rotating the env value). |
+| `API_KEY` | `$(openssl rand -hex 32)` | Static bearer token for scripts / CI. Different secret than the browser login. |
 | `JWT_EXPIRES_IN_SECONDS` | `86400` (24 h) for higher-trust environments, or leave at default `604800` (7 d) | Shorter = re-login more often = smaller blast radius if a token leaks. |
 | `RATE_LIMIT_LOGIN_MAX` | `5` if you're paranoid; default `10` is fine for most | Per-IP login attempts per minute. |
 | `RATE_LIMIT_LOGIN_WINDOW_MS` | Default `60000` | Rate-limit window. |
@@ -195,8 +199,8 @@ exposed deploy.
 ```bash
 # .env example for browser-only auth
 UI_PASSWORD=your-strong-password-here
-JWT_SECRET=<openssl rand -hex 32 output>
-API_KEY=                # blank — disabled
+JWT_SECRET=                          # blank — auto-generated and persisted
+API_KEY=                             # blank — disabled
 
 # .env example for API-only auth (e.g., headless deploys)
 UI_PASSWORD=
@@ -205,12 +209,18 @@ API_KEY=<openssl rand -hex 32 output>
 
 # .env example for both — most common for "humans + scripts share the deploy"
 UI_PASSWORD=your-strong-password-here
-JWT_SECRET=<openssl rand -hex 32 output>
-API_KEY=<a different openssl rand -hex 32 output>
+JWT_SECRET=                          # blank — auto-generated and persisted
+API_KEY=<openssl rand -hex 32 output>
 ```
 
-`UI_PASSWORD` set without `JWT_SECRET` is a config error and the server
-refuses to start (no signing key = no way to issue tokens).
+When `UI_PASSWORD` is set and `JWT_SECRET` is empty, the server
+generates a 48-byte random secret on first boot and persists it to
+`${WORKBENCH_DATA_DIR}/jwt-secret` (mode 0600). Because `WORKBENCH_DATA_DIR`
+is already a PVC / bind-mount in K8s and Docker, the secret survives
+restarts and tokens issued before a restart keep working. Set
+`JWT_SECRET` explicitly only if you want to manage rotation out-of-band
+(e.g. centrally rotated K8s `Secret`). Delete the file to rotate
+in-place.
 
 ## Backup recommendations
 

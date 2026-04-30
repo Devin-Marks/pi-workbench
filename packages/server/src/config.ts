@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -82,16 +84,43 @@ const CLIENT_DIST_PATH = resolve(
 );
 
 const UI_PASSWORD = readEnv("UI_PASSWORD");
-const JWT_SECRET = readEnv("JWT_SECRET");
 const API_KEY = readEnv("API_KEY");
 const CORS_ORIGIN = readEnv("CORS_ORIGIN");
 
-if (UI_PASSWORD !== undefined && JWT_SECRET === undefined) {
-  throw new Error(
-    "config: UI_PASSWORD is set but JWT_SECRET is not. " +
-      "Generate one with `openssl rand -hex 32` and set JWT_SECRET.",
+/**
+ * Load a JWT signing key from `${WORKBENCH_DATA_DIR}/jwt-secret`, or
+ * generate-and-persist one on first boot. Treated like an SSH host key:
+ * created once, persisted to the data dir (which is the PVC / bind-mount
+ * in K8s and Docker), reused across restarts so issued tokens stay
+ * valid. Setting `JWT_SECRET` env explicitly skips this entirely.
+ *
+ * Only invoked when `UI_PASSWORD` is set — if browser auth isn't on,
+ * we don't need a secret at all.
+ */
+function loadOrGenerateJwtSecret(dataDir: string): string {
+  const path = join(dataDir, "jwt-secret");
+  if (existsSync(path)) {
+    const v = readFileSync(path, "utf8").trim();
+    // 32 bytes = 256 bits ≈ 43 base64url chars. Anything shorter is
+    // either truncated or hand-edited; regenerate rather than trust it.
+    if (v.length >= 32) return v;
+  }
+  mkdirSync(dataDir, { recursive: true });
+  const secret = randomBytes(48).toString("base64url");
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, `${secret}\n`, { mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, path);
+  console.log(
+    `[config] auto-generated JWT secret persisted at ${path}. ` +
+      "Delete this file to rotate (logs out all browser sessions).",
   );
+  return secret;
 }
+
+const JWT_SECRET =
+  readEnv("JWT_SECRET") ??
+  (UI_PASSWORD !== undefined ? loadOrGenerateJwtSecret(WORKBENCH_DATA_DIR) : undefined);
 
 export const config = Object.freeze({
   port: readInt("PORT", 3000),
@@ -139,6 +168,22 @@ export const config = Object.freeze({
     jwtExpiresInSeconds: readInt("JWT_EXPIRES_IN_SECONDS", 60 * 60 * 24 * 7),
     loginRateLimitMax: readInt("RATE_LIMIT_LOGIN_MAX", 10),
     loginRateLimitWindowMs: readInt("RATE_LIMIT_LOGIN_WINDOW_MS", 60_000),
+    /**
+     * When true and the only credential is the env-provided UI_PASSWORD
+     * (no on-disk hash yet), the login response carries
+     * `mustChangePassword: true` and the issued JWT is restricted —
+     * the user can only call `POST /auth/change-password` until they
+     * pick a new password. After the user changes it, the new password
+     * is hashed and persisted to `${WORKBENCH_DATA_DIR}/password-hash`,
+     * and subsequent logins ignore the env value.
+     *
+     * Defaults to true so deployments that bake an initial password
+     * into env (helm secret, docker-compose .env) don't accidentally
+     * leave that credential as the long-lived one.
+     */
+    requirePasswordChange: readBool("REQUIRE_PASSWORD_CHANGE", true),
+    /** Where the persisted scrypt hash lives — see auth.ts. */
+    passwordHashFile: join(WORKBENCH_DATA_DIR, "password-hash"),
   }),
   /**
    * Per-route rate limits applied to the cost-heavy / disk-heavy / CPU-heavy
@@ -169,5 +214,9 @@ export const config = Object.freeze({
 } as const);
 
 export function authEnabled(): boolean {
-  return config.auth.uiPassword !== undefined || config.auth.apiKey !== undefined;
+  return (
+    config.auth.uiPassword !== undefined ||
+    config.auth.apiKey !== undefined ||
+    existsSync(config.auth.passwordHashFile)
+  );
 }

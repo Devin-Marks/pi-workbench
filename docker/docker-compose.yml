@@ -28,7 +28,7 @@ services:
     ports:
       # Bind to localhost ONLY by default. Operators who want LAN access
       # can change this to "${HOST_PORT:-3000}:3000" (no 127.0.0.1: prefix)
-      # — but should ALSO set UI_PASSWORD/JWT_SECRET (or API_KEY) first,
+      # — but should ALSO set UI_PASSWORD (or API_KEY) first,
       # since the container speaks plain HTTP. Per SECURITY.md, never
       # network-expose without TLS at a reverse proxy.
       - "127.0.0.1:${HOST_PORT:-3000}:3000"
@@ -53,7 +53,13 @@ services:
       - WORKBENCH_DATA_DIR=/home/pi/.pi-workbench
       - PORT=3000
       # Auth — read from .env. Empty values keep auth disabled.
+      # UI_PASSWORD is the INITIAL password; once changed via the UI
+      # the scrypt hash at ${WORKBENCH_DATA_DIR}/password-hash takes
+      # over and this env value is ignored. REQUIRE_PASSWORD_CHANGE
+      # (default true) forces the user to pick a new password on
+      # first login when only UI_PASSWORD is set.
       - UI_PASSWORD=${UI_PASSWORD:-}
+      - REQUIRE_PASSWORD_CHANGE=${REQUIRE_PASSWORD_CHANGE:-true}
       - JWT_SECRET=${JWT_SECRET:-}
       - API_KEY=${API_KEY:-}
       # Logging + reverse-proxy hint.
