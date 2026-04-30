@@ -77,7 +77,6 @@ The PR template walks you through this; the short version:
 
 - [ ] `npm run check` and `npm run build` pass locally
 - [ ] Relevant test script(s) pass (list which ones in the PR description)
-- [ ] If the change affects the dev plan, `pi-webui-dev-plan.md` is updated
 - [ ] If it touches a Phase X polish item, `notes/DEFERRED.md` row is
       either resolved (struck through with `**Resolved YYYY-MM-DD**:` +
       a one-paragraph summary) or has a re-defer rationale

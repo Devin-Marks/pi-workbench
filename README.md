@@ -4,9 +4,8 @@ A browser-based workbench for the [pi coding agent](https://github.com/badlogic/
 Single-tenant, container-native, self-hosted. HTTP server + REST/SSE API + React UI on
 top of `@mariozechner/pi-coding-agent`.
 
-> Status: in active development. See [`pi-webui-dev-plan.md`](./pi-webui-dev-plan.md)
-> for the phased roadmap and [`CLAUDE.md`](./CLAUDE.md) for architecture and
-> conventions.
+> Status: in active development. See [`CLAUDE.md`](./CLAUDE.md) for
+> architecture and conventions.
 
 ## What it is
 

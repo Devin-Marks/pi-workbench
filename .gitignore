@@ -37,6 +37,7 @@ packages/client/dev-dist/
 
 # Local working notes (not committed)
 notes/
+pi-webui-dev-plan.md
 
 # User data created by running the app locally.
 workspace/

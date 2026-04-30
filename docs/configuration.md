@@ -186,11 +186,10 @@ model picker that overrides per-session. The override persists in
 browser localStorage (`pi-workbench/model/<sessionId>`) and re-applies
 on session switch. It does NOT modify `settings.json`.
 
-(See [`pi-webui-dev-plan.md`](../pi-webui-dev-plan.md) and the commit
-history around `routes/control.ts:setModel` for the gory details — the
-SDK's `setModel` writes the global default as a side effect, which
-the workbench undoes by snapshot-and-restore around the call so
-per-session selection doesn't mutate the global default.)
+(See the commit history around `routes/control.ts:setModel` for the
+gory details — the SDK's `setModel` writes the global default as a
+side effect, which the workbench undoes by snapshot-and-restore around
+the call so per-session selection doesn't mutate the global default.)
 
 ## Per-project skills
 
