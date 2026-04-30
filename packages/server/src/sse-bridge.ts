@@ -5,6 +5,20 @@ import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 import type { LiveSession, SSEClient } from "./session-registry.js";
 
 /**
+ * Per-client outbound-buffer cap. When Node's internal socket buffer
+ * for a given client exceeds this many bytes, we drop the client
+ * rather than retain it indefinitely. A wedged consumer (paused tab,
+ * stopped-reading client, ws-proxy that buffers without flushing)
+ * can otherwise balloon resident memory by hundreds of MB during a
+ * verbose tool execution before the kernel forces socket close.
+ *
+ * 256 KB matches roughly 50-100 typical events worth of unflushed
+ * data — well above any legitimate transient buffering and below
+ * the threshold where memory pressure starts mattering.
+ */
+const BACKPRESSURE_LIMIT_BYTES = 256 * 1024;
+
+/**
  * One-shot snapshot event sent immediately on SSE connect so the browser can
  * hydrate full session state without a separate HTTP round-trip.
  */
@@ -127,6 +141,20 @@ export function createSSEClient(reply: FastifyReply, live: LiveSession): SSEClie
 
     const writeRaw = (chunk: string): void => {
       if (closed) return;
+      // Backpressure guard: if the OS-side socket buffer has accumulated
+      // more than BACKPRESSURE_LIMIT_BYTES of unwritten bytes, the
+      // consumer is wedged (slow network, paused tab, hostile client
+      // that opened the SSE stream and stopped reading). Drop the
+      // client rather than letting Node's internal buffer grow without
+      // bound — `live.clients` retains the SSEClient object until
+      // socket close fires, and a wedged TCP socket can take 30+
+      // seconds to time out. Without this, repeated events on a
+      // verbose tool execution can balloon resident memory by hundreds
+      // of MB before the kernel forces the close.
+      if (raw.writableLength > BACKPRESSURE_LIMIT_BYTES) {
+        close();
+        return;
+      }
       try {
         raw.write(chunk);
       } catch {

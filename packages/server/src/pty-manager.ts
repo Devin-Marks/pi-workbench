@@ -308,7 +308,20 @@ export function disposeAllPtys(): void {
 }
 
 let exitHandlerInstalled = false;
-function installExitHandler(): void {
+/**
+ * Install a `process.on("exit")` last-resort SIGTERM-all handler.
+ * Idempotent.
+ *
+ * The previous version of this module called `installExitHandler()`
+ * at module load, which meant any unit test that imported the module
+ * also installed the handler — and the handler couldn't be undone.
+ * Tests that fork child processes ended up with the wrong handler
+ * count and unpredictable shutdown behavior. The fix: require an
+ * explicit `installPtyExitHandler()` call from `index.ts` (the
+ * production entry point); tests that import `pty-manager` for unit
+ * coverage skip the install.
+ */
+export function installPtyExitHandler(): void {
   if (exitHandlerInstalled) return;
   exitHandlerInstalled = true;
   process.on("exit", () => {
@@ -316,13 +329,13 @@ function installExitHandler(): void {
       try {
         entry.managed.process.kill("SIGTERM");
       } catch {
-        // ignore
+        // Process already gone — fine. We're in the exit handler so
+        // there's no point trying anything more aggressive.
       }
     }
     ptys.clear();
   });
 }
-installExitHandler();
 
 /**
  * Workbench secrets that the PTY shell MUST NOT inherit. Without this

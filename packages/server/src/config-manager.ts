@@ -26,16 +26,16 @@ export interface ProviderConfig {
   api?: "messages" | "responses" | "completions" | string;
   authHeader?: boolean;
   headers?: Record<string, string>;
-  models?: Array<{
+  models?: {
     id: string;
     name: string;
     api?: string;
     reasoning: boolean;
-    input: Array<"text" | "image">;
+    input: ("text" | "image")[];
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
     maxTokens: number;
-  }>;
+  }[];
 }
 
 export interface SettingsJson {
@@ -62,18 +62,18 @@ export interface AuthSummary {
 }
 
 export interface ProvidersListing {
-  providers: Array<{
+  providers: {
     provider: string;
-    models: Array<{
+    models: {
       id: string;
       name: string;
       contextWindow: number;
       maxTokens: number;
       reasoning: boolean;
-      input: Array<"text" | "image">;
+      input: ("text" | "image")[];
       hasAuth: boolean;
-    }>;
-  }>;
+    }[];
+  }[];
 }
 
 async function ensureConfigDir(): Promise<void> {
@@ -146,11 +146,11 @@ async function readJsonOr<T>(path: string, fallback: T): Promise<T> {
 // models.json
 
 export async function readModelsJson(): Promise<ModelsJson> {
-  const data = await readJsonOr<unknown>(MODELS_FILE(), { providers: {} } as ModelsJson);
+  const data = await readJsonOr<unknown>(MODELS_FILE(), { providers: {} });
   if (typeof data !== "object" || data === null || !("providers" in data)) {
     return { providers: {} };
   }
-  const r = data as { providers: unknown };
+  const r = data;
   if (typeof r.providers !== "object" || r.providers === null) {
     return { providers: {} };
   }
@@ -185,14 +185,28 @@ function redactProviderConfig(p: ProviderConfig): ProviderConfig {
 }
 
 export async function writeModelsJson(data: ModelsJson): Promise<void> {
-  // Filter dangerous keys at every level of the providers tree before
-  // persisting — defense in depth against a hostile body that
-  // sneaks `__proto__`/`prototype`/`constructor` through.
-  // See stripDangerousKeys + DANGEROUS_KEYS at the top of this file.
+  // Round-trip secret protection: GET /config/models redacts inline
+  // `apiKey` / `apiKeyCommand` to a sentinel string. If the editor
+  // PUTs the body back unchanged, the literal sentinel would
+  // overwrite the real secret on disk and the next request would go
+  // out with `Authorization: Bearer ***REDACTED***`. Pre-merge here
+  // so the sentinel means "keep the existing value" — same semantics
+  // auth.json already uses for its presence-only API.
+  const existing: ModelsJson = await readModelsJson().catch(() => ({ providers: {} }));
   const safe: ModelsJson = { providers: {} };
   for (const [name, provider] of Object.entries(data.providers ?? {})) {
     if (DANGEROUS_KEYS.has(name)) continue;
-    safe.providers[name] = stripDangerousKeys(provider);
+    const cleaned = stripDangerousKeys(provider);
+    const prior = existing.providers[name];
+    if (cleaned.apiKey === SECRET_PLACEHOLDER) {
+      if (prior?.apiKey !== undefined) cleaned.apiKey = prior.apiKey;
+      else delete cleaned.apiKey;
+    }
+    if (cleaned.apiKeyCommand === SECRET_PLACEHOLDER) {
+      if (prior?.apiKeyCommand !== undefined) cleaned.apiKeyCommand = prior.apiKeyCommand;
+      else delete cleaned.apiKeyCommand;
+    }
+    safe.providers[name] = cleaned;
   }
   await atomicWriteJson(MODELS_FILE(), safe);
 }
@@ -202,6 +216,17 @@ export async function writeModelsJson(data: ModelsJson): Promise<void> {
 
 function authStorage(): AuthStorage {
   return AuthStorage.create(AUTH_FILE());
+}
+
+/**
+ * Build a fresh ModelRegistry seeded with the on-disk auth + models.json.
+ * Exposed so route handlers can resolve a provider+modelId pair to a typed
+ * Model<Api> WITHOUT going through pi-ai's static `getModel`, which only
+ * knows built-in providers and silently returns undefined for anything
+ * defined in models.json.
+ */
+export function liveModelRegistry(): ModelRegistry {
+  return ModelRegistry.create(authStorage(), MODELS_FILE());
 }
 
 export function readAuthSummary(): AuthSummary {

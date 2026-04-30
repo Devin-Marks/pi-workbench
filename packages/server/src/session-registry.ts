@@ -147,7 +147,19 @@ async function ensureSessionDir(projectId: string): Promise<string> {
  * `for...of` over a Set as safe under deletes (the iterator advances past
  * removed entries without revisiting them). No copy needed.
  */
+function logAgentEvent(level: "info" | "warn", payload: Record<string, unknown>): void {
+  // Bypass pino entirely — write directly to stderr. Pino's redact
+  // config + log-level filtering can drop these messages on operators
+  // who only set LOG_LEVEL=warn, and the SDK error path is exactly
+  // the surface that can't afford to be invisible. JSON-line format
+  // so `docker logs | jq` still works.
+  process.stderr.write(
+    `${JSON.stringify({ level, time: new Date().toISOString(), ...payload })}\n`,
+  );
+}
+
 function makeSubscribeHandler(live: LiveSession): () => void {
+  const verbose = process.env.DEBUG_AGENT_EVENTS === "1";
   return live.session.subscribe((event: AgentSessionEvent) => {
     live.lastActivityAt = new Date();
     if (event.type === "agent_start") {
@@ -156,6 +168,99 @@ function makeSubscribeHandler(live: LiveSession): () => void {
       // steered/follow-up entry).
       live.lastAgentStartIndex = live.session.messages.length;
     }
+
+    // Surface SDK-level provider errors to stderr. The pi SDK swallows
+    // upstream HTTP failures into events rather than throwing — so a 401
+    // from a bad apiKey, a network reset, an invalid endpoint, etc.
+    // surface only via these events and are otherwise invisible to
+    // operators. The TUI renders this directly in chat; the workbench
+    // did not, leaving "no response" as the only signal.
+    //
+    // We hook every event the SDK emits when something goes wrong,
+    // because the failure path varies by provider and stage:
+    //   - openai-completions catches → message_end with stopReason="error"
+    //   - retryable errors → auto_retry_start (with errorMessage)
+    //   - retry exhaustion → auto_retry_end with success=false
+    //   - agent_end always fires; live.session.errorMessage is the
+    //     authoritative "what just happened" field per the SDK types.
+    const e = event as unknown as {
+      type: string;
+      message?: {
+        role?: string;
+        stopReason?: string;
+        errorMessage?: string;
+        provider?: string;
+        modelId?: string;
+        model?: { provider?: string; id?: string } | string;
+      };
+      attempt?: number;
+      maxAttempts?: number;
+      delayMs?: number;
+      success?: boolean;
+      finalError?: string;
+      errorMessage?: string;
+    };
+
+    if (verbose) {
+      logAgentEvent("info", {
+        msg: "agent_event",
+        sessionId: live.sessionId,
+        type: e.type,
+      });
+    }
+
+    if (e.type === "message_end") {
+      const msg = e.message;
+      if (
+        msg?.role === "assistant" &&
+        (msg.stopReason === "error" || msg.stopReason === "aborted")
+      ) {
+        const modelInfo = typeof msg.model === "object" ? msg.model : undefined;
+        logAgentEvent("warn", {
+          msg: "agent turn ended with error stopReason",
+          sessionId: live.sessionId,
+          projectId: live.projectId,
+          stopReason: msg.stopReason,
+          errorMessage: msg.errorMessage,
+          provider: msg.provider ?? modelInfo?.provider,
+          modelId: msg.modelId ?? modelInfo?.id,
+        });
+      }
+    }
+    if (e.type === "auto_retry_start") {
+      logAgentEvent("warn", {
+        msg: "SDK auto-retrying after provider error",
+        sessionId: live.sessionId,
+        attempt: e.attempt,
+        maxAttempts: e.maxAttempts,
+        delayMs: e.delayMs,
+        errorMessage: e.errorMessage,
+      });
+    }
+    if (e.type === "auto_retry_end" && e.success === false) {
+      logAgentEvent("warn", {
+        msg: "SDK auto-retry exhausted",
+        sessionId: live.sessionId,
+        attempt: e.attempt,
+        finalError: e.finalError,
+      });
+    }
+    if (e.type === "agent_end") {
+      const errMsg = (live.session as unknown as { errorMessage?: string }).errorMessage;
+      if (errMsg !== undefined && errMsg !== "") {
+        logAgentEvent("warn", {
+          msg: "agent_end with session.errorMessage",
+          sessionId: live.sessionId,
+          errorMessage: errMsg,
+        });
+      } else if (verbose) {
+        logAgentEvent("info", {
+          msg: "agent_end (no error)",
+          sessionId: live.sessionId,
+        });
+      }
+    }
+
     for (const client of live.clients) {
       try {
         client.send(event);

@@ -1,5 +1,4 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
-import { getModel } from "@mariozechner/pi-ai";
 import {
   EntryNotFoundError,
   forkSession,
@@ -7,7 +6,7 @@ import {
   SessionNotFoundError,
 } from "../session-registry.js";
 import {
-  liveProvidersListing,
+  liveModelRegistry,
   readSettings,
   withSettingsLock,
   writeSettings,
@@ -439,24 +438,23 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
     async (req, reply) => {
       const live = getSession(req.params.id);
       if (live === undefined) return notFound(reply);
-      // getModel's TypeScript signature narrows to KnownProvider/KnownModel
-      // unions, but at the HTTP boundary we accept any string. The function
-      // RETURNS undefined (does not throw) for unknown provider/modelId — this
-      // is the contract from pi-ai/dist/models.js. Without an explicit
-      // undefined check, setModel(undefined) crashes with a TypeError that
-      // leaks Node-internal detail.
+      // Look up the model in the SDK's ModelRegistry — it merges built-in
+      // providers (Anthropic, OpenAI, Google, etc.) with anything defined in
+      // models.json. The previous version called pi-ai's static `getModel`,
+      // which knows only built-ins and returned undefined for every custom
+      // models.json entry, surfacing as "unknown_model" even when the model
+      // appeared in the picker.
       //
-      // Two-stage lookup so a typo in the provider name produces a
-      // different diagnostic from a typo in the model id. Without
-      // this, both cases collapsed to `unknown_model` and the user
-      // had no hint which side was wrong.
-      const providers = liveProvidersListing().providers;
-      const providerEntry = providers.find((p) => p.provider === req.body.provider);
-      if (providerEntry === undefined) {
+      // Two-stage lookup so a typo in the provider name produces a different
+      // diagnostic from a typo in the model id. Without this, both cases
+      // collapsed to `unknown_model` and the user had no hint which side
+      // was wrong.
+      const registry = liveModelRegistry();
+      const providerKnown = registry.getAll().some((m) => m.provider === req.body.provider);
+      if (!providerKnown) {
         return reply.code(400).send({ error: "unknown_provider" });
       }
-      const dyn = getModel as unknown as (provider: string, modelId: string) => unknown;
-      const model = dyn(req.body.provider, req.body.modelId);
+      const model = registry.find(req.body.provider, req.body.modelId);
       if (model === undefined) {
         return reply.code(400).send({ error: "unknown_model" });
       }

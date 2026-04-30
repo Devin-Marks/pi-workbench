@@ -10,6 +10,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import websocket from "@fastify/websocket";
 import multipart from "@fastify/multipart";
 import { config, authEnabled } from "./config.js";
+import { installDiagnostics } from "./diagnostics.js";
 import { extractBearer, verifyApiKey, verifyToken } from "./auth.js";
 import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
@@ -23,7 +24,7 @@ import { fileRoutes } from "./routes/files.js";
 import { gitRoutes } from "./routes/git.js";
 import { terminalRoutes } from "./routes/terminal.js";
 import { disposeAllSessions } from "./session-registry.js";
-import { disposeAllPtys } from "./pty-manager.js";
+import { disposeAllPtys, installPtyExitHandler } from "./pty-manager.js";
 
 /**
  * Per-route auth metadata. Routes that should skip the auth preHandler set
@@ -38,6 +39,13 @@ declare module "fastify" {
 }
 
 export async function buildServer(): Promise<FastifyInstance> {
+  // Install before Fastify so unhandledRejection handlers from this
+  // module are first in line — they print full cause chains for
+  // errors the SDK swallows (TLS handshake failures, DNS errors,
+  // ECONNREFUSED, etc.) which would otherwise surface as a terse
+  // "Connection Error" with no underlying detail.
+  installDiagnostics();
+
   const fastify = Fastify({
     logger: {
       level: config.logLevel,
@@ -100,6 +108,12 @@ export async function buildServer(): Promise<FastifyInstance> {
     bodyLimit: 100 * 1024 * 1024,
   });
 
+  // Install the PTY exit handler — was previously fired at module-load
+  // of pty-manager.ts, which made test isolation harder (every unit
+  // test that imported the module also installed the handler). The
+  // production server installs it explicitly here.
+  installPtyExitHandler();
+
   await fastify.register(cors, {
     // Default to `true` (reflect request origin) so the same-origin browser
     // workflow described in the dev plan works without extra config.
@@ -118,7 +132,12 @@ export async function buildServer(): Promise<FastifyInstance> {
   // extra dep; the set we need is small and stable.
   //
   // CSP rationale (see also packages/client/index.html):
-  //   - script-src 'self' — Vite's bundle. No inline-script is rendered.
+  //   - script-src 'self' 'wasm-unsafe-eval' — Vite's bundle plus the
+  //     hash-wasm module the upload path uses for SHA-256 streaming.
+  //     'wasm-unsafe-eval' permits WebAssembly.compile/instantiate ONLY;
+  //     it does NOT re-enable JS eval/new Function (those still require
+  //     the broader 'unsafe-eval'). Vite dev server doesn't apply our
+  //     CSP, so this surfaces only on deployed instances.
   //   - style-src 'self' — Tailwind v4 emits external CSS to /assets;
   //     no inline <style> tags are rendered. We split inline-style
   //     attribute (style="...") allowance to style-src-attr so a
@@ -149,7 +168,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       "Content-Security-Policy",
       [
         "default-src 'self'",
-        "script-src 'self'",
+        "script-src 'self' 'wasm-unsafe-eval'",
         // Keep 'unsafe-inline' on style-src for Safari < 15.4 which
         // falls back to it for inline style attributes. Newer browsers
         // honor the tighter style-src-attr below.

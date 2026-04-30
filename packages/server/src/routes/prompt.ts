@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
-import type { MultipartFile } from "@fastify/multipart";
 import { config } from "../config.js";
+import { formatErrorChain } from "../diagnostics.js";
 import { getSession, type LiveSession } from "../session-registry.js";
 import { errorSchema } from "./_schemas.js";
 
@@ -99,7 +99,7 @@ async function parseMultipart(
     // File part. Reading the buffer counts against the multipart
     // size limit; @fastify/multipart's `truncated` flag flips when
     // the file exceeded `limits.fileSize`.
-    const file = part as MultipartFile;
+    const file = part;
     const buf = await file.toBuffer();
     if (file.file.truncated) {
       drain();
@@ -207,23 +207,33 @@ function composePromptText(parsed: ParsedMultipart): string {
 }
 
 /**
- * Synchronous pre-flight checks shared by the JSON + multipart paths.
- * Returns the live session if validation passes, or `undefined`
- * AFTER the reply has been sent.
+ * Pre-flight checks shared by the JSON + multipart paths. On a check
+ * failure, sends the 4xx via `reply` AND returns undefined — caller
+ * MUST `return reply;` immediately to avoid double-send. The reply
+ * sends are awaited for clean ordering of any onSend hooks (security
+ * headers etc.) before the route handler proceeds.
  */
-function preflight(req: FastifyRequest, reply: FastifyReply): LiveSession | undefined {
+async function preflight(
+  req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<LiveSession | undefined> {
   const live = getSession((req.params as { id: string }).id);
   if (live === undefined) {
-    void reply.code(404).send({ error: "session_not_found" });
+    await reply
+      .code(404)
+      .send({ error: "session_not_found", message: "no live session with that id" });
     return undefined;
   }
   const model = live.session.model;
   if (model === undefined) {
-    void reply.code(400).send({ error: "no_model_configured" });
+    await reply.code(400).send({
+      error: "no_model_configured",
+      message: "no model is configured for this session",
+    });
     return undefined;
   }
   if (!live.session.modelRegistry.hasConfiguredAuth(model)) {
-    void reply.code(400).send({
+    await reply.code(400).send({
       error: "no_api_key",
       message: `No API key configured for provider "${model.provider}". Add one via PUT /api/v1/config/auth/${model.provider}.`,
     });
@@ -302,7 +312,7 @@ export const promptRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      const live = preflight(req, reply);
+      const live = await preflight(req, reply);
       if (live === undefined) return reply;
 
       let promptText: string;
@@ -407,11 +417,36 @@ export const promptRoutes: FastifyPluginAsync = async (fastify) => {
         }
       };
 
+      // Operator-visible breadcrumb. Without this, a hung prompt
+      // (where the SDK is silently retrying or the LLM provider is
+      // not responding) is invisible to operators reading
+      // `docker logs`. Pino redacts the prompt body itself; the byte
+      // count is the safe diagnostic to emit.
+      process.stderr.write(
+        `${JSON.stringify({
+          level: "info",
+          time: new Date().toISOString(),
+          msg: "session.prompt invoked",
+          sessionId: req.params.id,
+          promptBytes,
+          imageCount: images.length,
+          streamingBehavior,
+        })}\n`,
+      );
+
       try {
         live.session.prompt(promptText, opts).catch((err: unknown) => {
-          fastify.log.warn(
-            { err: err instanceof Error ? err.message : String(err), sessionId: req.params.id },
-            "session.prompt rejected",
+          const f = formatErrorChain(err);
+          process.stderr.write(
+            `${JSON.stringify({
+              level: "warn",
+              time: new Date().toISOString(),
+              msg: "session.prompt rejected",
+              sessionId: req.params.id,
+              error: f.message,
+              chain: f.chain,
+              stack: f.stack,
+            })}\n`,
           );
           synthesizeFailureEvent(err);
         });
