@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { GitBranch, Loader2, Navigation, RefreshCw, X } from "lucide-react";
 import { api, ApiError, type SessionTreeEntry, type SessionTreeResponse } from "../lib/api-client";
 import { useSessionStore } from "../store/session-store";
+import { Modal } from "./Modal";
 
 /**
  * Phase 15 — Session tree viewer.
@@ -25,6 +26,25 @@ interface Props {
   sessionId: string;
   projectId: string;
   onClose: () => void;
+}
+
+/**
+ * Per-navigate dialog state. The dialog covers three concerns the
+ * SDK's `navigateTree` accepts in one shot:
+ *   - confirming the navigation when streaming (aborts the in-flight turn)
+ *   - optional `label` to bookmark the abandoned branch tip
+ *   - optional `summarize` + `customInstructions` to ask pi to write
+ *     a branch_summary entry capturing what the abandoned branch did
+ * We open the dialog from `navigate()` and let it handle the actual
+ * api.navigateSession call on confirm — keeps the form state colocated
+ * with its trigger.
+ */
+interface NavConfirmState {
+  entryId: string;
+  /** True when the abandoned branch has descendants worth summarizing. */
+  abandonsBranch: boolean;
+  /** True when the session is streaming; navigate will abort. */
+  isStreaming: boolean;
 }
 
 interface NodeView extends SessionTreeEntry {
@@ -61,11 +81,19 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
   const loadSessionsForProject = useSessionStore((s) => s.loadSessionsForProject);
   const reloadMessages = useSessionStore((s) => s.reloadMessages);
   const setPendingDraft = useSessionStore((s) => s.setPendingDraft);
+  // Tree4 — auto-refresh once per agent_end. Same trigger pattern
+  // file tree / TurnDiffPanel / ContextInspectorPanel use.
+  const agentEndCount = useSessionStore((s) => s.agentEndCountBySession[sessionId] ?? 0);
 
   const [tree, setTree] = useState<SessionTreeResponse | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  // Tree2 + Tree3 + Tree5 — single navigate-confirm dialog handles
+  // streaming aborts, optional bookmark label, and optional summarize
+  // (all three things `navigateTree` can take). Replaces an earlier
+  // window.confirm that was the only `confirm()` call left in the app.
+  const [navConfirm, setNavConfirm] = useState<NavConfirmState | undefined>(undefined);
 
   const refresh = async (): Promise<void> => {
     setLoading(true);
@@ -85,6 +113,16 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
+  // Tree4 — refetch when a new agent_end fires. The first mount
+  // already loaded via the effect above; this fires only on
+  // subsequent increments. agentEndCount is read reactively, so a
+  // closed panel doesn't poll — only an open one repaints.
+  useEffect(() => {
+    if (agentEndCount === 0) return;
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentEndCount]);
+
   const nodes = useMemo<NodeView[]>(() => {
     if (tree === undefined) return [];
     return flattenTree(tree);
@@ -92,23 +130,42 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
 
   /**
    * Navigate the active session's leaf. Idempotent on the current
-   * leaf (we early-return). When streaming, confirm — the SDK
-   * aborts the current turn on navigate, which the user might not
-   * want.
+   * leaf (we early-return). When the navigation is non-trivial —
+   * either streaming (will abort) or abandoning a branch with
+   * descendants (the abandoned tip is worth bookmarking /
+   * summarizing) — open the navConfirm dialog instead of firing
+   * the call directly. Trivial navigations (no abandons, not
+   * streaming) skip the dialog.
+   *
+   * "Abandoning a branch" = navigating to an entry whose subtree
+   * doesn't contain the current leaf. In other words, the current
+   * leaf's branch is being left behind for an alternative.
    */
-  const navigate = async (entryId: string): Promise<void> => {
+  const navigate = (entryId: string): void => {
     if (busy) return;
     if (tree?.leafId === entryId) return;
-    if (isStreaming) {
-      const ok = window.confirm(
-        "The agent is currently running. Navigating will abort the in-progress turn. Continue?",
-      );
-      if (!ok) return;
+    const abandons = currentLeafAbandonedBy(tree, entryId);
+    if (isStreaming || abandons) {
+      setNavConfirm({ entryId, abandonsBranch: abandons, isStreaming });
+      return;
     }
+    void executeNavigate(entryId, {});
+  };
+
+  /**
+   * Fire the navigate API call with optional label/summarize/
+   * customInstructions. Called both directly from `navigate()` for
+   * the trivial case and from the navConfirm dialog for the
+   * complex case.
+   */
+  const executeNavigate = async (
+    entryId: string,
+    opts: { summarize?: boolean; customInstructions?: string; label?: string },
+  ): Promise<void> => {
     setBusy(true);
     setError(undefined);
     try {
-      await api.navigateSession(sessionId, entryId);
+      await api.navigateSession(sessionId, entryId, opts);
       // Two refetches needed:
       //   1. Tree panel — leafId / branchIds change, repaint highlight
       //   2. Chat surface — messagesBySession is keyed by sessionId
@@ -272,7 +329,159 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
           )}
         </footer>
       </div>
+      <NavigateConfirmDialog
+        state={navConfirm}
+        onCancel={() => setNavConfirm(undefined)}
+        onConfirm={(opts) => {
+          if (navConfirm === undefined) return;
+          const { entryId } = navConfirm;
+          setNavConfirm(undefined);
+          void executeNavigate(entryId, opts);
+        }}
+      />
     </div>
+  );
+}
+
+/* ------------------------- navigate-confirm dialog ------------------------- */
+
+/**
+ * The single dialog opened when a navigate isn't trivial — handles
+ * Tree2 (label), Tree3 (summarize + customInstructions), and Tree5
+ * (replace window.confirm). The summarize + label inputs only render
+ * when the navigation actually abandons a branch with descendants;
+ * a streaming-only confirmation hides them.
+ */
+function NavigateConfirmDialog({
+  state,
+  onCancel,
+  onConfirm,
+}: {
+  state: NavConfirmState | undefined;
+  onCancel: () => void;
+  onConfirm: (opts: { summarize?: boolean; customInstructions?: string; label?: string }) => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [summarize, setSummarize] = useState(false);
+  const [customInstructions, setCustomInstructions] = useState("");
+  const labelInputRef = useRef<HTMLInputElement>(null);
+  // Reset form on open so a stale value from a previous navigate
+  // doesn't bleed into the next one.
+  useEffect(() => {
+    if (state === undefined) return;
+    setLabel("");
+    setSummarize(false);
+    setCustomInstructions("");
+  }, [state]);
+  const open = state !== undefined;
+  const showAbandonOptions = state?.abandonsBranch === true;
+  const submit = (): void => {
+    const opts: { summarize?: boolean; customInstructions?: string; label?: string } = {};
+    const trimmedLabel = label.trim();
+    if (trimmedLabel.length > 0) opts.label = trimmedLabel;
+    if (summarize) {
+      opts.summarize = true;
+      const trimmedInstr = customInstructions.trim();
+      if (trimmedInstr.length > 0) opts.customInstructions = trimmedInstr;
+    }
+    onConfirm(opts);
+  };
+  return (
+    <Modal
+      open={open}
+      onClose={onCancel}
+      title="Navigate session leaf"
+      width={showAbandonOptions ? "max-w-md" : "max-w-sm"}
+      // exactOptionalPropertyTypes — only forward the ref when we
+      // have one, don't pass `undefined` explicitly.
+      {...(showAbandonOptions ? { initialFocusRef: labelInputRef } : {})}
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+        className="flex flex-col gap-3 px-4 py-3 text-xs text-neutral-200"
+      >
+        {state?.isStreaming === true && (
+          <p className="rounded border border-amber-700/50 bg-amber-900/20 px-2 py-1.5 text-amber-200">
+            The agent is currently running. Navigating will abort the in-progress turn.
+          </p>
+        )}
+        {showAbandonOptions ? (
+          <>
+            <p className="text-neutral-400">
+              You&rsquo;re leaving the current branch behind. The tip stays on the tree (you can
+              navigate back to it any time), but you can also bookmark + summarize it before moving
+              on.
+            </p>
+            <label className="flex flex-col gap-1">
+              <span className="text-neutral-500">
+                Label for the abandoned branch tip{" "}
+                <span className="text-neutral-600">(optional)</span>
+              </span>
+              <input
+                ref={labelInputRef}
+                type="text"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="e.g. wrong-approach"
+                maxLength={200}
+                className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-neutral-100 outline-none focus:border-neutral-500"
+              />
+            </label>
+            <label className="flex items-start gap-2 rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5">
+              <input
+                type="checkbox"
+                checked={summarize}
+                onChange={(e) => setSummarize(e.target.checked)}
+                className="mt-0.5 h-3 w-3"
+              />
+              <span className="flex-1 text-neutral-300">
+                Have pi write a <code className="font-mono text-[11px]">branch_summary</code> entry
+                capturing what this branch did. Costs one extra LLM call.
+              </span>
+            </label>
+            {summarize && (
+              <label className="flex flex-col gap-1">
+                <span className="text-neutral-500">
+                  Custom summarizer instructions{" "}
+                  <span className="text-neutral-600">(optional)</span>
+                </span>
+                <textarea
+                  value={customInstructions}
+                  onChange={(e) => setCustomInstructions(e.target.value)}
+                  rows={3}
+                  placeholder="e.g. Focus on what files were changed and why"
+                  className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 font-mono text-[11px] text-neutral-100 outline-none focus:border-neutral-500"
+                />
+              </label>
+            )}
+          </>
+        ) : (
+          <p className="text-neutral-400">Confirm navigation?</p>
+        )}
+        <footer className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-800"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className={`rounded-md px-3 py-1 text-xs font-medium ${
+              state?.isStreaming === true
+                ? "bg-amber-600 text-amber-50 hover:bg-amber-500"
+                : "bg-neutral-100 text-neutral-900 hover:bg-white"
+            }`}
+          >
+            {state?.isStreaming === true ? "Abort & navigate" : "Navigate"}
+          </button>
+        </footer>
+      </form>
+    </Modal>
   );
 }
 
@@ -456,6 +665,29 @@ function TreeRow({
  * etc.) are pinned at depth 0 — they're meta events, not part of
  * the user/assistant exchange.
  */
+/**
+ * True when navigating to `entryId` would abandon the current leaf —
+ * i.e. the current leaf is NOT a descendant of `entryId`. Used to
+ * decide whether the navigate-confirm dialog should offer
+ * "summarize abandoned branch" + "label abandoned branch tip"
+ * affordances. Navigating to an ancestor or to the leaf itself
+ * doesn't abandon anything.
+ */
+function currentLeafAbandonedBy(tree: SessionTreeResponse | undefined, targetId: string): boolean {
+  if (tree === undefined || tree.leafId === null) return false;
+  if (tree.leafId === targetId) return false;
+  // Walk from leaf up via parentId until we hit either targetId
+  // (target is an ancestor of leaf — no abandon) or null (target
+  // isn't on the leaf's chain — abandon).
+  const byId = new Map(tree.entries.map((e) => [e.id, e]));
+  let cur: string | null = tree.leafId;
+  while (cur !== null) {
+    if (cur === targetId) return false;
+    cur = byId.get(cur)?.parentId ?? null;
+  }
+  return true;
+}
+
 function depthForEntry(entry: SessionTreeEntry): number {
   if (entry.type !== "message") return 0;
   if (entry.role === "user") return 0;
