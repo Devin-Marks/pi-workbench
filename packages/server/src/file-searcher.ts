@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
-import { SEARCH_SKIP_DIRS } from "./file-manager.js";
+import { MAX_READ_BYTES, SEARCH_SKIP_DIRS } from "./file-manager.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -290,7 +290,7 @@ async function searchInProcess(projectPath: string, opts: SearchOptions): Promis
       } catch {
         continue;
       }
-      if (!st.isFile() || st.size > 5 * 1024 * 1024) continue;
+      if (!st.isFile() || st.size > MAX_READ_BYTES) continue;
       let content: string;
       try {
         const buf = await readFile(full);
@@ -326,11 +326,14 @@ function scanText(
     if (out.length >= limit) return;
     const line = lines[i] ?? "";
     if (re !== undefined) {
-      // Use a fresh exec loop so we capture all matches per line.
-      // A lastIndex-bumping while-loop avoids /g flag fragility.
-      const local = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+      // Reuse the passed-in regex (always built with the `g` flag —
+      // see safeRegex). lastIndex carries between exec() calls so we
+      // need to reset it once per line; previously this code rebuilt
+      // the regex per line to side-step lastIndex, which on a
+      // 100-file × 1000-line search allocated 100k regex objects.
+      re.lastIndex = 0;
       let m: RegExpExecArray | null;
-      while ((m = local.exec(line)) !== null) {
+      while ((m = re.exec(line)) !== null) {
         out.push({
           path: rel,
           line: i + 1,
@@ -340,7 +343,7 @@ function scanText(
         });
         if (out.length >= limit) return;
         // Avoid zero-length match infinite loop.
-        if (m.index === local.lastIndex) local.lastIndex += 1;
+        if (m.index === re.lastIndex) re.lastIndex += 1;
       }
     } else {
       const haystack = opts.caseSensitive ? line : line.toLowerCase();
@@ -375,7 +378,11 @@ function looksBinary(buf: Buffer): boolean {
 
 function safeRegex(pattern: string, caseSensitive: boolean): RegExp | undefined {
   try {
-    return new RegExp(pattern, caseSensitive ? "" : "i");
+    // Always include the `g` flag so scanText() can do a lastIndex-bumping
+    // exec loop without rebuilding the regex per line. Without `g`, exec()
+    // returns the same first match on every call, which would silently
+    // miss subsequent matches on the same line.
+    return new RegExp(pattern, caseSensitive ? "g" : "gi");
   } catch {
     return undefined;
   }

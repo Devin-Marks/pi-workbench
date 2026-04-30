@@ -51,6 +51,17 @@ interface RefetchState {
 const refetchState = new Map<string, RefetchState>();
 
 /**
+ * Per-session AbortController for the open SSE stream. Module-scoped
+ * (not in Zustand state) for the same reason as `pendingDeltas` /
+ * `pendingRaf`: it's plumbing, not data. Keeping it inside Zustand
+ * state would be a foot-gun — anyone who later subscribed via
+ * `useStore(s => s.controllers)` would get a stable Map reference and
+ * never re-render, because we mutate the Map imperatively rather than
+ * through `set()`.
+ */
+const controllers = new Map<string, AbortController>();
+
+/**
  * Phase 8 keeps the message type loose — pi's AgentMessage union is rich
  * (UserMessage, AssistantMessage with content blocks, ToolResultMessage,
  * BashExecutionMessage, etc.) and the chat view rendering matches on
@@ -163,8 +174,6 @@ interface SessionState {
    * pop entries optimistically.
    */
   queuedBySession: Record<string, { steering: string[]; followUp: string[] } | undefined>;
-  /** Per-session abort controller for the open SSE stream, if any. */
-  controllers: Map<string, AbortController>;
   /** Errors surfaced from API calls (sticky until next successful op). */
   error: string | undefined;
   loadingList: boolean;
@@ -211,7 +220,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   activeToolBySession: {},
   agentEndCountBySession: {},
   queuedBySession: {},
-  controllers: new Map(),
   error: undefined,
   loadingList: false,
 
@@ -315,10 +323,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   openStream: (sessionId) => {
-    const existing = get().controllers.get(sessionId);
+    const existing = controllers.get(sessionId);
     if (existing !== undefined) return; // already open
     const ctrl = new AbortController();
-    get().controllers.set(sessionId, ctrl);
+    controllers.set(sessionId, ctrl);
 
     // Identity-checked deletes below. Without this, React Strict Mode's
     // double-mount in dev (mount → unmount → mount) can create:
@@ -329,8 +337,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // — leaking ctrl_B with no way to close it. The `===` guard makes
     // the delete a no-op when WE are no longer the registered entry.
     const onTerminate = (): void => {
-      if (get().controllers.get(sessionId) === ctrl) {
-        get().controllers.delete(sessionId);
+      if (controllers.get(sessionId) === ctrl) {
+        controllers.delete(sessionId);
       }
     };
 
@@ -358,15 +366,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   closeStream: (sessionId) => {
-    const ctrl = get().controllers.get(sessionId);
+    const ctrl = controllers.get(sessionId);
     if (ctrl !== undefined) {
       ctrl.abort();
       // Identity-check: only delete if no later openStream replaced
       // the entry between abort() and now (event-loop ordering means
       // this is essentially impossible synchronously, but the guard
       // costs nothing and pairs symmetrically with the catch above).
-      if (get().controllers.get(sessionId) === ctrl) {
-        get().controllers.delete(sessionId);
+      if (controllers.get(sessionId) === ctrl) {
+        controllers.delete(sessionId);
       }
     }
   },

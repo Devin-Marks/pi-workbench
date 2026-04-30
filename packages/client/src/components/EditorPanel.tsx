@@ -50,7 +50,9 @@ function writeWrapPref(ext: string, wrap: boolean): void {
  * panel component, so React identifies it once at module evaluation
  * (not every render).
  */
-const CodeMirrorEditor = lazy(() => import("./CodeMirrorEditor"));
+const CodeMirrorEditor = lazy(() =>
+  import("./CodeMirrorEditor").then((m) => ({ default: m.CodeMirrorEditor })),
+);
 
 /**
  * Phase 10 editor: tabs across the top, single CodeMirror instance under

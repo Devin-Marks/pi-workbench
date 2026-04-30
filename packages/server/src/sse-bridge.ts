@@ -114,15 +114,6 @@ export function createSSEClient(reply: FastifyReply, live: LiveSession): SSEClie
      * later phases). Filter-bypass cannot leak SDK events because callers
      * supply already-shaped objects.
      */
-    const writeRaw = (chunk: string): void => {
-      if (closed) return;
-      try {
-        raw.write(chunk);
-      } catch {
-        close();
-      }
-    };
-
     const close = (): void => {
       if (closed) return;
       closed = true;
@@ -131,6 +122,15 @@ export function createSSEClient(reply: FastifyReply, live: LiveSession): SSEClie
         raw.end();
       } catch {
         // socket already torn down — fine
+      }
+    };
+
+    const writeRaw = (chunk: string): void => {
+      if (closed) return;
+      try {
+        raw.write(chunk);
+      } catch {
+        close();
       }
     };
 

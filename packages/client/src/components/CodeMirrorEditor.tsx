@@ -61,7 +61,7 @@ const AUTOSAVE_DEBOUNCE_MS = 1000;
  * tabs unmounts + remounts, but RENAMING the file keeps the same
  * tabId so cursor / scroll / undo / selection survive.
  */
-export default function CodeMirrorEditor({
+export function CodeMirrorEditor({
   file,
   onChange,
   onSaveShortcut,

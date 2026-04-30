@@ -138,22 +138,7 @@ async function runGit(cwd: string, args: string[]): Promise<RunResult> {
     const { stdout, stderr } = await execFileAsync("git", args, {
       cwd,
       maxBuffer: MAX_BUFFER,
-      env: {
-        ...process.env,
-        // `git config` consults $HOME for the user's global config.
-        // If the parent process has no HOME (some container init
-        // flows, certain systemd/launchd configurations), git falls
-        // back to /etc/passwd lookup which can fail opaquely. Force
-        // a sensible default from `os.homedir()` (which itself
-        // checks USERPROFILE on Windows + falls back to the passwd
-        // entry).
-        HOME: process.env.HOME ?? homedir(),
-        GIT_TERMINAL_PROMPT: "0",
-        // `true` is the POSIX no-op; suppresses any askpass GUI.
-        GIT_ASKPASS: "true",
-        // Predictable plumbing output regardless of user's lang.
-        LC_ALL: "C",
-      },
+      env: gitEnv(),
     });
     return { stdout, stderr, exitCode: 0 };
   } catch (err) {
@@ -167,6 +152,58 @@ async function runGit(cwd: string, args: string[]): Promise<RunResult> {
     const userMessage = sanitizeStderr(stderr, cwd);
     const exitCode = typeof e.code === "number" ? e.code : null;
     throw new GitCommandError(exitCode, userMessage, stderr || (e.message ?? "git failed"));
+  }
+}
+
+/**
+ * Build the env object every git invocation should use. Centralising it
+ * here lets `runGit` (the typed-error wrapper) and `runGitRaw` (the
+ * permissive escape hatch used by `turn-diff-builder`) share the same
+ * GIT_TERMINAL_PROMPT / GIT_ASKPASS / LC_ALL / HOME scrubbing.
+ *
+ * `git config` consults $HOME for the user's global config. If the
+ * parent process has no HOME (some container init flows, certain
+ * systemd/launchd configurations), git falls back to /etc/passwd
+ * lookup which can fail opaquely. Force a sensible default from
+ * `os.homedir()` (which itself checks USERPROFILE on Windows + falls
+ * back to the passwd entry).
+ */
+function gitEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    HOME: process.env.HOME ?? homedir(),
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_ASKPASS: "true",
+    LC_ALL: "C",
+  };
+}
+
+/**
+ * Permissive runner for callers that need a custom maxBuffer or
+ * non-typed-error semantics. Returns the raw stdout/stderr/exitCode
+ * tuple WITHOUT mapping non-zero exit codes to GitCommandError —
+ * callers handle exit codes themselves. Inherits the same env
+ * scrubbing as `runGit`.
+ *
+ * Currently used by `turn-diff-builder.ts` which wants `git diff` to
+ * succeed even when the path is untracked (exit 0 with empty output)
+ * and accepts a 16 MB diff buffer.
+ */
+export async function runGitRaw(
+  cwd: string,
+  args: string[],
+  opts: { maxBuffer?: number } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  try {
+    const { stdout, stderr } = await execFileAsync("git", args, {
+      cwd,
+      maxBuffer: opts.maxBuffer ?? MAX_BUFFER,
+      env: gitEnv(),
+    });
+    return { stdout, stderr };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") throw new GitNotInstalledError();
+    throw err;
   }
 }
 

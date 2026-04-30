@@ -1,10 +1,7 @@
-import { execFile } from "node:child_process";
 import { stat, readFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { promisify } from "node:util";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
-
-const execFileAsync = promisify(execFile);
+import { runGitRaw } from "./git-runner.js";
 
 /**
  * Aggregate file changes across a single agent turn into one
@@ -296,10 +293,10 @@ async function tryGitDiffMany(
   if (rels.length === 0) return out;
   let stdout: string;
   try {
-    const r = await execFileAsync(
-      "git",
+    const r = await runGitRaw(
+      projectPath,
       ["diff", "--no-color", "--no-ext-diff", "HEAD", "--", ...rels],
-      { cwd: projectPath, maxBuffer: 16 * 1024 * 1024 },
+      { maxBuffer: 16 * 1024 * 1024 },
     );
     stdout = r.stdout;
   } catch {
