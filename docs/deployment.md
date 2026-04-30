@@ -175,7 +175,7 @@ WebSocket upgrades transparently.
 
 ## Production environment variables
 
-The full reference is in [`README.md`](../README.md#environment-variables).
+The full reference is in [`configuration.md`](./configuration.md#environment-variables).
 Production-relevant guidance:
 
 | Variable | Production value | Why |

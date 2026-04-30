@@ -89,7 +89,7 @@ with the `SESSION_DIR` env var if you want them elsewhere.
 ## Environment variables
 
 The compose file forwards every env var pi-workbench reads. See the full
-reference in [`README.md`](../README.md#environment-variables); the
+reference in [`configuration.md`](./configuration.md#environment-variables); the
 container-relevant ones:
 
 | Variable | Container default | Notes |

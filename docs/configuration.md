@@ -4,14 +4,43 @@ pi-workbench's runtime behavior is shaped by **two** layers of configuration:
 
 1. **Workbench env vars** — read by `packages/server/src/config.ts` at
    startup. Controls ports, paths, auth, and the `MINIMAL_UI` frontend
-   gate. Reference: [`README.md`](../README.md#environment-variables) and
-   [`docs/deployment.md`](./deployment.md).
+   gate. Documented in [Environment variables](#environment-variables) below.
 2. **Pi SDK config files** — JSON files under `${PI_CONFIG_DIR}` (default
    `~/.pi/agent`, container `/home/pi/.pi/agent`). Owned by the pi SDK,
    surfaced by the workbench's Settings panel and the
-   `/api/v1/config/*` routes.
+   `/api/v1/config/*` routes. See [Pi SDK config files](#pi-sdk-config-files)
+   below.
 
-This document covers layer 2 — what each pi config file does, how the
+## Environment variables
+
+| Variable | Default | Notes |
+|---|---|---|
+| `PORT` | `3000` | Fastify listen port. |
+| `HOST` | `0.0.0.0` | Bind address. |
+| `LOG_LEVEL` | `info` | Pino log level. |
+| `WORKSPACE_PATH` | `~/.pi-workbench/workspace` | Where project code lives. Docker image overrides to `/workspace` (mounted from host). Point at an existing dir (e.g. `~/Code`) to reuse code you already have on disk. |
+| `PI_CONFIG_DIR` | `~/.pi/agent` | Pi SDK config dir (auth.json, models.json, settings.json — owned by the SDK). The Docker image overrides this to `/home/pi/.pi/agent` (mounted from the host's `~/.pi/agent`). |
+| `WORKBENCH_DATA_DIR` | `~/.pi-workbench` | Workbench-owned state (projects.json). Defaults to the same dotdir as the workspace (`projects.json` sits alongside `workspace/`). Kept separate from `PI_CONFIG_DIR` so we don't mix our state into the pi SDK's directory. Docker image points this at `/home/pi/.pi-workbench` (mounted from the host's `~/.pi-workbench-docker` by default — container has its own project list). |
+| `CLIENT_DIST_PATH` | `<server-dist>/../../client/dist` | Built Vite output served by Fastify in production. |
+| `SERVE_CLIENT` | `true` | Set to `false` to skip static-serving (useful when running the dev Vite server in front of the API). |
+| `SESSION_DIR` | `${WORKSPACE_PATH}/.pi/sessions` | JSONL session storage. |
+| `UI_PASSWORD` | (unset) | If set, enables browser JWT auth. `JWT_SECRET` is auto-generated on first boot if not supplied. After the user changes it via the UI, a scrypt hash is persisted to `${WORKBENCH_DATA_DIR}/password-hash` and this env var is ignored on subsequent logins. |
+| `REQUIRE_PASSWORD_CHANGE` | `true` | When the user logs in with the env-supplied `UI_PASSWORD` and no on-disk hash exists yet, the issued token is scoped to `POST /auth/change-password` and the UI forces the user to pick a new password before continuing. Set to `false` to keep the env-supplied password as-is (useful when `UI_PASSWORD` is itself sourced from a sealed secret you rotate out-of-band). |
+| `JWT_SECRET` | (unset, auto-generated) | HS256 signing key. **Optional** — when `UI_PASSWORD` is set and `JWT_SECRET` is not, the server generates one and persists it to `${WORKBENCH_DATA_DIR}/jwt-secret` (mode 0600). The data dir is already a PVC / bind-mount in K8s and Docker, so tokens survive restarts with no extra wiring. Set this env var to override (e.g. `openssl rand -hex 32`). Delete the file to rotate. |
+| `API_KEY` | (unset) | Static bearer token for programmatic access. |
+| `JWT_EXPIRES_IN_SECONDS` | `604800` | JWT lifetime (default 7 d). |
+| `RATE_LIMIT_LOGIN_MAX` | `10` | Max `/auth/login` attempts per window. |
+| `RATE_LIMIT_LOGIN_WINDOW_MS` | `60000` | Login rate-limit window (ms). |
+| `CORS_ORIGIN` | (reflect request origin) | Pin to a specific origin in production. |
+| `TRUST_PROXY` | `false` | Set to `true` when running behind a reverse proxy (nginx, Caddy, Traefik) so `req.ip` reflects the real client IP — required for the login rate limit to work per-user. |
+| `MINIMAL_UI` | `false` | Hide terminal / git / last-turn / providers / agent settings. Frontend gate; doesn't disable server routes. |
+
+Production-relevant env tuning (rate limits, JWT lifetime, TLS / proxy
+posture) lives in [`deployment.md`](./deployment.md).
+
+## Pi SDK config files
+
+This section covers layer 2 — what each pi config file does, how the
 workbench reads/writes it, and how to wire up a custom provider.
 
 ## File layout

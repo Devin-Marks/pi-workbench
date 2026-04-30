@@ -14,8 +14,24 @@ npm run dev          # server on :3000, client on :5173
 
 The Vite dev server proxies `/api/*` to Fastify (including WebSocket upgrades
 for the integrated terminal), so the client calls `/api/v1/...` directly with
-no base-URL config. See [`README.md`](./README.md) for environment variables
-and the Docker-compose path.
+no base-URL config. Environment variables are in
+[`docs/configuration.md`](./docs/configuration.md); the Docker-compose path
+is in [`docs/CONTAINERS.md`](./docs/CONTAINERS.md).
+
+### Native module gotcha (node-pty)
+
+The integrated terminal depends on `node-pty`'s native binding. Prebuilt
+binaries ship for common Node versions, but if the binding doesn't match
+the Node major you're running on (typical symptom: terminals fail to spawn
+with `posix_spawnp failed.` and no other detail), rebuild it from source:
+
+```bash
+cd node_modules/node-pty && npx node-gyp rebuild
+```
+
+Requires the system C++ toolchain (Xcode CLT on macOS; `build-essential`
+on Linux). The Docker image avoids this — its build stage compiles
+node-pty against the runtime Node version automatically.
 
 ## Before you open a PR
 
