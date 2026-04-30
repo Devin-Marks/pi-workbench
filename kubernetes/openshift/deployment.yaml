@@ -142,6 +142,11 @@ spec:
               mountPath: /home/pi/.pi/agent
             - name: workbench-data
               mountPath: /home/pi/.pi-workbench
+            # /tmp emptyDir because readOnlyRootFilesystem:true on the
+            # container blocks writes there. The agent's bash tool needs
+            # /tmp for `mktemp`, `pip install`, `npm install`, `git clone`.
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: workspace
           persistentVolumeClaim:
@@ -152,3 +157,6 @@ spec:
         - name: workbench-data
           persistentVolumeClaim:
             claimName: pi-workbench-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

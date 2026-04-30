@@ -163,6 +163,12 @@ spec:
               mountPath: /home/pi/.pi/agent
             - name: workbench-data
               mountPath: /home/pi/.pi-workbench
+            # /tmp is required by the agent's bash tool — `mktemp`,
+            # `pip install`, `npm install`, `git clone` all write here.
+            # readOnlyRootFilesystem:true (set on the container security
+            # context above) blocks /tmp writes without this emptyDir.
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: workspace
           persistentVolumeClaim:
@@ -173,3 +179,9 @@ spec:
         - name: workbench-data
           persistentVolumeClaim:
             claimName: pi-workbench-data
+        # emptyDir for /tmp because the container has
+        # readOnlyRootFilesystem:true. 256Mi is generous for the
+        # agent's typical mktemp / npm cache / git clone scratch use.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

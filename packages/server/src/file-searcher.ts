@@ -88,11 +88,32 @@ export function _resetRipgrepCache(): void {
   cachedRipgrepAvailable = undefined;
 }
 
+/**
+ * Thrown when a search mode requires the ripgrep engine that isn't
+ * available on this host. Specifically: regex queries against the
+ * Node fallback engine are vulnerable to ReDoS (catastrophic
+ * backtracking pegs the event loop for the entire opts.timeoutMs
+ * window — the timeout is checked between iterations, not inside the
+ * regex engine), so we refuse them rather than silently DoS the
+ * server. Substring queries against the Node fallback are fine.
+ */
+export class SearchEngineUnavailableError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = "SearchEngineUnavailableError";
+  }
+}
+
 /* ----------------------------- entry point ----------------------------- */
 
 export async function searchFiles(projectPath: string, opts: SearchOptions): Promise<SearchResult> {
   if (await ripgrepAvailable()) {
     return searchWithRipgrep(projectPath, opts);
+  }
+  if (opts.regex) {
+    throw new SearchEngineUnavailableError(
+      "regex search requires ripgrep, which isn't installed on this host",
+    );
   }
   return searchInProcess(projectPath, opts);
 }

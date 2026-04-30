@@ -324,10 +324,41 @@ function installExitHandler(): void {
 }
 installExitHandler();
 
+/**
+ * Workbench secrets that the PTY shell MUST NOT inherit. Without this
+ * scrub, an authenticated user can `echo $JWT_SECRET` to read the
+ * server's JWT signing key — turning a 7-day browser token into a
+ * permanent backdoor (they can mint new tokens with arbitrary `exp`)
+ * AND defeating any future JWT_SECRET rotation (re-sign with the new
+ * secret they read from env). API_KEY and UI_PASSWORD have similar
+ * privilege-escalation shapes.
+ *
+ * Provider keys (ANTHROPIC_API_KEY etc.) are also scrubbed when set
+ * via env — operators should use `auth.json` for those, and the agent's
+ * own LLM calls don't need them at the shell level. If an operator
+ * relies on env-injected provider keys for a CLI tool they invoke FROM
+ * the terminal, they need to re-export in their shell rc.
+ */
+const SCRUB_ENV_VARS: ReadonlySet<string> = new Set([
+  "JWT_SECRET",
+  "API_KEY",
+  "UI_PASSWORD",
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GROQ_API_KEY",
+  "GOOGLE_API_KEY",
+  "MISTRAL_API_KEY",
+  "OPENROUTER_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "XAI_API_KEY",
+]);
+
 function filterEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) {
-    if (typeof v === "string") out[k] = v;
+    if (typeof v !== "string") continue;
+    if (SCRUB_ENV_VARS.has(k)) continue;
+    out[k] = v;
   }
   return out;
 }

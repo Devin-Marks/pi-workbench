@@ -66,6 +66,31 @@ services:
       # are unchanged. Use for locked-down deployments where provider
       # config is managed at the deploy level.
       - MINIMAL_UI=${MINIMAL_UI:-false}
+    # Container hardening (mirrors what the k8s manifests already apply).
+    # Skipping `read_only: true` because the agent's bash tool commonly
+    # needs to write to /home/pi/.npm, /home/pi/.cache, /tmp, etc. for
+    # `npm install`, `pip install`, `git clone`. Operators with a more
+    # restricted use case can add `read_only: true` + a tmpfs for /tmp,
+    # /home/pi/.npm at their discretion.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Cap process count to defang fork-bombs from a runaway agent
+    # process or a hostile bash command. 512 is well above any realistic
+    # interactive shell + tool subprocess depth.
+    pids_limit: 512
+    # Resource limits — keep a misbehaving agent from filling the host's
+    # memory or starving the host CPU. Operators with heavier needs can
+    # raise these via override or a docker-compose.override.yml.
+    mem_limit: 2g
+    cpus: "1.0"
+    # ~/.pi/agent is bind-mounted read-write so the workbench can update
+    # auth.json. This means a container escape (kernel CVE, runc CVE)
+    # would gain write access to every provider key the operator has
+    # configured. Documented trade-off; the alternative (read-only mount
+    # + out-of-band key updates) is too friction-heavy for the typical
+    # single-tenant workflow.
     healthcheck:
       test:
         [

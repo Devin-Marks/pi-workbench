@@ -119,12 +119,20 @@ export async function buildServer(): Promise<FastifyInstance> {
   //
   // CSP rationale (see also packages/client/index.html):
   //   - script-src 'self' — Vite's bundle. No inline-script is rendered.
-  //   - style-src 'self' 'unsafe-inline' — required for Tailwind v4's
-  //     inline @style emission and the CodeMirror inline cursor styles.
+  //   - style-src 'self' — Tailwind v4 emits external CSS to /assets;
+  //     no inline <style> tags are rendered. We split inline-style
+  //     attribute (style="...") allowance to style-src-attr so a
+  //     hypothetical CSP-bypass via inline-script can't also inject
+  //     a hostile <style> block.
+  //   - style-src-attr 'unsafe-inline' — React's `style={{...}}` prop
+  //     in RootErrorBoundary + CodeMirror's inline cursor/selection
+  //     styles compile to style="..." attributes. Keep also on
+  //     style-src for Safari < 15.4 which falls back to it.
   //   - img-src 'self' data: blob: — chat attachments + diff inline icons.
-  //   - connect-src 'self' ws: wss: — WebSocket terminal. ws/wss broad
-  //     (rather than self) because operators behind a TLS-terminating
-  //     proxy may speak wss while the browser sees the proxy's host.
+  //   - connect-src 'self' — same-origin only. Browsers normalize
+  //     ws://same-host to the page origin, so 'self' covers the
+  //     integrated terminal WS without granting open-to-any-host
+  //     reach to a hypothetical bypass script.
   //   - worker-src 'self' blob: — Vite PWA service worker.
   //   - object-src 'none', base-uri 'self', frame-ancestors 'none' —
   //     defense in depth against legacy / clickjacking surfaces.
@@ -142,10 +150,14 @@ export async function buildServer(): Promise<FastifyInstance> {
       [
         "default-src 'self'",
         "script-src 'self'",
+        // Keep 'unsafe-inline' on style-src for Safari < 15.4 which
+        // falls back to it for inline style attributes. Newer browsers
+        // honor the tighter style-src-attr below.
         "style-src 'self' 'unsafe-inline'",
+        "style-src-attr 'unsafe-inline'",
         "img-src 'self' data: blob:",
         "font-src 'self' data:",
-        "connect-src 'self' ws: wss:",
+        "connect-src 'self'",
         "worker-src 'self' blob:",
         "object-src 'none'",
         "base-uri 'self'",

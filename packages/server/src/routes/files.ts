@@ -21,7 +21,7 @@ import {
 } from "../file-manager.js";
 import { config } from "../config.js";
 import { getProject } from "../project-manager.js";
-import { searchFiles } from "../file-searcher.js";
+import { searchFiles, SearchEngineUnavailableError } from "../file-searcher.js";
 import { errorSchema } from "./_schemas.js";
 
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
@@ -136,6 +136,9 @@ function mapError(reply: FastifyReply, err: unknown): FastifyReply {
       error: "checksum_mismatch",
       message: `expected sha256 ${err.expected}, computed ${err.actual}`,
     });
+  }
+  if (err instanceof SearchEngineUnavailableError) {
+    return reply.code(503).send({ error: "engine_unavailable", message: err.message });
   }
   // Raw NodeJS.ErrnoException fallback. Without this, an EACCES on a
   // perms-restricted file in the project tree, an EISDIR from trying to

@@ -1,4 +1,14 @@
-import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
@@ -227,10 +237,24 @@ export async function createProject(name: string, path: string): Promise<Project
   if (trimmedName.length === 0) {
     throw new InvalidNameError("project name cannot be empty");
   }
-  const resolvedPath = resolve(path);
-  if (!isInsideWorkspace(resolvedPath)) {
-    throw new PathOutsideWorkspaceError(resolvedPath);
+  const lexicalPath = resolve(path);
+  // Realpath both sides before the inside-workspace check. The lexical
+  // check alone accepts a symlink under WORKSPACE_PATH that points
+  // OUTSIDE the realpath bound — e.g. `~/.pi-workbench/workspace/external
+  // -> /etc` — and registers `/external` (the symlink target) as a
+  // legitimate project root. Subsequent file-manager ops would then
+  // realpath-bound to the symlink target, NOT to WORKSPACE_PATH.
+  // Catch here so a missing target throws NotADirectoryError below
+  // rather than the more confusing realpath ENOENT.
+  const realPath = await realpath(lexicalPath).catch(() => lexicalPath);
+  const realWorkspaceRoot = await realpath(config.workspacePath).catch(() => config.workspacePath);
+  if (!isInsideWorkspace(realPath, realWorkspaceRoot)) {
+    throw new PathOutsideWorkspaceError(realPath);
   }
+  // Persist the canonical (real) path so future operations are
+  // consistent and `isInsideWorkspace` in file-manager and elsewhere
+  // sees the same shape.
+  const resolvedPath = realPath;
   const st = await stat(resolvedPath).catch(() => undefined);
   if (st === undefined || !st.isDirectory()) {
     throw new NotADirectoryError(resolvedPath);

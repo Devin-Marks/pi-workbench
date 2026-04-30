@@ -133,9 +133,35 @@ interface RunResult {
  * we want a fast 4xx instead of a hung process. Same for
  * `GIT_ASKPASS` set to `true` (the no-op binary).
  */
+/**
+ * `-c` flags prepended to every git invocation so a hostile per-repo
+ * `.git/config` can't get the workbench to execute arbitrary commands
+ * via `core.fsmonitor` / `core.editor` / `core.pager` /
+ * `core.sshCommand` / `core.askPass`. Cloning a third-party repo is a
+ * normal flow; the cloned repo's local config CAN ship hostile values
+ * for these keys (the initial clone is from upstream and doesn't apply
+ * the local config, but every subsequent `git status` etc. does).
+ *
+ * Setting these to safe defaults at invocation time overrides any
+ * value the repo's `.git/config` set. Reference:
+ * https://github.blog/2022-04-12-git-security-vulnerability-announced/
+ */
+const HARDENING_ARGS: readonly string[] = [
+  "-c",
+  "core.fsmonitor=",
+  "-c",
+  "core.askPass=",
+  "-c",
+  "core.sshCommand=ssh",
+  "-c",
+  "core.editor=true",
+  "-c",
+  "core.pager=cat",
+];
+
 async function runGit(cwd: string, args: string[]): Promise<RunResult> {
   try {
-    const { stdout, stderr } = await execFileAsync("git", args, {
+    const { stdout, stderr } = await execFileAsync("git", [...HARDENING_ARGS, ...args], {
       cwd,
       maxBuffer: MAX_BUFFER,
       env: gitEnv(),
@@ -195,7 +221,7 @@ export async function runGitRaw(
   opts: { maxBuffer?: number } = {},
 ): Promise<{ stdout: string; stderr: string }> {
   try {
-    const { stdout, stderr } = await execFileAsync("git", args, {
+    const { stdout, stderr } = await execFileAsync("git", [...HARDENING_ARGS, ...args], {
       cwd,
       maxBuffer: opts.maxBuffer ?? MAX_BUFFER,
       env: gitEnv(),

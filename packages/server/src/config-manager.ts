@@ -80,6 +80,42 @@ async function ensureConfigDir(): Promise<void> {
   await mkdir(config.piConfigDir, { recursive: true });
 }
 
+/**
+ * Keys we refuse to allow user-supplied input to set on any JSON-shaped
+ * config blob. Without filtering, a request body like
+ * `{"__proto__": {"polluted": true}}` flows through `JSON.parse` (where
+ * Node decodes `__proto__` as an own data property — safe) and then
+ * through a property-write somewhere downstream that *does* hit the
+ * prototype chain — corrupting `Object.prototype` process-wide.
+ *
+ * We filter at every JSON-write boundary as defense in depth, not just
+ * at the one route the original audit caught.
+ */
+const DANGEROUS_KEYS: ReadonlySet<string> = new Set(["__proto__", "prototype", "constructor"]);
+
+/**
+ * Recursively strip dangerous keys from a value before persisting. Used
+ * by `writeModelsJson` and any other path that round-trips
+ * user-supplied JSON to disk.
+ */
+function stripDangerousKeys<T>(input: T): T {
+  if (Array.isArray(input)) {
+    return input.map((v: unknown) => stripDangerousKeys(v)) as unknown as T;
+  }
+  if (typeof input !== "object" || input === null) return input;
+  const cleaned: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input)) {
+    if (DANGEROUS_KEYS.has(k)) continue;
+    Object.defineProperty(cleaned, k, {
+      value: stripDangerousKeys(v),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return cleaned as T;
+}
+
 async function atomicWriteJson(path: string, data: unknown): Promise<void> {
   await ensureConfigDir();
   const tmp = `${path}.${randomUUID()}.tmp`;
@@ -149,7 +185,16 @@ function redactProviderConfig(p: ProviderConfig): ProviderConfig {
 }
 
 export async function writeModelsJson(data: ModelsJson): Promise<void> {
-  await atomicWriteJson(MODELS_FILE(), data);
+  // Filter dangerous keys at every level of the providers tree before
+  // persisting — defense in depth against a hostile body that
+  // sneaks `__proto__`/`prototype`/`constructor` through.
+  // See stripDangerousKeys + DANGEROUS_KEYS at the top of this file.
+  const safe: ModelsJson = { providers: {} };
+  for (const [name, provider] of Object.entries(data.providers ?? {})) {
+    if (DANGEROUS_KEYS.has(name)) continue;
+    safe.providers[name] = stripDangerousKeys(provider);
+  }
+  await atomicWriteJson(MODELS_FILE(), safe);
 }
 
 // ---------------------------------------------------------------------------
@@ -212,14 +257,6 @@ export async function readSettings(): Promise<SettingsJson> {
  * as a single critical section. Single-process / single-tenant only.
  */
 export const withSettingsLock = makeLock();
-
-/**
- * Keys we refuse to allow user-supplied input to set on settings.json.
- * Without this, a `PUT /config/settings` body containing `{"__proto__":
- * {"polluted": true}}` would mutate Object.prototype process-wide via
- * the `(next as Record<string, unknown>)[k] = v` write.
- */
-const DANGEROUS_KEYS: ReadonlySet<string> = new Set(["__proto__", "prototype", "constructor"]);
 
 /**
  * Atomically replace settings.json with `settings`. Used by the

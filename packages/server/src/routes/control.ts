@@ -493,8 +493,27 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
           // undefined so we don't try to restore a phantom snapshot.
         }
         try {
-          await live.session.setModel(model as Parameters<typeof live.session.setModel>[0]);
+          // Wrap in withTimeout so a hung SDK setModel can't hold the
+          // settings lock indefinitely. Without this, a single hung
+          // setModel blocks every subsequent PUT /config/settings,
+          // every other setModel, and every setSkillEnabled (they all
+          // share withSettingsLock) until process restart. 30s is
+          // plenty for an in-memory + disk write; longer means
+          // something is wrong.
+          await withTimeout(
+            live.session.setModel(model as Parameters<typeof live.session.setModel>[0]),
+            30_000,
+            "setModel",
+          );
         } catch (err) {
+          if (err instanceof TimeoutError) {
+            req.log.warn({ err, sessionId: req.params.id }, "setModel timed out");
+            return {
+              ok: false,
+              status: 504,
+              body: { error: "set_model_timeout", message: err.message },
+            };
+          }
           return {
             ok: false,
             status: 400,

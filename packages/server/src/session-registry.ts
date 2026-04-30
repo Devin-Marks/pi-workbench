@@ -400,8 +400,18 @@ export async function disposeSession(sessionId: string): Promise<boolean> {
   // silently or throws inside the SDK trying to write to the
   // disposed SessionManager. Best-effort: if abort itself rejects,
   // log and fall through to dispose.
+  //
+  // Bounded race: a hung SDK abort would otherwise block the dispose
+  // forever, which means `disposeAllSessions` (the shutdown path)
+  // hangs the server on `docker compose down` until SIGKILL. 5s is
+  // well above any reasonable abort latency; the dispose path below
+  // still runs after the race resolves.
   try {
-    await live.session.abort();
+    const ABORT_TIMEOUT_MS = 5_000;
+    await Promise.race([
+      live.session.abort(),
+      new Promise<void>((resolve) => setTimeout(resolve, ABORT_TIMEOUT_MS).unref()),
+    ]);
   } catch (err) {
     // SDK doesn't currently throw from abort, but defend against
     // future versions. The dispose path below still runs.
