@@ -144,24 +144,30 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
     return flattenTree(tree);
   }, [tree]);
 
-  // Tree1 — SVG connector overlay. Refs per row + per "indent
-  // anchor" inside each row let us measure each entry's
-  // (left, top, height) after layout, then draw an L-shaped path
-  // from each row's anchor to its parent's anchor. Stored as
-  // local state so React re-renders the SVG when geometry
-  // changes; recomputed on tree update + container resize.
-  const listContainerRef = useRef<HTMLDivElement>(null);
+  // Tree1 — SVG connector overlay. Refs per row + zero-width
+  // anchors at each row's content edge let us measure entry
+  // geometry after layout. SVG lives INSIDE the <ul> (not its
+  // scrolling parent) so it sizes to the row content directly —
+  // putting it in the scrolling container forced an intrinsic
+  // min-width back up the flex chain that blew the modal out
+  // to viewport-width.
+  const ulRef = useRef<HTMLUListElement>(null);
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
   const anchorRefs = useRef(new Map<string, HTMLSpanElement>());
   const [connectors, setConnectors] = useState<Connector[]>([]);
+  // Track the UL's content size so the SVG's explicit width/height
+  // attributes match — without explicit attrs, the SVG's intrinsic
+  // size leaks into flex min-width calculations.
+  const [overlaySize, setOverlaySize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   useLayoutEffect(() => {
-    const container = listContainerRef.current;
-    if (container === null || nodes.length === 0) {
+    const ul = ulRef.current;
+    if (ul === null || nodes.length === 0) {
       setConnectors([]);
+      setOverlaySize({ w: 0, h: 0 });
       return undefined;
     }
     const measure = (): void => {
-      const cRect = container.getBoundingClientRect();
+      const uRect = ul.getBoundingClientRect();
       const next: Connector[] = [];
       for (const node of nodes) {
         if (node.parentId === null) continue;
@@ -170,13 +176,13 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
         if (parentAnchor === undefined || childAnchor === undefined) continue;
         const pRect = parentAnchor.getBoundingClientRect();
         const cRectAnchor = childAnchor.getBoundingClientRect();
-        // Anchor positions are relative to the scrolling container;
-        // SVG is positioned over the same container, so subtract
-        // the container's offset to land in SVG-local coordinates.
-        const px = pRect.left - cRect.left + container.scrollLeft + 4;
-        const py = pRect.top - cRect.top + container.scrollTop + pRect.height / 2;
-        const cx = cRectAnchor.left - cRect.left + container.scrollLeft + 4;
-        const cy = cRectAnchor.top - cRect.top + container.scrollTop + cRectAnchor.height / 2;
+        // Anchor coords relative to the UL (not the scrolling
+        // container) — scroll position cancels out because both
+        // anchors and the UL move together when scrolled.
+        const px = pRect.left - uRect.left + 4;
+        const py = pRect.top - uRect.top + pRect.height / 2;
+        const cx = cRectAnchor.left - uRect.left + 4;
+        const cy = cRectAnchor.top - uRect.top + cRectAnchor.height / 2;
         next.push({
           id: node.id,
           parentX: px,
@@ -187,12 +193,13 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
         });
       }
       setConnectors(next);
+      setOverlaySize({ w: ul.clientWidth, h: ul.scrollHeight });
     };
     measure();
-    // ResizeObserver picks up content reflow (preview text wrapping,
-    // panel width changes from divider drag, etc.).
+    // ResizeObserver picks up content reflow (preview wrap, panel
+    // resize via divider, etc.).
     const ro = new ResizeObserver(measure);
-    ro.observe(container);
+    ro.observe(ul);
     for (const el of rowRefs.current.values()) ro.observe(el);
     return () => ro.disconnect();
   }, [nodes]);
@@ -354,7 +361,7 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
           </div>
         )}
 
-        <div ref={listContainerRef} className="relative flex-1 overflow-y-auto px-2 py-2">
+        <div className="flex-1 overflow-y-auto px-2 py-2">
           {loading && tree === undefined && (
             <div className="px-4 py-6 text-center text-xs italic text-neutral-500">
               Loading tree…
@@ -365,30 +372,7 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
               No entries yet.
             </div>
           )}
-          {/* SVG connector overlay (Tree1). Pointer-events disabled so
-              clicks pass through to the row buttons underneath.
-              Stroke width 1 + branch-tinted color; the L-shape goes
-              from the parent's anchor down to the child's row, then
-              horizontal in to the child's anchor. */}
-          {connectors.length > 0 && (
-            <svg
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-0 h-full w-full"
-              style={{ overflow: "visible" }}
-            >
-              {connectors.map((c) => (
-                <path
-                  key={c.id}
-                  d={`M ${c.parentX} ${c.parentY} L ${c.parentX} ${c.childY} L ${c.childX} ${c.childY}`}
-                  stroke={c.color}
-                  strokeWidth={1}
-                  fill="none"
-                  strokeOpacity={0.55}
-                />
-              ))}
-            </svg>
-          )}
-          <ul className="relative space-y-0.5">
+          <ul ref={ulRef} className="relative space-y-0.5">
             {nodes.map((n) => (
               <TreeRow
                 key={n.id}
@@ -415,6 +399,33 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
                 }}
               />
             ))}
+            {/* SVG connector overlay (Tree1). Lives inside the UL so
+                its sizing is bounded by the row content, not the
+                viewport. Explicit width/height attributes prevent
+                the SVG's default 300×150 intrinsic size from
+                contributing to flex min-width calculations.
+                pointer-events:none so clicks pass through to the
+                row buttons; absolute positioning keeps it out of
+                the rows' flow. */}
+            {connectors.length > 0 && overlaySize.w > 0 && overlaySize.h > 0 && (
+              <svg
+                aria-hidden="true"
+                className="pointer-events-none absolute left-0 top-0"
+                width={overlaySize.w}
+                height={overlaySize.h}
+              >
+                {connectors.map((c) => (
+                  <path
+                    key={c.id}
+                    d={`M ${c.parentX} ${c.parentY} L ${c.parentX} ${c.childY} L ${c.childX} ${c.childY}`}
+                    stroke={c.color}
+                    strokeWidth={1}
+                    fill="none"
+                    strokeOpacity={0.55}
+                  />
+                ))}
+              </svg>
+            )}
           </ul>
         </div>
 
