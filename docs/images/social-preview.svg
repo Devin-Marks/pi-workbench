@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0a0a"/>
+      <stop offset="100%" stop-color="#1a1a1a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#262626" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#grid)" opacity="0.4"/>
+
+  <g transform="translate(120, 200)">
+    <g transform="scale(2.4)" fill="#ffffff">
+      <polygon points="28,25 8,50 28,75 36,75 16,50 36,25"/>
+      <polygon points="72,25 92,50 72,75 64,75 84,50 64,25"/>
+      <rect x="34" y="35" width="32" height="8"/>
+      <rect x="39" y="42" width="7" height="28"/>
+      <rect x="54" y="42" width="7" height="28"/>
+    </g>
+  </g>
+
+  <g transform="translate(440, 250)">
+    <text x="0" y="0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="96" font-weight="700" fill="#ffffff" letter-spacing="-2">pi-workbench</text>
+    <text x="0" y="60" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="32" font-weight="400" fill="#a3a3a3">A browser workbench for the pi coding agent</text>
+    <g transform="translate(0, 110)">
+      <rect x="0" y="0" width="180" height="44" rx="22" fill="none" stroke="url(#accent)" stroke-width="2"/>
+      <text x="90" y="29" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#e5e5e5" text-anchor="middle">Self-hosted</text>
+
+      <rect x="200" y="0" width="180" height="44" rx="22" fill="none" stroke="url(#accent)" stroke-width="2"/>
+      <text x="290" y="29" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#e5e5e5" text-anchor="middle">REST + SSE</text>
+
+      <rect x="400" y="0" width="180" height="44" rx="22" fill="none" stroke="url(#accent)" stroke-width="2"/>
+      <text x="490" y="29" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#e5e5e5" text-anchor="middle">Container-native</text>
+    </g>
+  </g>
+
+  <rect x="0" y="632" width="1280" height="8" fill="url(#accent)"/>
+</svg>
