@@ -118,8 +118,35 @@ comments are addressed there already.
 By participating you agree to abide by the
 [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md).
 
-## Contributor License Agreement
+## Contribution terms
 
-Non-trivial contributions require sign-off on the project CLA — see
-[`CLA.md`](./CLA.md). The PR template links to a one-click acknowledgement;
-typo fixes and one-line changes are exempt.
+There is no separate Contributor License Agreement to sign. By opening a
+pull request against this repository, you represent and agree to the
+following — these are intentionally light, in line with the project's
+MIT-only posture:
+
+- **Original work.** The contribution is your own work, or you otherwise
+  have the right to submit it under the project's license. You're not
+  copying code from a source whose license is incompatible with MIT
+  (e.g. GPL/AGPL pasted into a runtime file), and you're not submitting
+  someone else's proprietary code.
+- **MIT licensing.** You license your contribution to the project and to
+  downstream users under the same MIT [LICENSE](./LICENSE) as the rest of
+  the codebase. You retain copyright on your contribution.
+- **Patent grant.** To the extent you hold any patent claims that read on
+  your contribution, you grant a perpetual, worldwide, royalty-free
+  license to make, use, sell, and distribute your contribution and works
+  incorporating it, on the same terms as the MIT license. (This mirrors
+  the patent grant in Apache-2.0 §3 and is included so the project isn't
+  exposed if a contributor later asserts a patent against their own code.)
+- **No warranty from you.** Like the rest of the project, your
+  contribution is provided "as is." You're not on the hook for warranty,
+  support, or indemnification.
+
+Trivial fixes (typo corrections, formatting-only changes, comment edits)
+don't need to think about any of this — submitting them is the
+representation.
+
+If your employer claims rights in code you write, get their sign-off
+before opening the PR. The maintainer cannot determine your employment
+arrangement and will rely on your representation above.
