@@ -365,10 +365,10 @@ For a programmatic client, mirror this pattern:
 
 The `/stream` route goes through the same JWT/API-key check as every
 other authenticated route. Pass the token via `Authorization: Bearer
-<token>` header. Browsers can do this on `EventSource`-style API
-because `EventSource` doesn't support custom headers — the browser
-client uses a `fetch` + `ReadableStream` reader instead. Programmatic
-clients should do the same (Python `httpx`, Node `fetch`).
+<token>` header. Browsers can't do this with the built-in `EventSource`
+API (it doesn't support custom headers), so the browser client uses a
+`fetch` + `ReadableStream` reader instead. Programmatic clients should
+do the same (Python `httpx`, Node `fetch`).
 
 ## Consuming SSE programmatically
 

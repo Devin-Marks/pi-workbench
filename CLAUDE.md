@@ -38,7 +38,7 @@ pi-webui/
 │   │   │   ├── file-manager.ts      # Workspace filesystem operations
 │   │   │   ├── git-runner.ts        # git command execution wrapper
 │   │   │   ├── turn-diff-builder.ts # Aggregate file diff from session turn
-│   │   │   ├── skills-manager.ts    # Pi skills discovery and enable/disable
+│   │   │   ├── file-searcher.ts     # Workspace ripgrep wrapper (file content search)
 │   │   │   ├── pty-manager.ts       # node-pty lifecycle management for terminal
 │   │   │   └── routes/
 │   │   │       ├── auth.ts
@@ -271,9 +271,10 @@ body fields without running them through file-manager. Return 403 for any traver
 attempt — do not throw, do not 500.
 
 **4. Auth config reads are read-only in routes.**
-`config-manager.ts readAuthJson()` returns ONLY which providers have credentials
-(a boolean presence map). It NEVER returns actual key values. This is enforced in
-`config-manager.ts` itself. Do not add any code path that returns raw key values.
+`config-manager.ts readAuthSummary()` returns ONLY which providers have credentials
+(a boolean presence map plus the SDK-reported source). It NEVER returns actual key
+values. This is enforced in `config-manager.ts` itself. Do not add any code path
+that returns raw key values.
 
 **5. All config file writes are atomic.**
 Write to a `.tmp` file first, then `fs.rename()` to the target. This prevents
@@ -296,6 +297,15 @@ Components read from stores and dispatch actions.
 **9. All HTTP calls from the client go through api-client.ts.**
 Never call `fetch()` directly in components. `api-client.ts` handles auth token
 attachment and 401 redirect. This is also where request/response types are defined.
+
+**10. Auth is global with explicit opt-out — not opt-in.**
+A single `preHandler` hook in `index.ts` enforces JWT/API-key auth for every
+route under `/api/v1/`. Public routes opt out by setting
+`config: { public: true }` on the route definition (currently:
+`/api/v1/health`, `/api/v1/auth/*`, and `/api/v1/ui-config`). Adding a new
+public route REQUIRES both: (a) the `config: { public: true }` opt-out, and
+(b) `security: []` in the route's schema so the OpenAPI spec at `/api/docs`
+reflects the public access. Forgetting either is a security/spec bug.
 
 ---
 
@@ -510,11 +520,12 @@ connected over a WebSocket (not SSE — terminals need bidirectional communicati
 
 - One PTY per terminal tab, spawned with `cwd` set to the project path
 - Default shell: `process.env.SHELL || '/bin/sh'`
-- WebSocket endpoint: `ws://localhost:3000/api/terminal/:projectId`
+- WebSocket endpoint: `ws://localhost:3000/api/v1/terminal?projectId=<id>&tabId=<optional>&token=<jwt-or-api-key>`
+  - `projectId` is required; `tabId` is the stable client-side tab identifier used for reattach across reconnects; `token` is required when auth is enabled (browsers can't attach `Authorization` headers on WebSocket upgrades).
 - Fastify WebSocket support via `@fastify/websocket`
 - PTY resize messages sent from client to server when the xterm container resizes
-- On client disconnect, the PTY process is killed and cleaned up
-- Do NOT share PTY instances across clients or sessions — one PTY per WebSocket connection
+- On client disconnect, the PTY is **detached** and kept alive briefly so an immediate reconnect with the same `tabId` can reattach without losing scrollback. The PTY is killed only after the detach grace window or on explicit close — `pty-manager.ts` owns the lifecycle.
+- Do NOT share PTY instances across clients or sessions — one PTY per `tabId`, one active WebSocket per PTY at a time.
 
 ---
 

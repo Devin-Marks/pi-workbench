@@ -1,26 +1,36 @@
 # Privacy
 
-pi-workbench is open-source software you self-host. **The project itself
-runs no servers, collects no telemetry, and has no access to your data.**
-This document describes what data the software you operate stores, where
-it stores it, and what flows out of it to third parties.
+pi-workbench is open-source software you self-host. The project does not
+operate any servers on your behalf and is designed not to send usage data
+back to the maintainer. This document describes, to the best of the
+maintainer's knowledge as of the current release, what data the software
+stores locally and what flows out of it to third parties.
 
-If you operate a pi-workbench deploy that other people use, this document
-is a starting point for your own privacy notice — but it is not a substitute
-for one.
+This document is informational. It is not a privacy notice, not legal
+advice, and not a warranty about the software's behavior. If you operate
+a pi-workbench deploy that other people use, treat it as a starting point
+for your own privacy notice rather than a substitute for one. Audit the
+source for your release before relying on any specific behavior described
+here — see the project commit history for what has actually changed.
 
-## What the project does NOT do
+## Design intent
 
-- **No upstream telemetry.** The codebase contains zero analytics SDKs, zero
-  call-home, zero usage reporting. Audit it yourself: there are no network
-  requests to maintainer-controlled endpoints anywhere.
-- **No anonymous metrics.** Even crash data stays local. The client logs
-  errors to your browser console; the server logs to its own pino stream.
-- **No remote configuration.** The project does not pull configuration,
-  feature flags, or A/B tests from anywhere. Everything is in your `.env`,
-  your `models.json`, and your `settings.json`.
-- **No update server.** The Docker image you pull is the Docker image you
-  run. There is no auto-update; you decide when to rebuild.
+The project is intentionally designed to minimize outbound data flow to
+parties other than the LLM provider you configure. As of the current
+release, the maintainer is not aware of:
+
+- Analytics SDKs, usage reporting, or call-home logic in the codebase.
+  Errors generally surface in the browser console (client) or the local
+  pino stream (server) rather than going to a remote endpoint.
+- Remote configuration, feature flags, or A/B test fetches. Configuration
+  is intended to live in your `.env`, `models.json`, and `settings.json`.
+- An auto-update mechanism. The Docker image you pull is what runs; you
+  choose when to rebuild.
+
+These statements describe intent and current state, not a guarantee. New
+dependencies, future features (e.g. an opt-in update check), or operator
+configuration could change what flows out. Verify with a network monitor
+in your environment if any of this is load-bearing for your use case.
 
 ## What the software you operate stores locally
 
@@ -84,14 +94,23 @@ Pulling the pi-workbench Docker image fetches it from your container
 registry of choice (Docker Hub, GHCR, your own). The registry sees your
 public IP and the image tag. This is out of pi-workbench's control.
 
-### What does NOT flow out
+### What is intended to stay local
 
-- **Local file contents** that the agent never sees stay local. The agent
-  only sees what its tools fetch (read, grep, etc.) and what you paste.
-- **Browser-side data** (theme choice, panel widths, draft text) lives in
-  localStorage. It never leaves the browser.
-- **Auth credentials** (`UI_PASSWORD`, `JWT_SECRET`, `API_KEY`) stay on
-  the server. The browser only stores the JWT token issued after login.
+The following are designed to remain on your machine and are not, to the
+maintainer's knowledge, transmitted by the project's own code paths:
+
+- **Local file contents** that the agent never reads. The agent typically
+  only sees what its tools fetch (`read`, `grep`, etc.) or what you paste —
+  but anything those tools fetch is then sent to the LLM provider as part
+  of the conversation context.
+- **Browser-side preferences** (theme choice, panel widths, draft text)
+  held in localStorage.
+- **Auth credentials** (`UI_PASSWORD`, `JWT_SECRET`, `API_KEY`) held on
+  the server. The browser stores the JWT token issued after login.
+
+Operator configuration, third-party browser extensions, network middleboxes,
+and reverse-proxy logging are outside the project's control and may
+capture or forward any of this.
 
 ## What an operator sees
 
@@ -137,5 +156,15 @@ parental / guardian arrangement.
 
 ## Changes
 
-This document evolves with the software. Material changes will be noted in
-the release notes for the version that introduces them.
+This document evolves with the software. The maintainer aims to call out
+material changes in release notes when reasonably practical, but the
+authoritative source is always the code at the version you're running.
+
+## No warranty
+
+This document is provided for informational purposes only. Like the
+software itself, it is provided "as is" without warranty of any kind. See
+the [LICENSE](./LICENSE) and the **Risks & disclaimer** section in
+[README.md](./README.md). Nothing here creates a contractual obligation,
+an SLA, or a representation that the software's data-flow behavior
+matches this description in any specific release or deployment.

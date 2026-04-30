@@ -33,7 +33,7 @@ workspace root. The threat model assumes:
   registry trusts every project path the user adds; once added, the agent
   can read and modify anything inside that path.
 
-## What we DO defend against
+## What the project tries to defend against
 
 - **Path traversal** in route handlers. Every filesystem operation goes
   through `packages/server/src/file-manager.ts`, which validates the
@@ -54,15 +54,15 @@ workspace root. The threat model assumes:
   WebSocket connects. Pino's `req` serializer redacts `token=...` query
   params globally before any log line is emitted.
 - **Malicious file uploads** in the file browser. Uploads go through the
-  same path validation as everything else, plus a per-file (50 MB) and
-  aggregate (2 GB) cap, plus a SHA-256 round-trip check (client computes,
-  server verifies).
+  same path validation as everything else, plus a per-file (500 MB) and
+  aggregate (2 GB) cap, a 16-files-per-request cap, plus a SHA-256
+  round-trip check (client computes, server verifies).
 - **Prompt-injection via attached text files**. The chat input's text-file
   attachment path uses fenced-code-block insertion with a fence longer than
   the longest backtick-run in the file contents. A hostile attached file
   can't escape the fence to inject instructions to the LLM.
 
-## What we DO NOT defend against
+## What is explicitly out of scope
 
 - **A trusted user running malicious commands.** The agent's `bash` tool
   is a real shell. If your workspace has secrets you don't want the agent
@@ -96,21 +96,32 @@ Encrypt with the project's PGP key if one is published in the GitHub profile.
 
 ### Response window
 
-The maintainer commits to:
+pi-workbench is maintained on a best-effort basis. The maintainer aims for
+the following response targets, but they are guidelines rather than
+guarantees — actual timing depends on maintainer availability, severity,
+upstream dependencies, and the complexity of the fix:
 
-- **Acknowledge** the report within 5 business days
-- **Triage** (confirm reproducibility, assess severity) within 14 days
+- **Acknowledge** the report within roughly 5 business days when reasonably
+  possible.
+- **Triage** (confirm reproducibility, assess severity) on a similar
+  best-effort basis, typically within a couple of weeks.
 - **Fix and disclose** on a timeline proportional to severity:
-  - Critical (RCE, auth bypass, container escape): patched and released
-    within 7 days of confirmation; coordinated public disclosure 24-72 h
-    after the patch tag.
-  - High (path traversal, auth-required RCE, sensitive data exposure):
-    patched within 14 days; public disclosure with the patch.
-  - Medium / Low: patched in the next regular release; disclosed in the
+  - Critical (e.g. RCE, auth bypass, container escape): prioritized for the
+    next patched release, with coordinated public disclosure shortly after
+    the patch ships when feasible.
+  - High (e.g. path traversal, auth-required RCE, sensitive data exposure):
+    aimed for the next reasonable release window, with public disclosure
+    alongside the patch.
+  - Medium / Low: included in the next regular release and noted in the
     release notes.
 
-A CVE will be requested through GitHub's advisory pipeline for any
-confirmed Critical or High severity issue.
+A CVE may be requested through GitHub's advisory pipeline for confirmed
+Critical or High severity issues, at the maintainer's discretion.
+
+These targets describe intent, not contractual service levels. The project
+is provided under MIT and offers no warranty or support obligation — see
+the [LICENSE](./LICENSE) and the **Risks & disclaimer** section in
+[README.md](./README.md).
 
 ## Out of scope
 
