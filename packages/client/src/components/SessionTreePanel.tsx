@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { GitBranch, Loader2, Navigation, RefreshCw, X } from "lucide-react";
 import { api, ApiError, type SessionTreeEntry, type SessionTreeResponse } from "../lib/api-client";
 import { useSessionStore } from "../store/session-store";
@@ -47,22 +47,6 @@ interface NavConfirmState {
   isStreaming: boolean;
 }
 
-/**
- * SVG connector geometry for one parent → child relationship,
- * computed in {@link SessionTreePanel}'s layout effect from row
- * anchor positions. L-shaped: from parent's anchor down to the
- * child's row, then horizontal to the child's anchor. Coordinates
- * are in container-local pixels (relative to the scrolling list).
- */
-interface Connector {
-  id: string;
-  parentX: number;
-  parentY: number;
-  childX: number;
-  childY: number;
-  color: string;
-}
-
 interface NodeView extends SessionTreeEntry {
   /** Role-based indent step (user=0, assistant=1, tool=2). */
   depth: number;
@@ -90,6 +74,7 @@ interface NodeView extends SessionTreeEntry {
 }
 
 const MODEL_KEY_PREFIX = "pi-workbench/model/";
+const VIEW_KEY = "pi-workbench/sessionTree.view";
 
 export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
   const isStreaming = useSessionStore((s) => s.streamingBySession[sessionId] ?? false);
@@ -144,65 +129,23 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
     return flattenTree(tree);
   }, [tree]);
 
-  // Tree1 — SVG connector overlay. Refs per row + zero-width
-  // anchors at each row's content edge let us measure entry
-  // geometry after layout. SVG lives INSIDE the <ul> (not its
-  // scrolling parent) so it sizes to the row content directly —
-  // putting it in the scrolling container forced an intrinsic
-  // min-width back up the flex chain that blew the modal out
-  // to viewport-width.
-  const ulRef = useRef<HTMLUListElement>(null);
-  const rowRefs = useRef(new Map<string, HTMLLIElement>());
-  const anchorRefs = useRef(new Map<string, HTMLSpanElement>());
-  const [connectors, setConnectors] = useState<Connector[]>([]);
-  // Track the UL's content size so the SVG's explicit width/height
-  // attributes match — without explicit attrs, the SVG's intrinsic
-  // size leaks into flex min-width calculations.
-  const [overlaySize, setOverlaySize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
-  useLayoutEffect(() => {
-    const ul = ulRef.current;
-    if (ul === null || nodes.length === 0) {
-      setConnectors([]);
-      setOverlaySize({ w: 0, h: 0 });
-      return undefined;
+  // View toggle persists across mounts so users who prefer the
+  // graph don't have to flip it every time they open the panel.
+  const [view, setView] = useState<"list" | "graph">(() => {
+    try {
+      return localStorage.getItem(VIEW_KEY) === "graph" ? "graph" : "list";
+    } catch {
+      return "list";
     }
-    const measure = (): void => {
-      const uRect = ul.getBoundingClientRect();
-      const next: Connector[] = [];
-      for (const node of nodes) {
-        if (node.parentId === null) continue;
-        const parentAnchor = anchorRefs.current.get(node.parentId);
-        const childAnchor = anchorRefs.current.get(node.id);
-        if (parentAnchor === undefined || childAnchor === undefined) continue;
-        const pRect = parentAnchor.getBoundingClientRect();
-        const cRectAnchor = childAnchor.getBoundingClientRect();
-        // Anchor coords relative to the UL (not the scrolling
-        // container) — scroll position cancels out because both
-        // anchors and the UL move together when scrolled.
-        const px = pRect.left - uRect.left + 4;
-        const py = pRect.top - uRect.top + pRect.height / 2;
-        const cx = cRectAnchor.left - uRect.left + 4;
-        const cy = cRectAnchor.top - uRect.top + cRectAnchor.height / 2;
-        next.push({
-          id: node.id,
-          parentX: px,
-          parentY: py,
-          childX: cx,
-          childY: cy,
-          color: branchAccent(node.branchLevel) || "#404040",
-        });
-      }
-      setConnectors(next);
-      setOverlaySize({ w: ul.clientWidth, h: ul.scrollHeight });
-    };
-    measure();
-    // ResizeObserver picks up content reflow (preview wrap, panel
-    // resize via divider, etc.).
-    const ro = new ResizeObserver(measure);
-    ro.observe(ul);
-    for (const el of rowRefs.current.values()) ro.observe(el);
-    return () => ro.disconnect();
-  }, [nodes]);
+  });
+  const setViewPersisted = (next: "list" | "graph"): void => {
+    setView(next);
+    try {
+      localStorage.setItem(VIEW_KEY, next);
+    } catch {
+      // private-mode storage failure — choice still applies for the session
+    }
+  };
 
   /**
    * Navigate the active session's leaf. Idempotent on the current
@@ -337,6 +280,33 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
             {busy && <Loader2 size={11} className="animate-spin text-neutral-500" />}
           </div>
           <div className="flex items-center gap-1">
+            {/* View-mode toggle. List = chronological top-to-bottom
+                with role indent + branch stripes (good for skimming).
+                Graph = turn-grouped DAG (good for branch reasoning). */}
+            <div className="mr-1 flex overflow-hidden rounded border border-neutral-700">
+              <button
+                onClick={() => setViewPersisted("list")}
+                className={`px-2 py-0.5 text-[10px] uppercase tracking-wider ${
+                  view === "list"
+                    ? "bg-neutral-700 text-neutral-100"
+                    : "text-neutral-400 hover:bg-neutral-800"
+                }`}
+                title="Vertical list view"
+              >
+                List
+              </button>
+              <button
+                onClick={() => setViewPersisted("graph")}
+                className={`px-2 py-0.5 text-[10px] uppercase tracking-wider ${
+                  view === "graph"
+                    ? "bg-neutral-700 text-neutral-100"
+                    : "text-neutral-400 hover:bg-neutral-800"
+                }`}
+                title="Branching graph view (turn-grouped)"
+              >
+                Graph
+              </button>
+            </div>
             <button
               onClick={() => void refresh()}
               disabled={loading || busy}
@@ -372,61 +342,40 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
               No entries yet.
             </div>
           )}
-          <ul ref={ulRef} className="relative space-y-0.5">
-            {nodes.map((n) => (
-              <TreeRow
-                key={n.id}
-                node={n}
-                disabled={busy}
-                onNavigate={() => void navigate(n.id)}
-                onFork={() =>
-                  void fork(n.id, {
-                    // User-message rows: fork BEFORE the message and
-                    // prefill the input with its text. Other rows
-                    // fork AT the entry — pass nothing.
-                    ...(n.type === "message" && n.role === "user"
-                      ? { editDraft: n.preview ?? "", parentId: n.parentId }
-                      : {}),
-                  })
-                }
-                rowRef={(el) => {
-                  if (el === null) rowRefs.current.delete(n.id);
-                  else rowRefs.current.set(n.id, el);
-                }}
-                anchorRef={(el) => {
-                  if (el === null) anchorRefs.current.delete(n.id);
-                  else anchorRefs.current.set(n.id, el);
-                }}
-              />
-            ))}
-            {/* SVG connector overlay (Tree1). Lives inside the UL so
-                its sizing is bounded by the row content, not the
-                viewport. Explicit width/height attributes prevent
-                the SVG's default 300×150 intrinsic size from
-                contributing to flex min-width calculations.
-                pointer-events:none so clicks pass through to the
-                row buttons; absolute positioning keeps it out of
-                the rows' flow. */}
-            {connectors.length > 0 && overlaySize.w > 0 && overlaySize.h > 0 && (
-              <svg
-                aria-hidden="true"
-                className="pointer-events-none absolute left-0 top-0"
-                width={overlaySize.w}
-                height={overlaySize.h}
-              >
-                {connectors.map((c) => (
-                  <path
-                    key={c.id}
-                    d={`M ${c.parentX} ${c.parentY} L ${c.parentX} ${c.childY} L ${c.childX} ${c.childY}`}
-                    stroke={c.color}
-                    strokeWidth={1}
-                    fill="none"
-                    strokeOpacity={0.55}
-                  />
-                ))}
-              </svg>
-            )}
-          </ul>
+          {view === "list" ? (
+            <ul className="space-y-0.5">
+              {nodes.map((n) => (
+                <TreeRow
+                  key={n.id}
+                  node={n}
+                  disabled={busy}
+                  onNavigate={() => void navigate(n.id)}
+                  onFork={() =>
+                    void fork(n.id, {
+                      // User-message rows: fork BEFORE the message
+                      // and prefill the input with its text. Other
+                      // rows fork AT the entry — pass nothing.
+                      ...(n.type === "message" && n.role === "user"
+                        ? { editDraft: n.preview ?? "", parentId: n.parentId }
+                        : {}),
+                    })
+                  }
+                />
+              ))}
+            </ul>
+          ) : tree !== undefined ? (
+            <SessionTreeGraph
+              tree={tree}
+              disabled={busy}
+              onNavigate={(id) => navigate(id)}
+              onForkUser={(userMsgId, parentId, draft) =>
+                void fork(userMsgId, {
+                  ...(parentId !== null ? { parentId } : {}),
+                  editDraft: draft,
+                })
+              }
+            />
+          ) : null}
         </div>
 
         <footer className="flex items-center justify-between border-t border-neutral-800 bg-neutral-900/40 px-4 py-2 text-[10px] text-neutral-500">
@@ -614,22 +563,11 @@ function TreeRow({
   disabled,
   onNavigate,
   onFork,
-  rowRef,
-  anchorRef,
 }: {
   node: NodeView;
   disabled: boolean;
   onNavigate: () => void;
   onFork: () => void;
-  /** Tree1 — measured for SVG connector geometry. */
-  rowRef: (el: HTMLLIElement | null) => void;
-  /**
-   * Tree1 — invisible 0-width span at the row's "anchor point" (just
-   * inside the indent), used as the SVG connector endpoint so the
-   * line lands at the row's content edge regardless of preview
-   * wrapping or sibling badge widths.
-   */
-  anchorRef: (el: HTMLSpanElement | null) => void;
 }) {
   const indent =
     Math.min(node.depth, MAX_INDENT_DEPTH) * INDENT_PX +
@@ -641,18 +579,7 @@ function TreeRow({
     // min-w-0 on the wrapper so flex children inside (the row's
     // content column with `truncate`) actually shrink below their
     // content width instead of overflowing the modal.
-    <li ref={rowRef} className="group relative min-w-0" style={{ paddingLeft: `${indent}px` }}>
-      {/* Tree1 — connector anchor. Zero-width inline span at the
-          row's left content edge. Position: absolute so it doesn't
-          shift the layout; left:indent so it lands where the row
-          content begins regardless of paddingLeft (which the
-          parent <li> already applies via inline style). */}
-      <span
-        ref={anchorRef}
-        aria-hidden="true"
-        className="pointer-events-none absolute"
-        style={{ left: `${indent}px`, top: 0, bottom: 0, width: 0 }}
-      />
+    <li className="group min-w-0" style={{ paddingLeft: `${indent}px` }}>
       <div
         className={`flex min-w-0 items-start gap-1.5 rounded border px-2 py-1.5 ${
           node.isLeaf
@@ -904,4 +831,431 @@ function entryTypeLabel(node: SessionTreeEntry): string {
   if (node.type === "custom") return "custom";
   if (node.type === "custom_message") return "extension";
   return node.type;
+}
+
+/* ============================== graph view ============================== */
+
+/**
+ * Turn-level node for the graph view. A "turn" anchors on a user
+ * message and includes everything from that user message up to (but
+ * not including) the next user message in the chain. Non-message
+ * entries (compaction, branch_summary, model_change, etc.) get their
+ * own degenerate "turn" so they're visible too — they tend to be
+ * meta events that belong to no specific turn.
+ */
+interface TurnNode {
+  /** Anchor entry id (the user message, or the first entry of a meta turn). */
+  id: string;
+  /** Parent turn's anchor id (null for roots). */
+  parentId: string | null;
+  /** Branch column index (0 = original conversation, +1 per divergence). */
+  col: number;
+  /** Row index within this turn's column. */
+  row: number;
+  isOnActivePath: boolean;
+  isLeafTurn: boolean;
+  /** True when this turn IS the divergence point (>1 child turn). */
+  hasMultipleChildren: boolean;
+  /** Number of branch divergences originating from this turn. */
+  childCount: number;
+  /** Anchor entry's role/type for the badge. */
+  roleLabel: string;
+  /** Truncated user prompt or label of the anchor. */
+  preview: string;
+  /** Non-anchor entries inside this turn — counts per category. */
+  insideCounts: { assistant: number; tool: number; thinking: number; meta: number };
+  /** True when the anchor is a user message (eligible for fork-edit). */
+  isUserAnchor: boolean;
+  /** Anchor's parentId, used for the fork-from-parent edit flow. */
+  anchorParentId: string | null;
+  /** ISO timestamp of the anchor. */
+  timestamp: string;
+}
+
+/** Width / height for graph layout. Kept as constants so SVG math is one place. */
+const NODE_WIDTH = 220;
+const NODE_HEIGHT = 78;
+const COL_GAP = 64;
+const ROW_GAP = 28;
+const PAD = 24;
+
+/**
+ * Group entries into turn-level nodes for the graph view.
+ *
+ * Walk the entries DFS. When we encounter a user message, start a
+ * new TurnNode at that message's id. Subsequent non-user entries
+ * (assistant text, assistant tool-use, tool result, etc.) accumulate
+ * into the current turn's `insideCounts`. The turn's parent =
+ * whichever turn contained the user message's chain-parent (if any).
+ *
+ * A turn that has multiple direct child user messages is a
+ * branchpoint; each child user message starts a new turn with the
+ * branchpoint as its parent — and gets its own column.
+ *
+ * Non-message entries that aren't part of any user-anchored turn
+ * (e.g., a compaction at the very root) become their own degenerate
+ * turn nodes.
+ */
+function buildTurns(tree: SessionTreeResponse): TurnNode[] {
+  const byId = new Map(tree.entries.map((e) => [e.id, e]));
+  const childrenByParent = new Map<string | null, SessionTreeEntry[]>();
+  for (const e of tree.entries) {
+    const list = childrenByParent.get(e.parentId);
+    if (list === undefined) childrenByParent.set(e.parentId, [e]);
+    else list.push(e);
+  }
+  for (const list of childrenByParent.values()) {
+    list.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  }
+
+  // First pass: classify each entry's "owning turn id". An entry's
+  // owning turn = the most recent user-message ancestor on the chain
+  // (or the entry itself if it's a user message or has no user
+  // ancestor).
+  const owningTurn = new Map<string, string>();
+  const computeOwner = (entry: SessionTreeEntry): string => {
+    const cached = owningTurn.get(entry.id);
+    if (cached !== undefined) return cached;
+    if (entry.type === "message" && entry.role === "user") {
+      owningTurn.set(entry.id, entry.id);
+      return entry.id;
+    }
+    if (entry.parentId === null) {
+      owningTurn.set(entry.id, entry.id);
+      return entry.id;
+    }
+    const parent = byId.get(entry.parentId);
+    if (parent === undefined) {
+      owningTurn.set(entry.id, entry.id);
+      return entry.id;
+    }
+    const owner = computeOwner(parent);
+    owningTurn.set(entry.id, owner);
+    return owner;
+  };
+  for (const e of tree.entries) computeOwner(e);
+
+  // Second pass: build TurnNode skeletons keyed by anchor id.
+  const turnsByAnchor = new Map<string, TurnNode>();
+  for (const e of tree.entries) {
+    if (owningTurn.get(e.id) !== e.id) continue;
+    // This entry is the anchor of its turn.
+    const isUser = e.type === "message" && e.role === "user";
+    turnsByAnchor.set(e.id, {
+      id: e.id,
+      parentId: null, // filled in below
+      col: 0,
+      row: 0,
+      isOnActivePath: false,
+      isLeafTurn: false,
+      hasMultipleChildren: false,
+      childCount: 0,
+      roleLabel: isUser ? "user" : entryTypeLabel(e),
+      preview: e.preview ?? "",
+      insideCounts: { assistant: 0, tool: 0, thinking: 0, meta: 0 },
+      isUserAnchor: isUser,
+      anchorParentId: e.parentId,
+      timestamp: e.timestamp,
+    });
+  }
+
+  // Third pass: tally non-anchor entries into their turn's insideCounts.
+  for (const e of tree.entries) {
+    const owner = owningTurn.get(e.id)!;
+    if (owner === e.id) continue; // anchor itself
+    const turn = turnsByAnchor.get(owner);
+    if (turn === undefined) continue;
+    if (e.type === "message" && e.role === "assistant") {
+      turn.insideCounts.assistant += 1;
+    } else if (e.type === "message" && (e.role === "tool" || e.role === "toolResult")) {
+      turn.insideCounts.tool += 1;
+    } else if (e.type === "message" && e.role === "compactionSummary") {
+      turn.insideCounts.meta += 1;
+    } else {
+      turn.insideCounts.meta += 1;
+    }
+  }
+
+  // Fourth pass: parent-link turns. A turn's parent is the turn
+  // containing its anchor's chain-parent.
+  for (const turn of turnsByAnchor.values()) {
+    if (turn.anchorParentId === null) continue;
+    const parentOwner = owningTurn.get(turn.anchorParentId);
+    if (parentOwner === undefined) continue;
+    if (parentOwner === turn.id) continue; // self-parent shouldn't happen, defensive
+    turn.parentId = parentOwner;
+  }
+
+  // Fifth pass: column + row layout. Walk turns DFS, sibling turns
+  // get incremented columns relative to their first sibling.
+  const childrenByTurnParent = new Map<string | null, TurnNode[]>();
+  for (const t of turnsByAnchor.values()) {
+    const list = childrenByTurnParent.get(t.parentId);
+    if (list === undefined) childrenByTurnParent.set(t.parentId, [t]);
+    else list.push(t);
+  }
+  for (const list of childrenByTurnParent.values()) {
+    list.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  }
+  // Mark branch points + child counts for the badge.
+  for (const t of turnsByAnchor.values()) {
+    const kids = childrenByTurnParent.get(t.id) ?? [];
+    t.childCount = kids.length;
+    t.hasMultipleChildren = kids.length > 1;
+  }
+
+  // Active-path + leaf flags.
+  const onPath = new Set(tree.branchIds);
+  // A turn is on the active path if its anchor entry id is on the
+  // active branch path. A turn is the leaf turn if it owns the leaf
+  // entry.
+  const leafOwner = tree.leafId !== null ? owningTurn.get(tree.leafId) : undefined;
+  for (const t of turnsByAnchor.values()) {
+    t.isOnActivePath = onPath.has(t.id);
+    t.isLeafTurn = leafOwner === t.id;
+  }
+
+  // Layout: assign columns DFS — first child stays in the same
+  // column as the parent; each subsequent sibling claims a new
+  // column to the right of the parent's subtree.
+  let nextFreeCol = 0;
+  const claimedCol = new Map<string, number>();
+  const visit = (parentId: string | null, parentCol: number): void => {
+    const kids = childrenByTurnParent.get(parentId) ?? [];
+    kids.forEach((kid, idx) => {
+      let col: number;
+      if (idx === 0) {
+        col = parentCol;
+      } else {
+        col = nextFreeCol;
+        nextFreeCol += 1;
+      }
+      kid.col = col;
+      claimedCol.set(kid.id, col);
+      visit(kid.id, col);
+    });
+  };
+  // Roots: each gets its own column starting at 0.
+  const roots = childrenByTurnParent.get(null) ?? [];
+  roots.forEach((root, idx) => {
+    if (idx === 0) {
+      root.col = 0;
+      nextFreeCol = Math.max(nextFreeCol, 1);
+    } else {
+      root.col = nextFreeCol;
+      nextFreeCol += 1;
+    }
+    claimedCol.set(root.id, root.col);
+    visit(root.id, root.col);
+  });
+
+  // Row assignment: chronological global order. Walk turns in
+  // timestamp order and stack each one in its column. Within a
+  // column, this is just sequential. Across columns, branched
+  // turns can share a row if they'd otherwise collide — but
+  // simplest readable layout is "row = global chronological
+  // index", which gives each turn a unique y.
+  const sorted = [...turnsByAnchor.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  sorted.forEach((t, i) => {
+    t.row = i;
+  });
+
+  return sorted;
+}
+
+function SessionTreeGraph({
+  tree,
+  disabled,
+  onNavigate,
+  onForkUser,
+}: {
+  tree: SessionTreeResponse;
+  disabled: boolean;
+  onNavigate: (entryId: string) => void;
+  /** Called from the fork icon on user-anchor turn nodes. */
+  onForkUser: (userMsgId: string, parentId: string | null, draft: string) => void;
+}) {
+  const turns = useMemo(() => buildTurns(tree), [tree]);
+  const layout = useMemo(() => {
+    if (turns.length === 0) return { width: 0, height: 0 };
+    const maxCol = turns.reduce((m, t) => Math.max(m, t.col), 0);
+    const maxRow = turns.reduce((m, t) => Math.max(m, t.row), 0);
+    return {
+      width: PAD * 2 + (maxCol + 1) * NODE_WIDTH + maxCol * COL_GAP,
+      height: PAD * 2 + (maxRow + 1) * NODE_HEIGHT + maxRow * ROW_GAP,
+    };
+  }, [turns]);
+  if (turns.length === 0) {
+    return (
+      <div className="px-4 py-6 text-center text-xs italic text-neutral-500">
+        No turns to render.
+      </div>
+    );
+  }
+  const xOf = (col: number): number => PAD + col * (NODE_WIDTH + COL_GAP);
+  const yOf = (row: number): number => PAD + row * (NODE_HEIGHT + ROW_GAP);
+  const turnsById = new Map(turns.map((t) => [t.id, t]));
+  return (
+    <div className="relative" style={{ width: `${layout.width}px`, height: `${layout.height}px` }}>
+      {/* Edges: drawn first so nodes paint on top. Bezier curve from
+          parent's bottom-center to child's top-center; subtle gray
+          for active-path edges, dimmer for off-path. Branch divergence
+          shows up as the curve sweeping sideways. */}
+      <svg
+        aria-hidden="true"
+        className="pointer-events-none absolute left-0 top-0"
+        width={layout.width}
+        height={layout.height}
+      >
+        {turns.map((t) => {
+          if (t.parentId === null) return null;
+          const parent = turnsById.get(t.parentId);
+          if (parent === undefined) return null;
+          const px = xOf(parent.col) + NODE_WIDTH / 2;
+          const py = yOf(parent.row) + NODE_HEIGHT;
+          const cx = xOf(t.col) + NODE_WIDTH / 2;
+          const cy = yOf(t.row);
+          // Vertical control points for a clean S-curve when columns
+          // differ; straight line when same column.
+          const dy = (cy - py) * 0.5;
+          const d = `M ${px} ${py} C ${px} ${py + dy}, ${cx} ${cy - dy}, ${cx} ${cy}`;
+          const onActive = t.isOnActivePath && parent.isOnActivePath;
+          return (
+            <path
+              key={t.id}
+              d={d}
+              fill="none"
+              stroke={onActive ? "#a3a3a3" : "#404040"}
+              strokeWidth={onActive ? 1.5 : 1}
+              strokeOpacity={onActive ? 0.85 : 0.5}
+            />
+          );
+        })}
+      </svg>
+      {/* Nodes */}
+      {turns.map((t) => (
+        <GraphNode
+          key={t.id}
+          turn={t}
+          x={xOf(t.col)}
+          y={yOf(t.row)}
+          disabled={disabled}
+          onNavigate={() => onNavigate(t.id)}
+          onForkUser={() => {
+            // For user-anchor turns, fork from the user message's
+            // parent so the user message itself is excluded — same
+            // edit-and-resubmit semantics the list view uses.
+            if (t.isUserAnchor) {
+              onForkUser(t.id, t.anchorParentId, t.preview);
+            }
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function GraphNode({
+  turn,
+  x,
+  y,
+  disabled,
+  onNavigate,
+  onForkUser,
+}: {
+  turn: TurnNode;
+  x: number;
+  y: number;
+  disabled: boolean;
+  onNavigate: () => void;
+  onForkUser: () => void;
+}) {
+  const dim = !turn.isOnActivePath;
+  const borderClass = turn.isLeafTurn
+    ? "border-emerald-700/70 bg-emerald-900/15"
+    : turn.isOnActivePath
+      ? "border-neutral-600 bg-neutral-900"
+      : "border-neutral-800 bg-neutral-950";
+  return (
+    <div
+      className={`absolute overflow-hidden rounded-lg border ${borderClass} ${
+        dim ? "opacity-60" : ""
+      }`}
+      style={{
+        left: `${x}px`,
+        top: `${y}px`,
+        width: `${NODE_WIDTH}px`,
+        height: `${NODE_HEIGHT}px`,
+      }}
+    >
+      <button
+        onClick={onNavigate}
+        disabled={disabled || turn.isLeafTurn}
+        className="flex h-full w-full flex-col items-stretch gap-1 px-2 py-1.5 text-left disabled:cursor-default"
+        title={turn.isLeafTurn ? "Current leaf turn" : "Navigate to this turn"}
+      >
+        <div className="flex items-center gap-1.5">
+          <span
+            className={`rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider ${
+              turn.roleLabel === "user"
+                ? "bg-sky-900/40 text-sky-300"
+                : turn.roleLabel === "compact"
+                  ? "bg-fuchsia-900/40 text-fuchsia-300"
+                  : turn.roleLabel === "branch"
+                    ? "bg-amber-900/40 text-amber-300"
+                    : "bg-neutral-800 text-neutral-400"
+            }`}
+          >
+            {turn.roleLabel}
+          </span>
+          {turn.isLeafTurn && (
+            <span className="rounded bg-emerald-900/40 px-1.5 py-0.5 text-[9px] text-emerald-300">
+              leaf
+            </span>
+          )}
+          {turn.hasMultipleChildren && (
+            <span
+              className="text-[9px] text-amber-400"
+              title={`${turn.childCount} branches diverge from here`}
+            >
+              ⑂ {turn.childCount}
+            </span>
+          )}
+          {turn.isUserAnchor && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onForkUser();
+              }}
+              disabled={disabled}
+              className="ml-auto rounded p-0.5 text-neutral-500 hover:bg-neutral-800 hover:text-emerald-300 disabled:opacity-40"
+              title="Fork BEFORE this user message — opens a new session with the message text loaded for editing."
+            >
+              <GitBranch size={11} />
+            </button>
+          )}
+        </div>
+        <p className="line-clamp-2 flex-1 text-[11px] text-neutral-200">
+          {turn.preview.length > 0 ? turn.preview : <em className="text-neutral-500">(no text)</em>}
+        </p>
+        <div className="flex items-center gap-2 text-[9px] text-neutral-500">
+          {turn.insideCounts.assistant > 0 && (
+            <span title="Assistant messages within this turn">{turn.insideCounts.assistant}a</span>
+          )}
+          {turn.insideCounts.tool > 0 && (
+            <span title="Tool results within this turn">{turn.insideCounts.tool}t</span>
+          )}
+          {turn.insideCounts.thinking > 0 && (
+            <span title="Thinking blocks">{turn.insideCounts.thinking}th</span>
+          )}
+          {turn.insideCounts.meta > 0 && (
+            <span title="Meta entries (model_change, branch_summary, etc.)">
+              {turn.insideCounts.meta}m
+            </span>
+          )}
+          <span className="ml-auto">{new Date(turn.timestamp).toLocaleTimeString()}</span>
+        </div>
+      </button>
+    </div>
+  );
 }
