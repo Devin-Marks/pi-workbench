@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { config, authEnabled } from "../config.js";
 import { generateToken, verifyPassword } from "../auth.js";
+import { errorSchema } from "./_schemas.js";
 
 interface LoginBody {
   password: string;
@@ -62,26 +63,24 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
               expiresAt: { type: "string", format: "date-time" },
             },
           },
-          401: {
-            type: "object",
-            required: ["error"],
-            properties: { error: { type: "string" } },
-          },
-          503: {
-            type: "object",
-            required: ["error"],
-            properties: { error: { type: "string" } },
-          },
+          401: errorSchema,
+          503: errorSchema,
         },
       },
     },
     async (req, reply) => {
       if (config.auth.uiPassword === undefined) {
-        return reply.code(503).send({ error: "ui_password_not_configured" });
+        return reply.code(503).send({
+          error: "ui_password_not_configured",
+          message: "browser login is disabled (no UI_PASSWORD set)",
+        });
       }
       const { password } = req.body;
       if (!verifyPassword(password)) {
-        return reply.code(401).send({ error: "invalid_password" });
+        return reply.code(401).send({
+          error: "invalid_password",
+          message: "the password did not match",
+        });
       }
       return generateToken();
     },

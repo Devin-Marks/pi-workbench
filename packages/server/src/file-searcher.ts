@@ -190,6 +190,8 @@ async function searchWithRipgrep(projectPath: string, opts: SearchOptions): Prom
       try {
         event = JSON.parse(jsonLine) as RipgrepEvent;
       } catch {
+        // Non-JSON line from ripgrep (shouldn't happen with --json
+        // but defensive). Skip without aborting the whole search.
         return;
       }
       if (event.type === "begin") {
@@ -264,6 +266,9 @@ async function searchInProcess(projectPath: string, opts: SearchOptions): Promis
     try {
       entries = await readdir(dir, { withFileTypes: true });
     } catch {
+      // Permission denied / vanished directory — skip without
+      // aborting the whole search. Common on system-managed
+      // subdirs the user doesn't own.
       continue;
     }
     for (const ent of entries) {
@@ -309,6 +314,8 @@ async function searchInProcess(projectPath: string, opts: SearchOptions): Promis
       try {
         st = await stat(full);
       } catch {
+        // File vanished between discovery and stat — common when
+        // the agent edits files mid-search. Skip silently.
         continue;
       }
       if (!st.isFile() || st.size > MAX_READ_BYTES) continue;
@@ -318,6 +325,7 @@ async function searchInProcess(projectPath: string, opts: SearchOptions): Promis
         if (looksBinary(buf)) continue;
         content = buf.toString("utf8");
       } catch {
+        // Read failure (perms, vanished mid-loop) — skip this file.
         continue;
       }
       scanText(content, rel, opts, re, matches, opts.limit);
@@ -405,6 +413,8 @@ function safeRegex(pattern: string, caseSensitive: boolean): RegExp | undefined 
     // miss subsequent matches on the same line.
     return new RegExp(pattern, caseSensitive ? "g" : "gi");
   } catch {
+    // Invalid regex pattern from the user. Caller treats undefined
+    // as "bad pattern" and short-circuits with an empty result.
     return undefined;
   }
 }

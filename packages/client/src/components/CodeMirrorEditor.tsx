@@ -189,13 +189,16 @@ export function CodeMirrorEditor({
 
   // Debounced autosave: schedule a save 1s after the last `dirty`
   // transition. Cleared on tab switch (component unmounts via key).
+  // Skipped when `saveError` is set — the user has to explicitly
+  // retry (Cmd/Ctrl+S) so we don't hammer a broken endpoint and
+  // overwrite the diagnostic that explains why saves are failing.
   useEffect(() => {
-    if (!file.dirty || file.binary) return undefined;
+    if (!file.dirty || file.binary || file.saveError !== undefined) return undefined;
     const timer = window.setTimeout(() => {
       onSaveRef.current();
     }, AUTOSAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [file.dirty, file.draft, file.binary]);
+  }, [file.dirty, file.draft, file.binary, file.saveError]);
 
   // Pending-navigation effect: when the file-store sets `pendingNav`
   // on this tab (e.g. from a search-result click), scroll the editor

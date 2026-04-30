@@ -51,6 +51,8 @@ function parseClientMessage(raw: unknown): ClientMessage | undefined {
   try {
     parsed = JSON.parse(typeof raw === "string" ? raw : raw.toString("utf8"));
   } catch {
+    // Non-JSON WS message — silently drop. The terminal protocol
+    // is JSON-only, so this only fires on malformed clients.
     return undefined;
   }
   if (typeof parsed !== "object" || parsed === null) return undefined;

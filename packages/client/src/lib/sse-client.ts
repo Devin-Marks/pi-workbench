@@ -201,6 +201,9 @@ export async function streamSSE<T extends { type: string }>(
     try {
       await abortableSleep(delayMs, opts.signal);
     } catch {
+      // abortableSleep throws on signal abort — exit the reconnect
+      // loop cleanly. The caller sees this as a normal Promise
+      // resolution (no rejection).
       return;
     }
   }

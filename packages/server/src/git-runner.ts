@@ -264,6 +264,9 @@ export async function isGitRepo(cwd: string): Promise<boolean> {
     await runGit(cwd, ["rev-parse", "--is-inside-work-tree"]);
     return true;
   } catch {
+    // GitCommandError (non-zero exit, common: "not a git repository"),
+    // GitNotInstalledError, or fs error. All collapse to "not a repo"
+    // — the panel renders an empty state without distinguishing.
     return false;
   }
 }

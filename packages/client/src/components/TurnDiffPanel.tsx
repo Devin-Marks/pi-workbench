@@ -12,6 +12,7 @@ function readPersistedViewType(): ViewType {
     const v = localStorage.getItem(VIEW_TYPE_KEY);
     return v === "split" ? "split" : "unified";
   } catch {
+    // Private-mode storage — fall back to the default unified view.
     return "unified";
   }
 }

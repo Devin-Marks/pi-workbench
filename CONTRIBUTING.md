@@ -41,6 +41,7 @@ There's no Jest. Each phase has a hand-rolled integration script under
 | Auth flow | `npx tsx tests/test-auth.ts` |
 | Project routes / CRUD | `npx tsx tests/test-projects.ts` |
 | Session lifecycle | `npx tsx tests/test-session.ts` |
+| Session forking (SDK in-place mutation guard) | `npx tsx tests/test-fork.ts` |
 | SSE event stream | `npx tsx tests/test-sse.ts` |
 | Generic API smoke | `npx tsx tests/test-api.ts` |
 | Pi config (auth/models/settings/skills) | `npx tsx tests/test-config.ts` |

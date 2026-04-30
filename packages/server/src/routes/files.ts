@@ -108,16 +108,18 @@ const readResponseSchema = {
  */
 function mapError(reply: FastifyReply, err: unknown): FastifyReply {
   if (err instanceof PathOutsideRootError) {
-    return reply.code(403).send({ error: "path_not_allowed" });
+    return reply
+      .code(403)
+      .send({ error: "path_not_allowed", message: "path is outside the project root" });
   }
   if (err instanceof InvalidNameError) {
     return reply.code(400).send({ error: "invalid_name", message: err.message });
   }
   if (err instanceof NotFoundError) {
-    return reply.code(404).send({ error: "not_found" });
+    return reply.code(404).send({ error: "not_found", message: "file or directory not found" });
   }
   if (err instanceof NotAFileError) {
-    return reply.code(400).send({ error: "not_a_file" });
+    return reply.code(400).send({ error: "not_a_file", message: "target is not a regular file" });
   }
   if (err instanceof FileTooLargeError) {
     return reply.code(413).send({ error: "file_too_large", message: `${err.size} > ${err.limit}` });
@@ -129,7 +131,7 @@ function mapError(reply: FastifyReply, err: unknown): FastifyReply {
     });
   }
   if (err instanceof TargetExistsError) {
-    return reply.code(409).send({ error: "target_exists" });
+    return reply.code(409).send({ error: "target_exists", message: "destination already exists" });
   }
   if (err instanceof ChecksumMismatchError) {
     return reply.code(422).send({
@@ -147,16 +149,22 @@ function mapError(reply: FastifyReply, err: unknown): FastifyReply {
   // operator had to grep logs to figure out what happened.
   const code = (err as NodeJS.ErrnoException).code;
   if (code === "ENOENT") {
-    return reply.code(404).send({ error: "not_found" });
+    return reply.code(404).send({ error: "not_found", message: "file or directory not found" });
   }
   if (code === "EACCES" || code === "EPERM") {
-    return reply.code(403).send({ error: "permission_denied" });
+    return reply
+      .code(403)
+      .send({ error: "permission_denied", message: "filesystem permission denied" });
   }
   if (code === "EISDIR") {
-    return reply.code(400).send({ error: "not_a_file" });
+    return reply
+      .code(400)
+      .send({ error: "not_a_file", message: "target is a directory, not a file" });
   }
   if (code === "ENOTDIR") {
-    return reply.code(400).send({ error: "not_a_directory" });
+    return reply
+      .code(400)
+      .send({ error: "not_a_directory", message: "target is a file, not a directory" });
   }
   reply.log.error({ err }, "unmapped file-manager error");
   return reply.code(500).send({ error: "internal_error" });

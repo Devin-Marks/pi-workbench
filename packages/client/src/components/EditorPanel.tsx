@@ -240,9 +240,16 @@ function StatusBar({
   const dirty = file.dirty;
   const saving = file.saving;
   const savedAt = file.savedAt;
+  const saveError = file.saveError;
   let label: string;
   let className = "text-neutral-500";
-  if (saving) {
+  // Order matters: a save-error state takes precedence over dirty/saving
+  // because the user needs to see the failure before deciding to keep
+  // editing or retry. Cleared on the next successful save.
+  if (saveError !== undefined) {
+    label = `Save failed (${saveError}) — Cmd/Ctrl+S to retry`;
+    className = "text-rose-400";
+  } else if (saving) {
     label = "Saving…";
   } else if (dirty) {
     label = "Unsaved changes";

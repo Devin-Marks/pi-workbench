@@ -367,6 +367,12 @@ export async function deleteColdSession(
     try {
       infos = await SessionManager.list(project.path, dir);
     } catch {
+      // Project's session dir errored out (perms, missing, malformed
+      // JSONL). Skip this project and try the next one — the cold
+      // session may be in another project's dir. (findSessionLocation
+      // logs the same case via stderr; this caller doesn't because
+      // deleteColdSession's outer surface already reports
+      // not_found vs deleted clearly.)
       continue;
     }
     const match = infos.find((s) => s.id === sessionId);

@@ -940,6 +940,7 @@ async function streamSha256(blob: Blob, onChunk?: (delta: number) => void): Prom
   // baseline target here (Chromium / WebKit / Firefox in PWA mode) all
   // do, so we don't bother with a FileReader fallback.
   const reader = blob.stream().getReader();
+  let cancelled = false;
   try {
     for (;;) {
       const { value, done } = await reader.read();
@@ -949,8 +950,17 @@ async function streamSha256(blob: Blob, onChunk?: (delta: number) => void): Prom
       hasher.update(value);
       onChunk?.(value.byteLength);
     }
+  } catch (err) {
+    // hash-wasm error mid-stream — actively cancel the underlying
+    // stream so the browser releases buffered chunks instead of
+    // waiting on GC. Without this, an exception partway through a
+    // 500MB upload could keep that 500MB resident in memory until the
+    // next major GC.
+    cancelled = true;
+    await reader.cancel().catch(() => undefined);
+    throw err;
   } finally {
-    reader.releaseLock();
+    if (!cancelled) reader.releaseLock();
   }
   return hasher.digest("hex");
 }
@@ -979,6 +989,9 @@ function safeParseJson(text: string): { ok: true; value: unknown } | { ok: false
   try {
     return { ok: true, value: JSON.parse(text) as unknown };
   } catch {
+    // Non-JSON body (HTML error page from a proxy, network HTML).
+    // Caller distinguishes invalid_error_body vs invalid_response_body
+    // by ok-status; this function only signals parse success.
     return { ok: false };
   }
 }
@@ -1023,13 +1036,24 @@ async function request<T>(
   const parsed = safeParseJson(text);
 
   if (!res.ok) {
-    const code =
-      parsed.ok && isObject(parsed.value) && "error" in parsed.value
-        ? String((parsed.value as { error: unknown }).error)
-        : parsed.ok
-          ? "request_failed"
-          : "invalid_response_body";
-    throw new ApiError(res.status, code);
+    // Distinguish three failure shapes so consumers branching on
+    // err.code can tell them apart:
+    //   - server returned a typed error envelope ({ error, message? }):
+    //     pass through the error code verbatim
+    //   - server returned a 4xx/5xx with valid JSON but no `error` field:
+    //     synthesize `request_failed`
+    //   - server returned a 4xx/5xx with non-JSON body (HTML error page,
+    //     proxy intercept, network HTML): `invalid_error_body` so it's
+    //     distinct from the 2xx-non-JSON case below
+    let code: string;
+    if (parsed.ok && isObject(parsed.value) && "error" in parsed.value) {
+      code = String((parsed.value as { error: unknown }).error);
+    } else if (parsed.ok) {
+      code = "request_failed";
+    } else {
+      code = "invalid_error_body";
+    }
+    throw new ApiError(res.status, code, parsed.ok ? undefined : `non-JSON ${res.status} body`);
   }
 
   if (!parsed.ok) {

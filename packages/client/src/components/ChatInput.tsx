@@ -125,6 +125,13 @@ const DOUBLE_ESC_WINDOW_MS = 600;
 
 export function ChatInput({ sessionId }: Props) {
   const isStreaming = useSessionStore((s) => s.streamingBySession[sessionId] ?? false);
+  const banner = useSessionStore((s) => s.bannerBySession[sessionId]);
+  // Detect an in-progress auto-retry by the banner shape that
+  // session-store sets in applyEvent for `auto_retry_start`. This lets
+  // the chat input show a clarifying placeholder so the user knows a
+  // new prompt during a retry will be queued (rather than discarded
+  // or replacing the in-flight message).
+  const isAutoRetrying = banner !== undefined && /^Retrying \(/.test(banner);
   const sendPrompt = useSessionStore((s) => s.sendPrompt);
   const sendSteer = useSessionStore((s) => s.sendSteer);
   const abortSession = useSessionStore((s) => s.abortSession);
@@ -480,9 +487,16 @@ export function ChatInput({ sessionId }: Props) {
             onChange={(e) => handleTextChange(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder={
-              isStreaming
-                ? "Steer the agent (Enter to send, Shift+Enter for newline)…"
-                : "Ask pi (Enter to send, Shift+Enter for newline)…"
+              isAutoRetrying
+                ? "Auto-retry in progress — your message will be queued and sent after the retry completes…"
+                : isStreaming
+                  ? "Steer the agent (Enter to send, Shift+Enter for newline)…"
+                  : "Ask pi (Enter to send, Shift+Enter for newline)…"
+            }
+            title={
+              isAutoRetrying
+                ? "The agent is auto-retrying after a provider error. New messages are queued and delivered when the retry succeeds."
+                : undefined
             }
             rows={3}
             className="flex-1 resize-none rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-neutral-500"

@@ -135,6 +135,7 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
     try {
       return localStorage.getItem(VIEW_KEY) === "graph" ? "graph" : "list";
     } catch {
+      // Private-mode storage — fall back to the default list view.
       return "list";
     }
   });

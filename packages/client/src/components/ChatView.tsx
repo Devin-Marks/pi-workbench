@@ -36,6 +36,7 @@ function readChatViewType(): ChatViewType {
   try {
     return localStorage.getItem(CHAT_VIEW_TYPE_KEY) === "split" ? "split" : "unified";
   } catch {
+    // Private-mode storage — pick the default view type.
     return "unified";
   }
 }

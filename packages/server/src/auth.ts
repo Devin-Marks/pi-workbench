@@ -62,6 +62,10 @@ export function verifyToken(token: string): JwtPayload | undefined {
     if (typeof decoded.iat !== "number" || typeof decoded.exp !== "number") return undefined;
     return { sub: "ui-user", iat: decoded.iat, exp: decoded.exp };
   } catch {
+    // jsonwebtoken throws on malformed/expired/wrong-secret tokens.
+    // Caller treats undefined as "no valid token" without
+    // distinguishing why — clients can't act on the distinction
+    // (and we don't want to leak which case applies to a brute-forcer).
     return undefined;
   }
 }

@@ -14,6 +14,7 @@ function readCollapsed(): Record<string, boolean> {
     for (const [k, v] of Object.entries(parsed)) if (typeof v === "boolean") out[k] = v;
     return out;
   } catch {
+    // Private-mode storage / corrupt JSON — fall back to "all expanded".
     return {};
   }
 }

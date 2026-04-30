@@ -206,6 +206,7 @@ export function GitPanel() {
     try {
       return localStorage.getItem("pi.gitPanel.viewType") === "split" ? "split" : "unified";
     } catch {
+      // Private-mode storage — fall back to the default unified view.
       return "unified";
     }
   });
@@ -318,6 +319,9 @@ export function GitPanel() {
       const r = await api.gitDiffFile(project.id, file.path, staged);
       setOpenDiffs((s) => ({ ...s, [key]: r.diff }));
     } catch {
+      // Diff fetch failed (file vanished, git error). State machine
+      // shows a "(failed to load)" placeholder; user can re-open the
+      // file to retry.
       setOpenDiffs((s) => ({ ...s, [key]: "error" }));
     }
   };

@@ -308,6 +308,8 @@ function CustomProvidersJson({ onError }: { onError: (msg: string | undefined) =
     try {
       parsed = JSON.parse(text);
     } catch {
+      // Surface as a typed error so the user sees what went wrong;
+      // the JSON parser's exact message isn't useful for the operator.
       onError("models.json: invalid JSON");
       return;
     }
@@ -541,6 +543,7 @@ function SettingsJsonEditor({
     try {
       parsed = JSON.parse(text);
     } catch {
+      // Surface as a typed error; raw parser message isn't actionable.
       onError("settings.json: invalid JSON");
       return;
     }

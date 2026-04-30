@@ -389,6 +389,12 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
         try {
           live = await resumeSessionById(req.params.id);
         } catch {
+          // SessionNotFoundError, SessionTombstonedError, or SDK
+          // resume failure all collapse to 404 here — the tree route
+          // doesn't need to distinguish (clients can't act on it
+          // differently). The SSE stream route DOES distinguish
+          // (it returns 410 on tombstone) since that signals "stop
+          // reconnecting" specifically.
           return notFound(reply);
         }
       }
@@ -528,6 +534,10 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
         try {
           live = await resumeSessionById(req.params.id);
         } catch {
+          // Same handling as the /tree route above — collapse all
+          // resume failures (not_found, tombstoned, SDK throw) to a
+          // 404. The /context route's caller can't act on the
+          // distinction.
           return notFound(reply);
         }
       }

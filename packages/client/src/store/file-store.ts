@@ -29,6 +29,15 @@ export interface OpenFile {
   saving: boolean;
   /** Last successful save timestamp (ms). Drives the "Saved at hh:mm:ss" hint. */
   savedAt: number | undefined;
+  /**
+   * Per-tab save error. When set, the editor StatusBar shows a "Save
+   * failed" state with retry guidance — without this, autosave failures
+   * silently flipped `saving` back off and the user kept editing
+   * thinking the next debounce would save, then closed the tab and
+   * lost work. Cleared on the next successful save (manual Cmd+S or
+   * autosave debounce that succeeds).
+   */
+  saveError: string | undefined;
   loadingError: string | undefined;
   /**
    * One-shot navigation request — when set, the CodeMirror host
@@ -175,6 +184,7 @@ export const useFileStore = create<FileState>((set, get) => ({
         binary: r.binary,
         saving: false,
         savedAt: undefined,
+        saveError: undefined,
         loadingError: r.binary ? "Binary file — open externally to edit." : undefined,
       };
       if (nav !== undefined) tab.pendingNav = nav;
@@ -225,7 +235,9 @@ export const useFileStore = create<FileState>((set, get) => ({
     const file = get().openFiles.find((f) => f.path === path);
     if (file === undefined || file.binary) return;
     set((s) => ({
-      openFiles: s.openFiles.map((f) => (f.path === path ? { ...f, saving: true } : f)),
+      openFiles: s.openFiles.map((f) =>
+        f.path === path ? { ...f, saving: true, saveError: undefined } : f,
+      ),
       error: undefined,
     }));
     try {
@@ -233,15 +245,31 @@ export const useFileStore = create<FileState>((set, get) => ({
       set((s) => ({
         openFiles: s.openFiles.map((f) =>
           f.path === path
-            ? { ...f, saving: false, saved: f.draft, dirty: false, savedAt: Date.now() }
+            ? {
+                ...f,
+                saving: false,
+                saved: f.draft,
+                dirty: false,
+                savedAt: Date.now(),
+                saveError: undefined,
+              }
             : f,
         ),
         externallyChanged: omitKey(s.externallyChanged, path),
       }));
     } catch (err) {
+      const code = err instanceof ApiError ? err.code : (err as Error).message;
+      // Set both the per-tab saveError (drives the StatusBar's "Save
+      // failed — Cmd+S to retry" state) AND the global error (kept for
+      // backwards compat with any panel that subscribes to it).
+      // Without per-tab state, the user's view of "saving in progress"
+      // silently flips back to "unsaved changes" and they keep editing
+      // thinking the next debounce will save.
       set((s) => ({
-        openFiles: s.openFiles.map((f) => (f.path === path ? { ...f, saving: false } : f)),
-        error: err instanceof ApiError ? err.code : (err as Error).message,
+        openFiles: s.openFiles.map((f) =>
+          f.path === path ? { ...f, saving: false, saveError: code } : f,
+        ),
+        error: code,
       }));
       throw err;
     }

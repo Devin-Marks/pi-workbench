@@ -333,6 +333,9 @@ async function tryPureAddition(projectPath: string, absPath: string): Promise<st
   try {
     content = await readFile(absPath, "utf8");
   } catch {
+    // File vanished between the toolCall and our read (agent deleted
+    // it after writing it). Return undefined → caller skips this file
+    // in the turn diff rather than failing the whole build.
     return undefined;
   }
   const rel = relative(projectPath, absPath);

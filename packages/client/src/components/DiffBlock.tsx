@@ -354,6 +354,9 @@ function safeParse(diff: string): FileData[] {
   try {
     return parseDiff(diff);
   } catch {
+    // gitdiff-parser throws on malformed unified diffs (rare from
+    // server but possible from copy/pasted edge cases). Render as
+    // an empty file list rather than crashing the whole panel.
     return [];
   }
 }

@@ -130,6 +130,8 @@ export function createSSEClient(reply: FastifyReply, live: LiveSession): SSEClie
       try {
         raw.write(chunk);
       } catch {
+        // Socket already torn down (client dropped, network blip).
+        // Close cleans up the registry entry + ends the response.
         close();
       }
     };

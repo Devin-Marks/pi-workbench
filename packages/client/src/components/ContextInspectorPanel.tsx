@@ -1075,6 +1075,8 @@ function jsonish(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2);
   } catch {
+    // Cyclic graph or BigInt — neither is expected from SDK messages
+    // but `String(value)` always produces something renderable.
     return String(value);
   }
 }
