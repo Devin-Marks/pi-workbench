@@ -1,9 +1,11 @@
 # Dependencies
 node_modules/
+.pnp.*
 
 # Build outputs
 dist/
 packages/*/dist/
+*.tgz
 
 # TypeScript incremental build info
 *.tsbuildinfo
@@ -12,6 +14,7 @@ packages/*/dist/
 .env
 .env.local
 .env.*.local
+.envrc
 
 # Logs
 *.log
@@ -21,19 +24,57 @@ npm-debug.log*
 *.jsonl
 .pi/sessions/
 
+# Linter / build caches
+.eslintcache
+.stylelintcache
+.cache/
+.turbo/
+
+# Test coverage
+coverage/
+.nyc_output/
+
 # Vite cache
 .vite/
 packages/client/.vite/
+*.local
 
 # PWA dev build
 packages/client/dev-dist/
 
 # macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
 
-# Editor
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor backups & swap files
+*.swp
+*.swo
+*~
+*.orig
+*.rej
+
+# Editors / IDEs
 .vscode/
 .idea/
+.fleet/
+.history/
+*.iml
+
+# Process / runtime files
+*.pid
+*.seed
+*.pid.lock
+
+# Tempdirs
+tmp/
+.tmp/
 
 # Local working notes (not committed)
 notes/
