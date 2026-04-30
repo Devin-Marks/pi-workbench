@@ -516,6 +516,18 @@ export async function resumeSessionById(sessionId: string): Promise<LiveSession>
 export async function forkSession(sessionId: string, entryId: string): Promise<LiveSession> {
   const source = registry.get(sessionId);
   if (source === undefined) throw new SessionNotFoundError(sessionId);
+  // CRITICAL: capture the source's session file BEFORE calling
+  // createBranchedSession. The SDK's implementation MUTATES the
+  // source SessionManager in place — it sets `this.sessionId`,
+  // `this.sessionFile`, and `this.fileEntries` to the new
+  // session's values, so after the call `source.session.sessionManager`
+  // points at the fork instead of the original. The original
+  // .jsonl file on disk is untouched, but the in-memory source
+  // LiveSession is hijacked and would return the fork's messages
+  // to anyone subsequently reading from it. We re-open the source
+  // from its original file at the end of this function to undo the
+  // hijack.
+  const originalSourceFile = source.session.sessionManager.getSessionFile();
   let newPath: string | undefined;
   try {
     newPath = source.session.sessionManager.createBranchedSession(entryId);
@@ -554,6 +566,42 @@ export async function forkSession(sessionId: string, entryId: string): Promise<L
   };
   live.unsubscribe = makeSubscribeHandler(live);
   registry.set(live.sessionId, live);
+
+  // Undo the SDK's in-place mutation on the source LiveSession by
+  // reopening the original .jsonl with a fresh SessionManager +
+  // AgentSession. Without this, the source's sessionId field still
+  // says oldId but its session.sessionManager points at the fork —
+  // every read after fork returns fork data, every write is appended
+  // to the fork's file. The disk side is fine (original file
+  // untouched); only the in-memory state needs the patch.
+  if (originalSourceFile !== undefined) {
+    try {
+      source.unsubscribe();
+      const restoredManager = SessionManager.open(originalSourceFile, dir, source.workspacePath);
+      const { session: restoredSession } = await createAgentSession({
+        cwd: source.workspacePath,
+        sessionManager: restoredManager,
+        agentDir: config.piConfigDir,
+      });
+      // Mutate the existing LiveSession in place rather than
+      // replacing the registry entry — any SSE client holding a
+      // reference would otherwise lose its connection. Same
+      // sessionId, fresh AgentSession underneath.
+      source.session = restoredSession;
+      source.lastActivityAt = new Date();
+      source.lastAgentStartIndex = undefined;
+      source.unsubscribe = makeSubscribeHandler(source);
+    } catch (err) {
+      // Log but don't fail the fork — the new session is fine.
+      // The source is corrupted in memory; surface as a server log
+      // so it shows up in diagnostics.
+      console.error(
+        `[forkSession] failed to restore source session ${sessionId} from ${originalSourceFile}:`,
+        err,
+      );
+    }
+  }
+
   return live;
 }
 
