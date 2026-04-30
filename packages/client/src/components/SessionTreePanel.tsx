@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GitBranch, Loader2, Navigation, RefreshCw, X } from "lucide-react";
 import { api, ApiError, type SessionTreeEntry, type SessionTreeResponse } from "../lib/api-client";
 import { useSessionStore } from "../store/session-store";
@@ -45,6 +45,22 @@ interface NavConfirmState {
   abandonsBranch: boolean;
   /** True when the session is streaming; navigate will abort. */
   isStreaming: boolean;
+}
+
+/**
+ * SVG connector geometry for one parent → child relationship,
+ * computed in {@link SessionTreePanel}'s layout effect from row
+ * anchor positions. L-shaped: from parent's anchor down to the
+ * child's row, then horizontal to the child's anchor. Coordinates
+ * are in container-local pixels (relative to the scrolling list).
+ */
+interface Connector {
+  id: string;
+  parentX: number;
+  parentY: number;
+  childX: number;
+  childY: number;
+  color: string;
 }
 
 interface NodeView extends SessionTreeEntry {
@@ -127,6 +143,59 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
     if (tree === undefined) return [];
     return flattenTree(tree);
   }, [tree]);
+
+  // Tree1 — SVG connector overlay. Refs per row + per "indent
+  // anchor" inside each row let us measure each entry's
+  // (left, top, height) after layout, then draw an L-shaped path
+  // from each row's anchor to its parent's anchor. Stored as
+  // local state so React re-renders the SVG when geometry
+  // changes; recomputed on tree update + container resize.
+  const listContainerRef = useRef<HTMLDivElement>(null);
+  const rowRefs = useRef(new Map<string, HTMLLIElement>());
+  const anchorRefs = useRef(new Map<string, HTMLSpanElement>());
+  const [connectors, setConnectors] = useState<Connector[]>([]);
+  useLayoutEffect(() => {
+    const container = listContainerRef.current;
+    if (container === null || nodes.length === 0) {
+      setConnectors([]);
+      return undefined;
+    }
+    const measure = (): void => {
+      const cRect = container.getBoundingClientRect();
+      const next: Connector[] = [];
+      for (const node of nodes) {
+        if (node.parentId === null) continue;
+        const parentAnchor = anchorRefs.current.get(node.parentId);
+        const childAnchor = anchorRefs.current.get(node.id);
+        if (parentAnchor === undefined || childAnchor === undefined) continue;
+        const pRect = parentAnchor.getBoundingClientRect();
+        const cRectAnchor = childAnchor.getBoundingClientRect();
+        // Anchor positions are relative to the scrolling container;
+        // SVG is positioned over the same container, so subtract
+        // the container's offset to land in SVG-local coordinates.
+        const px = pRect.left - cRect.left + container.scrollLeft + 4;
+        const py = pRect.top - cRect.top + container.scrollTop + pRect.height / 2;
+        const cx = cRectAnchor.left - cRect.left + container.scrollLeft + 4;
+        const cy = cRectAnchor.top - cRect.top + container.scrollTop + cRectAnchor.height / 2;
+        next.push({
+          id: node.id,
+          parentX: px,
+          parentY: py,
+          childX: cx,
+          childY: cy,
+          color: branchAccent(node.branchLevel) || "#404040",
+        });
+      }
+      setConnectors(next);
+    };
+    measure();
+    // ResizeObserver picks up content reflow (preview text wrapping,
+    // panel width changes from divider drag, etc.).
+    const ro = new ResizeObserver(measure);
+    ro.observe(container);
+    for (const el of rowRefs.current.values()) ro.observe(el);
+    return () => ro.disconnect();
+  }, [nodes]);
 
   /**
    * Navigate the active session's leaf. Idempotent on the current
@@ -285,7 +354,7 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto px-2 py-2">
+        <div ref={listContainerRef} className="relative flex-1 overflow-y-auto px-2 py-2">
           {loading && tree === undefined && (
             <div className="px-4 py-6 text-center text-xs italic text-neutral-500">
               Loading tree…
@@ -296,7 +365,30 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
               No entries yet.
             </div>
           )}
-          <ul className="space-y-0.5">
+          {/* SVG connector overlay (Tree1). Pointer-events disabled so
+              clicks pass through to the row buttons underneath.
+              Stroke width 1 + branch-tinted color; the L-shape goes
+              from the parent's anchor down to the child's row, then
+              horizontal in to the child's anchor. */}
+          {connectors.length > 0 && (
+            <svg
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 h-full w-full"
+              style={{ overflow: "visible" }}
+            >
+              {connectors.map((c) => (
+                <path
+                  key={c.id}
+                  d={`M ${c.parentX} ${c.parentY} L ${c.parentX} ${c.childY} L ${c.childX} ${c.childY}`}
+                  stroke={c.color}
+                  strokeWidth={1}
+                  fill="none"
+                  strokeOpacity={0.55}
+                />
+              ))}
+            </svg>
+          )}
+          <ul className="relative space-y-0.5">
             {nodes.map((n) => (
               <TreeRow
                 key={n.id}
@@ -313,6 +405,14 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
                       : {}),
                   })
                 }
+                rowRef={(el) => {
+                  if (el === null) rowRefs.current.delete(n.id);
+                  else rowRefs.current.set(n.id, el);
+                }}
+                anchorRef={(el) => {
+                  if (el === null) anchorRefs.current.delete(n.id);
+                  else anchorRefs.current.set(n.id, el);
+                }}
               />
             ))}
           </ul>
@@ -503,11 +603,22 @@ function TreeRow({
   disabled,
   onNavigate,
   onFork,
+  rowRef,
+  anchorRef,
 }: {
   node: NodeView;
   disabled: boolean;
   onNavigate: () => void;
   onFork: () => void;
+  /** Tree1 — measured for SVG connector geometry. */
+  rowRef: (el: HTMLLIElement | null) => void;
+  /**
+   * Tree1 — invisible 0-width span at the row's "anchor point" (just
+   * inside the indent), used as the SVG connector endpoint so the
+   * line lands at the row's content edge regardless of preview
+   * wrapping or sibling badge widths.
+   */
+  anchorRef: (el: HTMLSpanElement | null) => void;
 }) {
   const indent =
     Math.min(node.depth, MAX_INDENT_DEPTH) * INDENT_PX +
@@ -519,7 +630,18 @@ function TreeRow({
     // min-w-0 on the wrapper so flex children inside (the row's
     // content column with `truncate`) actually shrink below their
     // content width instead of overflowing the modal.
-    <li className="group min-w-0" style={{ paddingLeft: `${indent}px` }}>
+    <li ref={rowRef} className="group relative min-w-0" style={{ paddingLeft: `${indent}px` }}>
+      {/* Tree1 — connector anchor. Zero-width inline span at the
+          row's left content edge. Position: absolute so it doesn't
+          shift the layout; left:indent so it lands where the row
+          content begins regardless of paddingLeft (which the
+          parent <li> already applies via inline style). */}
+      <span
+        ref={anchorRef}
+        aria-hidden="true"
+        className="pointer-events-none absolute"
+        style={{ left: `${indent}px`, top: 0, bottom: 0, width: 0 }}
+      />
       <div
         className={`flex min-w-0 items-start gap-1.5 rounded border px-2 py-1.5 ${
           node.isLeaf
