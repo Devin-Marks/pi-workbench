@@ -341,12 +341,20 @@ export async function updateSettings(patch: Record<string, unknown>): Promise<Se
 // PUT /config/models is reflected on the next GET /config/providers without
 // needing a restart.
 
-export function liveProvidersListing(): ProvidersListing {
+export async function liveProvidersListing(): Promise<ProvidersListing> {
   const store = authStorage();
   const registry = ModelRegistry.create(store, MODELS_FILE());
   const all: Model<Api>[] = registry.getAll();
+  // When HIDE_BUILTIN_PROVIDERS is on, restrict to providers whose
+  // name appears as a key in models.json. Built-ins (anthropic,
+  // openai, etc. the SDK ships with) drop out, leaving only the
+  // operator-added custom providers.
+  const customOnly = config.hideBuiltinProviders
+    ? new Set(Object.keys((await readModelsJson()).providers))
+    : undefined;
   const grouped = new Map<string, ProvidersListing["providers"][number]>();
   for (const m of all) {
+    if (customOnly !== undefined && !customOnly.has(m.provider)) continue;
     let entry = grouped.get(m.provider);
     if (entry === undefined) {
       entry = { provider: m.provider, models: [] };

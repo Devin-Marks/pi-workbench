@@ -150,6 +150,20 @@ export const config = Object.freeze({
    */
   minimalUi: readBool("MINIMAL_UI", false),
   /**
+   * When true, `GET /config/providers` filters out provider entries
+   * whose name does NOT appear as a key in `models.json`. Built-in
+   * providers (anthropic, openai, etc. that the SDK ships with) are
+   * hidden from the Settings → Providers list, leaving only the
+   * custom providers the operator added via `models.json`. Useful
+   * for deployments that route every model through a single internal
+   * gateway (vLLM, LiteLLM, internal proxy) and don't want users
+   * picking the public providers from the UI.
+   *
+   * Intentionally not exposed in docker-compose / .env.example —
+   * advanced env knob, document if/when it's needed widely.
+   */
+  hideBuiltinProviders: readBool("HIDE_BUILTIN_PROVIDERS", false),
+  /**
    * Whether `/api/docs` (Swagger UI + OpenAPI JSON spec) is reachable.
    * Defaults to true so Docker / production deploys keep working without
    * extra config (the README quickstart documents `/api/docs`). When

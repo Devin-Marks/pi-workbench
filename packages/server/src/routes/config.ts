@@ -187,7 +187,7 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (_req, reply) => {
       try {
-        return liveProvidersListing();
+        return await liveProvidersListing();
       } catch (err) {
         return internalError(reply, err);
       }
