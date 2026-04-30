@@ -9,7 +9,7 @@ conventions, critical rules, and known gotchas.
 
 ## What This Project Is
 
-pi-webui is a browser UI for the pi coding agent (github.com/badlogic/pi-mono).
+pi-workbench is a browser UI for the pi coding agent (github.com/badlogic/pi-mono).
 It is an HTTP server that embeds the `@mariozechner/pi-coding-agent` SDK and exposes
 it to a browser over REST + Server-Sent Events.
 
@@ -24,7 +24,7 @@ auth or isolation is needed or planned.
 ## Repository Layout
 
 ```
-pi-webui/
+pi-workbench/
 ├── packages/
 │   ├── server/               # Fastify HTTP server (Node.js + TypeScript)
 │   │   ├── src/
@@ -195,7 +195,7 @@ with `security: []` in their schema to reflect this in the spec.
 ```
 Browser
   │
-  ├─ POST /api/sessions/:id/prompt  ─────────────────────────────────┐
+  ├─ POST /api/v1/sessions/:id/prompt  ─────────────────────────────────┐
   │                                                                   │
   │                                               session-registry.ts │
   │                                               session.prompt()    │
@@ -206,7 +206,7 @@ Browser
   │                                                    │              │
   │                                             sse-bridge.ts         │
   │                                                    │              │
-  └─ GET /api/sessions/:id/stream  ◄──────── SSE stream ◄────────────┘
+  └─ GET /api/v1/sessions/:id/stream  ◄──────── SSE stream ◄────────────┘
 ```
 
 ### Session Lifecycle
@@ -217,7 +217,7 @@ Browser
    → stores `LiveSession` in in-memory registry Map
 
 2. On server restart, sessions are NOT in the registry. They are lazy-loaded:
-   `GET /api/sessions/:id/stream` calls `resumeSession()` if id is missing from
+   `GET /api/v1/sessions/:id/stream` calls `resumeSession()` if id is missing from
    registry. `resumeSession()` calls `createAgentSession()` with the existing
    JSONL file path, restoring full message history.
 
@@ -242,7 +242,7 @@ separate HTTP call. The frontend SSE client must handle this event before all ot
 
 ### Prompt with Attachments
 
-`POST /api/sessions/:id/prompt` accepts both JSON and `multipart/form-data`:
+`POST /api/v1/sessions/:id/prompt` accepts both JSON and `multipart/form-data`:
 - JSON: `{ text, streamingBehavior? }` — plain text prompt, no attachments
 - Multipart: `text` field + `attachments[]` files
   - Image files → base64 → passed as `images` array to `session.prompt()`
@@ -507,7 +507,7 @@ simply removes the client from the `LiveSession.clients` Set on the `close` even
    `../../../etc/passwd` style traversal.
 3. Max file read size: 5MB. Larger files return a truncation notice.
 4. `getTree()` skips: `node_modules`, `.git`, `dist`, `build`, `__pycache__`,
-   `.next`, `.nuxt`, `coverage`. Max depth: 6 levels.
+   `.next`, `.nuxt`, `coverage`, `.vite`, `.turbo`, `.cache`. Max depth: 6 levels.
 5. Delete operations on non-empty directories are rejected — return a helpful error
    asking the user to delete contents first. Do not implement recursive force-delete.
 

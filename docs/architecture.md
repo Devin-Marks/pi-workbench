@@ -35,7 +35,7 @@ workbench is the bridge:
 │    ├─ TerminalPanel — xterm.js + WebSocket to PTY                    │
 │    └─ SessionTreePanel — session branching navigator                 │
 │                                                                      │
-│  Zustand stores: project, session, file, terminal, ui-config, theme  │
+│  Zustand stores: auth, project, session, file, terminal, ui-config   │
 │  Single api-client.ts entry point for ALL HTTP calls                 │
 │  Single sse-client.ts entry point for ALL streaming                  │
 └──────────────────────────────────────────────────────────────────────┘

@@ -77,11 +77,6 @@ The PR template walks you through this; the short version:
 
 - [ ] `npm run check` and `npm run build` pass locally
 - [ ] Relevant test script(s) pass (list which ones in the PR description)
-- [ ] If it touches a Phase X polish item, `notes/DEFERRED.md` row is
-      either resolved (struck through with `**Resolved YYYY-MM-DD**:` +
-      a one-paragraph summary) or has a re-defer rationale
-- [ ] If it's a phase milestone, a code-review pass was run (see
-      [`notes/REVIEWS.md`](./notes/REVIEWS.md) for cadence)
 - [ ] Public route changes ship with `schema.description` + JSON-Schema
       `body` / `response` so the OpenAPI spec at `/api/docs` stays accurate
 

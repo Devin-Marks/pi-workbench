@@ -238,12 +238,21 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$BASE/api/v1/projects/$PROJEC
 
 ## Session lifecycle
 
+> **Cold sessions and lazy resume.** A session created earlier and not currently
+> active in the registry is "cold" — it lives only as a `.jsonl` on disk.
+> `/sessions/:id/tree` and `/sessions/:id/context` will lazy-resume a cold
+> session into memory automatically. `/sessions/:id/messages`,
+> `/sessions/:id/turn-diff`, and `/sessions/:id/name` do **not** auto-resume
+> and return `404 session_not_found` on a cold id. The reliable workaround
+> is to open the SSE stream first (`GET /sessions/:id/stream`), which always
+> auto-resumes; subsequent calls then succeed.
+
 ### List sessions for a project
 
 ```bash
 curl -s -H "Authorization: Bearer $KEY" \
   "$BASE/api/v1/sessions?projectId=$PROJECT_ID"
-# { "sessions": [{ sessionId, projectId, isLive, name?, createdAt, lastActivityAt, messageCount, firstMessage }] }
+# { "sessions": [{ sessionId, projectId, workspacePath, isLive, name?, createdAt, lastActivityAt, messageCount, firstMessage }] }
 ```
 
 ### Get full message history
@@ -264,7 +273,9 @@ curl -s -H "Authorization: Bearer $KEY" \
 
 `turns[]` is the per-turn breakdown derived from each
 `AssistantMessage.usage`. `contextUsage.tokens` may be omitted when the
-SDK doesn't have a fresh count (right after compaction).
+SDK doesn't have a fresh count (right after compaction). The `messages`
+array mirrors the SSE `snapshot.messages` payload — it can be large
+(tens of KB) for a long session, so consider polling sparingly.
 
 ### Get session tree (branching history)
 
@@ -513,11 +524,33 @@ curl -s -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/jso
 ### Read / write models.json (custom providers)
 
 ```bash
+# GET returns the file with `apiKey` / `apiKeyCommand` REPLACED by
+# "***REDACTED***" so the raw secret never leaves the server. The
+# persisted file is unchanged; PUT takes the actual values.
 curl -s -H "Authorization: Bearer $KEY" $BASE/api/v1/config/models
 
 curl -s -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   $BASE/api/v1/config/models \
   -d '{"providers":{"vllm-local":{"api":"openai-completions","url":"http://localhost:8000/v1","models":[...]}}}'
+```
+
+### List / toggle skills
+
+```bash
+# List the merged skills (global from ~/.pi/agent/skills/ + project-local
+# from <project>/.pi/skills/) with per-skill enabled state for the
+# given workspace.
+curl -s -G -H "Authorization: Bearer $KEY" \
+  --data-urlencode "workspacePath=/workspace/my-project" \
+  $BASE/api/v1/config/skills
+# { skills: [{ name, description, source: "global"|"project", filePath, enabled, disableModelInvocation }] }
+
+# Enable / disable a skill for the current workspace. Toggles persist in
+# settings.json (skills array) — disabling a skill doesn't touch the
+# skill .md file itself.
+curl -s -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  "$BASE/api/v1/config/skills/<skill-name>/enabled" \
+  -d '{"enabled":true,"workspacePath":"/workspace/my-project"}'
 ```
 
 ## UI config (public, no auth)

@@ -24,7 +24,7 @@ ${PI_CONFIG_DIR}/
 ```
 
 Skills (per-project Markdown files) live elsewhere — under `.pi/skills/`
-inside each project directory and inside `~/.pi/skills/` for global
+inside each project directory and inside `~/.pi/agent/skills/` for global
 skills. The workbench surfaces them but doesn't own their storage.
 
 ## auth.json — provider API keys
@@ -82,7 +82,8 @@ LiteLLM, Ollama, llama.cpp's `--api`, your company's internal proxy.
           "contextWindow": 32000,
           "maxTokens": 8000,
           "input": ["text"],
-          "reasoning": false
+          "reasoning": false,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         }
       ]
     },
@@ -96,7 +97,8 @@ LiteLLM, Ollama, llama.cpp's `--api`, your company's internal proxy.
           "contextWindow": 128000,
           "maxTokens": 4000,
           "input": ["text"],
-          "reasoning": false
+          "reasoning": false,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         }
       ]
     }
@@ -114,6 +116,7 @@ LiteLLM, Ollama, llama.cpp's `--api`, your company's internal proxy.
 | `maxTokens` | number | Max output tokens per response. Pi clamps `max_tokens` in API calls to this. |
 | `input` | `("text" \| "image")[]` | What content types the model accepts. Image-capable models can receive multipart attachments. |
 | `reasoning` | boolean | True if the model supports thinking / extended-reasoning blocks (OpenAI o1, Claude Sonnet 4.5 with thinking, etc.). Surfaces the thinking-level selector in Settings → Agent. |
+| `cost` | `{ input, output, cacheRead, cacheWrite }` (numbers, USD per 1M tokens) | Required by the SDK type. Surfaces in the Context Inspector's per-turn cost telemetry. Set every field to `0` for self-hosted endpoints (vLLM, Ollama, llama.cpp) where you don't pay per token; for OpenAI-compatible commercial endpoints, copy the upstream provider's published rates. Without a `cost` block the model entry is rejected on next session creation. |
 
 ### Provider `api` field
 
@@ -153,8 +156,8 @@ Pi-side defaults that apply to new sessions:
   "defaultProvider": "anthropic",
   "defaultModel": "claude-sonnet-4-5-20250929",
   "defaultThinkingLevel": "medium",
-  "steeringMode": "interrupt",
-  "followUpMode": "wait"
+  "steeringMode": "all",
+  "followUpMode": "all"
 }
 ```
 
@@ -163,8 +166,8 @@ Pi-side defaults that apply to new sessions:
 | `defaultProvider` | A provider key (`anthropic`, `openai`, `google`, custom from `models.json`, etc.) | Picked by new sessions when no per-session model is set. |
 | `defaultModel` | A model id from the chosen provider | Same. |
 | `defaultThinkingLevel` | `minimal` / `low` / `medium` / `high` / `xhigh` | For reasoning-capable models. Lower = faster + cheaper; higher = better at hard problems. |
-| `steeringMode` | `interrupt` / `wait` | What `POST /steer` does. `interrupt` stops the agent at the next tool-call boundary; `wait` queues the message for after the current run. |
-| `followUpMode` | `interrupt` / `wait` | What `POST /followUp` does. `wait` is the conventional choice. |
+| `steeringMode` | `all` / `one-at-a-time` | How the SDK delivers queued steering messages. `all` flushes the entire queue in one delivery to the agent at the next opportunity; `one-at-a-time` waits for the agent's response between queued messages. The per-call `mode` body field on `POST /sessions/:id/steer` is independent (`steer` vs `followUp` — that's the WHEN of delivery, not the BATCHING). |
+| `followUpMode` | `all` / `one-at-a-time` | Same shape as `steeringMode` but for follow-up messages (delivered after the agent goes fully idle rather than at the next tool-call boundary). |
 
 Other SDK keys (less commonly tuned) are accepted by the
 `PUT /api/v1/config/settings` route and persist in this file.
@@ -198,7 +201,7 @@ frontmatter the agent loads as additional instructions). They live
 under:
 
 - **Project-local:** `<project-path>/.pi/skills/*.md`
-- **Global:** `~/.pi/skills/*.md` — available across all projects
+- **Global:** `~/.pi/agent/skills/*.md` — available across all projects
 
 The workbench's Settings → Skills tab shows the merged list (global +
 project-local) for the active project, with a toggle per skill to
