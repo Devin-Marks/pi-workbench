@@ -1210,7 +1210,16 @@ function SessionTreeGraph({
           x={xOf(t.col)}
           y={yOf(t.row)}
           disabled={disabled}
-          onNavigate={() => onNavigate(t.id)}
+          // Navigate AND fork both target the turn's last entry, not
+          // its anchor. Navigating to the anchor (the user message
+          // for user turns) sets the leaf there, which makes the
+          // assistant's reply an off-path child — chat view then
+          // shows everything UP TO the user message, reading as
+          // "the previous turn's content + this prompt waiting for
+          // a reply." Targeting lastEntryId puts the leaf at the
+          // END of the turn, so the full turn is on the active
+          // branch (= visible in the chat) when the user lands.
+          onNavigate={() => onNavigate(t.lastEntryId)}
           onForkAfterTurn={() => onForkAfterTurn(t.lastEntryId)}
         />
       ))}
