@@ -211,11 +211,27 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
       // streaming) and gives back a detach() we call on socket
       // close — that detach starts the idle reaper but does NOT
       // kill the PTY, so the next reconnect can pick it up.
-      const detach = attachSink(managed.ptyId, (chunk) => {
-        if (socket.readyState === socket.OPEN) {
-          socket.send(chunk);
+      //
+      // The 4th arg is the "displace previous attachment" callback:
+      // if a NEW WebSocket attaches to the same PTY (same tabId from
+      // a different browser window), pty-manager calls this to close
+      // OUR socket cleanly so we don't end up with two browsers both
+      // writing keystrokes into the same shell.
+      const closeOnDisplace = (): void => {
+        if (socket.readyState === socket.OPEN || socket.readyState === socket.CONNECTING) {
+          socket.close(4409, "replaced_by_new_attach");
         }
-      });
+      };
+      const detach = attachSink(
+        managed.ptyId,
+        (chunk) => {
+          if (socket.readyState === socket.OPEN) {
+            socket.send(chunk);
+          }
+        },
+        undefined,
+        closeOnDisplace,
+      );
       if (detach === undefined) {
         log.error({ ptyId: managed.ptyId }, "attachSink failed; pty vanished");
         socket.close(CLOSE_INTERNAL_ERROR, "attach_failed");

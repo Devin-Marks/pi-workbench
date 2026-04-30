@@ -22,30 +22,57 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * AND the legacy path exists.
  */
 let legacyMigrationDone = false;
+let migrationInflight: Promise<void> | undefined;
 async function migrateLegacyProjectsFile(): Promise<void> {
   if (legacyMigrationDone) return;
-  if (config.workbenchDataDir === config.piConfigDir) {
+  // In-flight dedupe: two concurrent first-reads (e.g. /projects and
+  // /sessions firing at boot before either has populated the boolean
+  // flag) would otherwise both stat the legacy path, both attempt
+  // mkdir + rename, and the second's rename(legacy, target) fails
+  // with ENOENT because the legacy file is already gone — bubbling
+  // up as a 500 to one of the two requests.
+  if (migrationInflight !== undefined) return migrationInflight;
+  migrationInflight = (async () => {
+    if (config.workbenchDataDir === config.piConfigDir) {
+      legacyMigrationDone = true;
+      return;
+    }
+    const legacy = join(config.piConfigDir, "projects.json");
+    const target = join(config.workbenchDataDir, "projects.json");
+    const [legacyStat, targetStat] = await Promise.all([
+      stat(legacy).catch(() => undefined),
+      stat(target).catch(() => undefined),
+    ]);
+    if (legacyStat === undefined || targetStat !== undefined) {
+      // Either no legacy file to migrate, or the new path already has
+      // one. Mark done so subsequent reads skip the stat pair.
+      legacyMigrationDone = true;
+      return;
+    }
+    // Only mark done once the rename actually succeeds — if mkdir or
+    // rename throws (cross-filesystem move, permissions), the next
+    // readProjects() will retry rather than silently giving up.
+    await mkdir(config.workbenchDataDir, { recursive: true });
+    try {
+      await rename(legacy, target);
+    } catch (err) {
+      // ENOENT here means a concurrent first-read already migrated
+      // and the legacy file is gone — re-stat the target to confirm
+      // and treat as success.
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        const targetNow = await stat(target).catch(() => undefined);
+        if (targetNow !== undefined) {
+          legacyMigrationDone = true;
+          return;
+        }
+      }
+      throw err;
+    }
     legacyMigrationDone = true;
-    return;
-  }
-  const legacy = join(config.piConfigDir, "projects.json");
-  const target = join(config.workbenchDataDir, "projects.json");
-  const [legacyStat, targetStat] = await Promise.all([
-    stat(legacy).catch(() => undefined),
-    stat(target).catch(() => undefined),
-  ]);
-  if (legacyStat === undefined || targetStat !== undefined) {
-    // Either no legacy file to migrate, or the new path already has
-    // one. Mark done so subsequent reads skip the stat pair.
-    legacyMigrationDone = true;
-    return;
-  }
-  // Only mark done once the rename actually succeeds — if mkdir or
-  // rename throws (cross-filesystem move, permissions), the next
-  // readProjects() will retry rather than silently giving up.
-  await mkdir(config.workbenchDataDir, { recursive: true });
-  await rename(legacy, target);
-  legacyMigrationDone = true;
+  })().finally(() => {
+    migrationInflight = undefined;
+  });
+  return migrationInflight;
 }
 
 export interface Project {

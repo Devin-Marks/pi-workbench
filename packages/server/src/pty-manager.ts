@@ -63,6 +63,17 @@ interface Entry {
   managed: ManagedPty;
   /** onData disposable — replaced each time a new socket attaches. */
   dataDisposable: nodePty.IDisposable | undefined;
+  /**
+   * Callback the currently-attached socket gives us so we can close it
+   * when a NEW socket attaches with the same tabId. Without this, two
+   * browser windows sharing the same `tabId` (localStorage is per-origin,
+   * so cross-window in the same origin is the common case) would both
+   * stay connected to the same PTY: the second window steals the data
+   * sink (so only it sees output), but the first window's keystroke
+   * handler still writes to the shared `process.stdin`, producing
+   * interleaved input that breaks the line-edit state at the shell.
+   */
+  closeActiveSocket: (() => void) | undefined;
   /** Idle reaper for the period when no socket is attached. */
   idleTimer: NodeJS.Timeout | undefined;
   /** Rolling output buffer; replayed in order to a reattaching client. */
@@ -115,6 +126,7 @@ export function spawnPty(opts: SpawnOptions): ManagedPty {
   const entry: Entry = {
     managed,
     dataDisposable: undefined,
+    closeActiveSocket: undefined,
     idleTimer: undefined,
     buffer: [],
     bufferBytes: 0,
@@ -151,6 +163,7 @@ export function attachSink(
   ptyId: string,
   onData: (chunk: string) => void,
   replayBytes: number = OUTPUT_BUFFER_BYTES,
+  closeActiveSocket?: () => void,
 ): (() => void) | undefined {
   const entry = ptys.get(ptyId);
   if (entry === undefined) return undefined;
@@ -166,6 +179,21 @@ export function attachSink(
     entry.dataDisposable.dispose();
     entry.dataDisposable = undefined;
   }
+  // Close the previously-attached WS, if any. Without this, two
+  // browsers with the same tabId both keep their input handlers wired
+  // up to write to the PTY; only the most recently attached one sees
+  // output, but BOTH can send input — interleaved keystrokes corrupt
+  // line-edit state. Closing the predecessor's WS lets the route's
+  // close handler unwire the input listener cleanly.
+  if (entry.closeActiveSocket !== undefined) {
+    try {
+      entry.closeActiveSocket();
+    } catch {
+      // socket already gone — fine
+    }
+    entry.closeActiveSocket = undefined;
+  }
+  entry.closeActiveSocket = closeActiveSocket;
   // Replay only the tail the caller asked for. The buffer is a
   // chunk array; flatten just enough from the right edge to hit
   // `replayBytes`. Edge case: replayBytes <= 0 → skip replay.
@@ -192,6 +220,12 @@ export function attachSink(
     if (entry.dataDisposable === live) {
       live.dispose();
       entry.dataDisposable = undefined;
+      // Only clear closeActiveSocket if WE are still the active
+      // attachment — a newer attachSink may have already swapped a
+      // different socket in.
+      if (entry.closeActiveSocket === closeActiveSocket) {
+        entry.closeActiveSocket = undefined;
+      }
     } else {
       // A newer attach replaced ours; nothing to do.
     }

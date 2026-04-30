@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { AuthStorage, ModelRegistry, type Skill, loadSkills } from "@mariozechner/pi-coding-agent";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { config } from "./config.js";
+import { makeLock } from "./concurrency.js";
 
 const MODELS_FILE = (): string => join(config.piConfigDir, "models.json");
 const AUTH_FILE = (): string => join(config.piConfigDir, "auth.json");
@@ -168,6 +169,24 @@ export async function readSettings(): Promise<SettingsJson> {
 }
 
 /**
+ * Serialise all read-modify-write sequences over settings.json. Without
+ * this, two concurrent PUT /config/settings requests can read the same
+ * baseline and race the rename(), losing one write. Also covers the
+ * snapshot+restore dance in routes/control.ts:setModel — exported so
+ * that route can wrap the entire snapshot → setModel → restore sequence
+ * as a single critical section. Single-process / single-tenant only.
+ */
+export const withSettingsLock = makeLock();
+
+/**
+ * Keys we refuse to allow user-supplied input to set on settings.json.
+ * Without this, a `PUT /config/settings` body containing `{"__proto__":
+ * {"polluted": true}}` would mutate Object.prototype process-wide via
+ * the `(next as Record<string, unknown>)[k] = v` write.
+ */
+const DANGEROUS_KEYS: ReadonlySet<string> = new Set(["__proto__", "prototype", "constructor"]);
+
+/**
  * Atomically replace settings.json with `settings`. Used by the
  * per-session model route to roll back the SDK's side effects on
  * `session.setModel(...)`. The SDK touches more keys than just
@@ -175,6 +194,13 @@ export async function readSettings(): Promise<SettingsJson> {
  * key-by-key restore was leaking SDK-written values into the file
  * and resetting users' manually-curated settings to whatever the
  * SDK happened to write.
+ *
+ * Note: this function does NOT take `withSettingsLock`. The Promise-
+ * chain lock is non-reentrant, so callers that need to write under an
+ * already-held lock (e.g. `routes/control.ts:setModel` doing a
+ * snapshot+restore inside its own critical section) would deadlock.
+ * `atomicWriteJson` is itself crash-safe; the lock only matters for
+ * read-modify-write coherency, which is owned by the caller.
  */
 export async function writeSettings(settings: SettingsJson): Promise<void> {
   await atomicWriteJson(SETTINGS_FILE(), settings);
@@ -183,19 +209,34 @@ export async function writeSettings(settings: SettingsJson): Promise<void> {
 /**
  * Partial-merge update: shallow merge of `patch` over the existing settings.
  * Pass `null` for any key in `patch` to delete that key. Atomic write.
+ *
+ * Refuses prototype-pollution keys (`__proto__`, `prototype`,
+ * `constructor`) — `JSON.parse` itself decodes these as own-properties
+ * (which is why the simple `next[k] = v` write would actually corrupt
+ * `Object.prototype`); we filter them at the boundary.
  */
 export async function updateSettings(patch: Record<string, unknown>): Promise<SettingsJson> {
-  const current = await readSettings();
-  const next: SettingsJson = { ...current };
-  for (const [k, v] of Object.entries(patch)) {
-    if (v === null) {
-      delete (next as Record<string, unknown>)[k];
-    } else {
-      (next as Record<string, unknown>)[k] = v;
+  return withSettingsLock(async () => {
+    const current = await readSettings();
+    const next: SettingsJson = { ...current };
+    for (const [k, v] of Object.entries(patch)) {
+      if (DANGEROUS_KEYS.has(k)) continue;
+      if (v === null) {
+        delete (next as Record<string, unknown>)[k];
+      } else {
+        // defineProperty avoids a setter-trap if the prototype chain
+        // somehow contains an accessor for this key.
+        Object.defineProperty(next, k, {
+          value: v,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+      }
     }
-  }
-  await atomicWriteJson(SETTINGS_FILE(), next);
-  return next;
+    await atomicWriteJson(SETTINGS_FILE(), next);
+    return next;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -287,10 +328,20 @@ export async function setSkillEnabled(
 ): Promise<SkillSummary[]> {
   const all = await listSkills(workspacePath);
   if (!all.some((s) => s.name === name)) throw new SkillNotFoundError(name);
-  const settings = await readSettings();
-  const list = new Set(settings.skills ?? []);
-  if (enabled) list.add(name);
-  else list.delete(name);
-  await updateSettings({ skills: Array.from(list) });
+  // The skills array is read-modify-write against settings.skills, so
+  // serialise the whole sequence under withSettingsLock — without this,
+  // toggling two skills in rapid succession (the UI lets the user
+  // click as fast as they want) can lose one toggle. We inline the
+  // read+merge+write here rather than calling updateSettings (which
+  // would deadlock — the lock is non-reentrant) and use atomicWriteJson
+  // directly for the write.
+  await withSettingsLock(async () => {
+    const settings = await readSettings();
+    const list = new Set(settings.skills ?? []);
+    if (enabled) list.add(name);
+    else list.delete(name);
+    const next: SettingsJson = { ...settings, skills: Array.from(list) };
+    await atomicWriteJson(SETTINGS_FILE(), next);
+  });
   return listSkills(workspacePath);
 }

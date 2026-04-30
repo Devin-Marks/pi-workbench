@@ -721,6 +721,10 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
         // Race: another client resumed the session between our
         // dispose and the cold-delete file lookup. The user asked
         // for hard delete; honor that by retrying once.
+        // (As of the tombstone fix in session-registry, this path is
+        // very rare — disposeSession sets a 1.5s no-revive window
+        // that resumeSession enforces. The retry stays as defense
+        // in depth for any non-SSE revival path.)
         const live2 = disposeSession(req.params.id);
         if (live2) {
           try {

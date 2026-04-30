@@ -320,12 +320,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const ctrl = new AbortController();
     get().controllers.set(sessionId, ctrl);
 
+    // Identity-checked deletes below. Without this, React Strict Mode's
+    // double-mount in dev (mount → unmount → mount) can create:
+    //   1. ctrl_A registered
+    //   2. ctrl_A aborted by closeStream → entry deleted
+    //   3. ctrl_B registered
+    //   4. ctrl_A's catch fires (post-abort) and would delete ctrl_B
+    // — leaking ctrl_B with no way to close it. The `===` guard makes
+    // the delete a no-op when WE are no longer the registered entry.
+    const onTerminate = (): void => {
+      if (get().controllers.get(sessionId) === ctrl) {
+        get().controllers.delete(sessionId);
+      }
+    };
+
     void streamSSE<IncomingEvent>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/stream`, {
       signal: ctrl.signal,
       onEvent: (event) => applyEvent(set, get, sessionId, event),
-      onClose: () => {
-        get().controllers.delete(sessionId);
-      },
+      onClose: onTerminate,
       onReconnect: ({ attempt, delayMs, reason }) => {
         set((s) => ({
           bannerBySession: {
@@ -341,7 +353,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set((s) => ({
         bannerBySession: { ...s.bannerBySession, [sessionId]: `stream error: ${code}` },
       }));
-      get().controllers.delete(sessionId);
+      onTerminate();
     });
   },
 
@@ -349,7 +361,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const ctrl = get().controllers.get(sessionId);
     if (ctrl !== undefined) {
       ctrl.abort();
-      get().controllers.delete(sessionId);
+      // Identity-check: only delete if no later openStream replaced
+      // the entry between abort() and now (event-loop ordering means
+      // this is essentially impossible synchronously, but the guard
+      // costs nothing and pairs symmetrically with the catch above).
+      if (get().controllers.get(sessionId) === ctrl) {
+        get().controllers.delete(sessionId);
+      }
     }
   },
 

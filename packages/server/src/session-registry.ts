@@ -8,6 +8,7 @@ import {
   type SessionInfo,
 } from "@mariozechner/pi-coding-agent";
 import { config } from "./config.js";
+import { makeDedupe, makeLock } from "./concurrency.js";
 import { readProjects } from "./project-manager.js";
 
 /**
@@ -233,10 +234,67 @@ export function touchSession(sessionId: string): void {
 }
 
 /**
+ * In-flight dedupe for concurrent resumeSession calls on the same id.
+ * Without this, two near-simultaneous SSE connects (or the three concurrent
+ * resumes triggered by the client opening a session — /messages, /tree,
+ * /context) each call createAgentSession and end up creating two
+ * AgentSession instances backing the same JSONL file. The second
+ * registry.set() wins, leaking the first session and any clients that
+ * landed on it; both then write to the same file concurrently.
+ */
+const resumeInflight = makeDedupe<string, LiveSession>();
+
+/**
+ * Sessions that were just disposed and should NOT be re-resumed for a
+ * brief grace window. Without this, a polling SSE client (e.g. a stale
+ * tab still trying to reconnect) can win the race against
+ * `deleteColdSession`'s "is it live?" check by re-resuming the session
+ * between the dispose and the file unlink — leaving the user's UI
+ * showing "Failed to delete" while the session keeps consuming tokens.
+ *
+ * Maps sessionId → setTimeout handle so we can clear the tombstone if
+ * the session legitimately needs to come back (e.g. a different code
+ * path explicitly resumes after dispose, which is rare).
+ */
+const TOMBSTONE_MS = 1500;
+const disposeTombstones = new Map<string, NodeJS.Timeout>();
+
+export class SessionTombstonedError extends Error {
+  constructor(sessionId: string) {
+    super(`session ${sessionId} was just disposed`);
+    this.name = "SessionTombstonedError";
+  }
+}
+
+/**
+ * Per-source-session locks for forkSession. Concurrent forks from the
+ * same source race on the SDK's destructive in-place mutation pattern
+ * (`createBranchedSession` rewrites the source's sessionFile pointer);
+ * if two forks interleave, the second captures the FIRST fork's path
+ * as `originalSourceFile` and "restores" the source to the first
+ * fork's file — corrupting the source's identity until restart. The
+ * lock keeps forks from the same source serialised; forks from
+ * different sources still parallelise.
+ */
+type Lock = ReturnType<typeof makeLock>;
+const forkLocks = new Map<string, Lock>();
+function getForkLock(sessionId: string): Lock {
+  let lock = forkLocks.get(sessionId);
+  if (lock === undefined) {
+    lock = makeLock();
+    forkLocks.set(sessionId, lock);
+  }
+  return lock;
+}
+
+/**
  * Resume a session from disk into the registry. If `sessionId` is already
  * live, returns the existing LiveSession unchanged. Otherwise locates the
  * .jsonl file via SessionManager.list, opens it, and wires it into the
  * registry. Throws SessionNotFoundError if the file isn't on disk.
+ *
+ * Concurrent calls for the same sessionId share a single in-flight
+ * AgentSession creation — see resumeInflight.
  */
 export async function resumeSession(
   sessionId: string,
@@ -246,33 +304,46 @@ export async function resumeSession(
   const existing = registry.get(sessionId);
   if (existing) return existing;
 
-  const dir = sessionDirFor(projectId);
-  const sessions = await SessionManager.list(workspacePath, dir);
-  const match = sessions.find((s) => s.id === sessionId);
-  if (match === undefined) throw new SessionNotFoundError(sessionId);
+  // Tombstone check: a session that was just disposed should not be
+  // re-resumed by a polling client racing against the operator's delete.
+  if (disposeTombstones.has(sessionId)) {
+    throw new SessionTombstonedError(sessionId);
+  }
 
-  const sessionManager = SessionManager.open(match.path, dir, workspacePath);
-  const { session } = await createAgentSession({
-    cwd: workspacePath,
-    sessionManager,
-    agentDir: config.piConfigDir,
+  return resumeInflight(sessionId, async () => {
+    // Re-check after lock acquisition: another resume may have raced
+    // ahead and populated the registry while we were queued.
+    const raced = registry.get(sessionId);
+    if (raced) return raced;
+
+    const dir = sessionDirFor(projectId);
+    const sessions = await SessionManager.list(workspacePath, dir);
+    const match = sessions.find((s) => s.id === sessionId);
+    if (match === undefined) throw new SessionNotFoundError(sessionId);
+
+    const sessionManager = SessionManager.open(match.path, dir, workspacePath);
+    const { session } = await createAgentSession({
+      cwd: workspacePath,
+      sessionManager,
+      agentDir: config.piConfigDir,
+    });
+
+    const now = new Date();
+    const live: LiveSession = {
+      session,
+      sessionId: session.sessionId,
+      projectId,
+      workspacePath,
+      clients: new Set(),
+      createdAt: match.created,
+      lastActivityAt: now,
+      lastAgentStartIndex: undefined,
+      unsubscribe: () => undefined,
+    };
+    live.unsubscribe = makeSubscribeHandler(live);
+    registry.set(live.sessionId, live);
+    return live;
   });
-
-  const now = new Date();
-  const live: LiveSession = {
-    session,
-    sessionId: session.sessionId,
-    projectId,
-    workspacePath,
-    clients: new Set(),
-    createdAt: match.created,
-    lastActivityAt: now,
-    lastAgentStartIndex: undefined,
-    unsubscribe: () => undefined,
-  };
-  live.unsubscribe = makeSubscribeHandler(live);
-  registry.set(live.sessionId, live);
-  return live;
 }
 
 /**
@@ -348,6 +419,20 @@ export function disposeSession(sessionId: string): boolean {
     }
   } finally {
     registry.delete(sessionId);
+    // Tombstone the id so a polling SSE client can't re-resume the
+    // session before deleteColdSession's file unlink runs. The
+    // tombstone clears itself after TOMBSTONE_MS — long enough for
+    // the typical hard-delete path (DELETE handler runs dispose then
+    // immediately unlink), short enough that an explicit user action
+    // a few seconds later can re-open the session normally.
+    const existing = disposeTombstones.get(sessionId);
+    if (existing !== undefined) clearTimeout(existing);
+    disposeTombstones.set(
+      sessionId,
+      setTimeout(() => {
+        disposeTombstones.delete(sessionId);
+      }, TOMBSTONE_MS).unref(),
+    );
   }
   return true;
 }
@@ -514,6 +599,17 @@ export async function resumeSessionById(sessionId: string): Promise<LiveSession>
  *     sessions can't be forked because there's no path to branch from)
  */
 export async function forkSession(sessionId: string, entryId: string): Promise<LiveSession> {
+  // Per-source serialisation: see forkLocks comment. Two near-
+  // simultaneous forks from the same source would otherwise stomp on
+  // each other's `originalSourceFile` snapshot via the SDK's
+  // destructive in-place mutation, leaving the source pointing at the
+  // wrong file in memory.
+  return getForkLock(sessionId)(async () => {
+    return forkSessionLocked(sessionId, entryId);
+  });
+}
+
+async function forkSessionLocked(sessionId: string, entryId: string): Promise<LiveSession> {
   const source = registry.get(sessionId);
   if (source === undefined) throw new SessionNotFoundError(sessionId);
   // CRITICAL: capture the source's session file BEFORE calling

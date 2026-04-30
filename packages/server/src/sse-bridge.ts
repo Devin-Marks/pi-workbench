@@ -142,12 +142,23 @@ export function createSSEClient(reply: FastifyReply, live: LiveSession): SSEClie
 
     const client: SSEClient = { id, send, close };
     registeredClient = client;
-    live.clients.add(client);
 
+    // Order matters: write the snapshot BEFORE adding to live.clients.
+    // The registry's subscribe handler (session-registry.ts:makeSubscribeHandler)
+    // fans events out to live.clients synchronously inside the SDK's emit
+    // call. If we registered first, an SDK event firing in the window
+    // between live.clients.add and the snapshot write would land on the
+    // wire BEFORE the snapshot — and the browser treats `snapshot` as
+    // authoritative (replaces messagesBySession), so a streaming token
+    // delta arriving before the snapshot would be wiped on the
+    // snapshot's arrival. Snapshot first → register second → events
+    // start flowing in the correct order.
+    //
     // Snapshot bypass — uses writeRaw, the same surface a future heartbeat
     // would use. Server-issued synthetic frames flow through writeRaw;
     // SDK-relayed events flow through send (which applies the filter).
     writeRaw(serializeSSE(buildSnapshot(live)));
+    live.clients.add(client);
 
     // Wire close listeners AFTER the snapshot write so an immediate socket
     // close can't double-fire close() before the registry is in a coherent

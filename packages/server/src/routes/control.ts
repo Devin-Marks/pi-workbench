@@ -6,7 +6,7 @@ import {
   getSession,
   SessionNotFoundError,
 } from "../session-registry.js";
-import { readSettings, writeSettings } from "../config-manager.js";
+import { readSettings, withSettingsLock, writeSettings } from "../config-manager.js";
 import { errorSchema, liveSummaryBody, liveSummarySchema } from "./_schemas.js";
 
 function notFound(reply: FastifyReply): FastifyReply {
@@ -375,33 +375,56 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
       // which left SDK-injected defaultThinkingLevel behind and
       // visibly reset users' settings to a stub. The full-snapshot
       // approach undoes every side effect cleanly.
-      let priorSettings: Awaited<ReturnType<typeof readSettings>> | undefined;
-      try {
-        priorSettings = await readSettings();
-      } catch {
-        // settings.json missing / unreadable — leave priorSettings
-        // undefined so we don't try to restore a phantom snapshot.
-      }
-      try {
-        await live.session.setModel(model as Parameters<typeof live.session.setModel>[0]);
-      } catch (err) {
-        return reply.code(400).send({
-          error: "set_model_failed",
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-      // Best-effort restore. We don't fail the route on a settings
-      // write error — the per-session model change already succeeded
-      // and is the user-visible action; a stale default at worst
-      // surfaces on the NEXT new session, which the per-session
-      // override on each chat input then corrects.
-      if (priorSettings !== undefined) {
+      //
+      // The whole snapshot → setModel → restore sequence runs under
+      // withSettingsLock so two concurrent setModel calls (rapid
+      // session switching, or a setModel + a PUT /config/settings
+      // overlapping) can't capture each other's mid-flight value as
+      // "prior" and silently overwrite the user's manually-curated
+      // global default. Without the lock, the failure is permanent
+      // settings.json corruption that survives restarts.
+      type SetModelResult =
+        | { ok: true }
+        | { ok: false; status: number; body: { error: string; message?: string } };
+      const result = await withSettingsLock<SetModelResult>(async () => {
+        let priorSettings: Awaited<ReturnType<typeof readSettings>> | undefined;
         try {
-          await writeSettings(priorSettings);
-        } catch (err) {
-          req.log.warn({ err }, "failed to restore prior settings after per-session setModel");
+          priorSettings = await readSettings();
+        } catch {
+          // settings.json missing / unreadable — leave priorSettings
+          // undefined so we don't try to restore a phantom snapshot.
         }
-      }
+        try {
+          await live.session.setModel(model as Parameters<typeof live.session.setModel>[0]);
+        } catch (err) {
+          return {
+            ok: false,
+            status: 400,
+            body: {
+              error: "set_model_failed",
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+        // Best-effort restore. We don't fail the route on a settings
+        // write error — the per-session model change already succeeded
+        // and is the user-visible action; a stale default at worst
+        // surfaces on the NEXT new session, which the per-session
+        // override on each chat input then corrects. writeSettings
+        // would re-acquire the lock; call atomicWriteJson via
+        // writeSettings is fine because makeLock chains thenables on
+        // the same chain — but to keep the critical section single
+        // we inline the write here under our already-held lock.
+        if (priorSettings !== undefined) {
+          try {
+            await writeSettings(priorSettings);
+          } catch (err) {
+            req.log.warn({ err }, "failed to restore prior settings after per-session setModel");
+          }
+        }
+        return { ok: true };
+      });
+      if (!result.ok) return reply.code(result.status).send(result.body);
       return { provider: req.body.provider, modelId: req.body.modelId };
     },
   );

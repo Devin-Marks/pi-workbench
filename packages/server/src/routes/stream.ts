@@ -1,5 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
-import { resumeSessionById, SessionNotFoundError } from "../session-registry.js";
+import {
+  resumeSessionById,
+  SessionNotFoundError,
+  SessionTombstonedError,
+} from "../session-registry.js";
 import { createSSEClient } from "../sse-bridge.js";
 import { errorSchema } from "./_schemas.js";
 
@@ -43,6 +47,13 @@ export const streamRoutes: FastifyPluginAsync = async (fastify) => {
       } catch (err) {
         if (err instanceof SessionNotFoundError) {
           return reply.code(404).send({ error: "session_not_found" });
+        }
+        if (err instanceof SessionTombstonedError) {
+          // The session was disposed within the tombstone window
+          // (typically: the operator just deleted it from another
+          // tab). 410 Gone tells the SSE client to stop reconnecting
+          // — sse-client.ts treats 410 as terminal.
+          return reply.code(410).send({ error: "session_tombstoned" });
         }
         // Corrupt JSONL, SDK error during createAgentSession, etc. Log the
         // detail server-side; client gets a stable code without the SDK

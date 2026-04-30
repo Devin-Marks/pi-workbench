@@ -273,7 +273,13 @@ export function ChatInput({ sessionId }: Props) {
     const [provider, ...rest] = stored.split(":");
     const modelId = rest.join(":");
     if (provider === undefined || modelId.length === 0) return;
-    void api.setModel(sessionId, provider, modelId).catch((err: unknown) => {
+    // Capture the sessionId at call time so a slow setModel for session
+    // A that resolves AFTER the user has switched to session B doesn't
+    // surface its error toast on B (the wrong session). The .catch
+    // gates setModelError on the captured id still being active.
+    const callSessionId = sessionId;
+    void api.setModel(callSessionId, provider, modelId).catch((err: unknown) => {
+      if (callSessionId !== sessionId) return;
       const code = err instanceof ApiError ? err.code : (err as Error).message;
       setModelError(`set model failed: ${code}`);
     });
