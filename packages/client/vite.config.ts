@@ -9,7 +9,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["icons/icon.svg"],
+      includeAssets: ["icons/icon.svg", "offline.html"],
       manifest: {
         name: "pi web ui",
         short_name: "pi",
@@ -38,6 +38,14 @@ export default defineConfig({
         // never serve a stale session list. The /api/v1/sessions/:id/
         // /stream SSE endpoint is excluded — caching a streaming
         // response would break it.
+        //
+        // navigateFallback serves /index.html for SPA deep links while
+        // online. When the SW can't reach the network at all (server
+        // down, laptop offline, reverse proxy borked), the fetch
+        // handler below catches the resulting failure and serves the
+        // branded /offline.html instead — usable, in-theme, with a
+        // reload button — rather than the browser's chromeless
+        // "no-internet" page or the SPA shell with a red error banner.
         navigateFallback: "/index.html",
         navigateFallbackDenylist: [/^\/api\//],
         globPatterns: ["**/*.{js,css,html,svg,png,ico,webmanifest}"],
@@ -45,6 +53,25 @@ export default defineConfig({
           {
             urlPattern: ({ url }) => url.pathname.startsWith("/api/v1/"),
             handler: "NetworkOnly",
+          },
+          {
+            // Catches navigation requests when both the network AND
+            // the precached /index.html navigateFallback fail. In
+            // practice this fires when the SW itself can't reach the
+            // server (no network, server down) — workbox falls
+            // through to the precache, and if THAT misses too the
+            // request errors out. The handler returns the precached
+            // /offline.html for any navigation request as a final
+            // fallback. NetworkFirst with a short timeout so we don't
+            // make the user wait for a network round-trip when the
+            // network's clearly down.
+            urlPattern: ({ request }) => request.mode === "navigate",
+            handler: "NetworkFirst",
+            options: {
+              cacheName: "pi-navigation",
+              networkTimeoutSeconds: 3,
+              precacheFallback: { fallbackURL: "/offline.html" },
+            },
           },
         ],
       },
