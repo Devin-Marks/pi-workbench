@@ -19,6 +19,19 @@ import type { LiveSession, SSEClient } from "./session-registry.js";
 const BACKPRESSURE_LIMIT_BYTES = 256 * 1024;
 
 /**
+ * Cadence at which we send an SSE comment line (`: heartbeat\n\n`) on
+ * every open stream. EventSource ignores comment lines silently, so the
+ * browser sees nothing — but the bytes reset any idle-connection timer
+ * sitting between us and the client. OpenShift's HAProxy router defaults
+ * `timeout server` to 30s for HTTP routes, and any L7 proxy / load
+ * balancer enforces a similar window; with no agent activity between
+ * turns, an idle SSE stream gets killed by the middlebox and the
+ * browser shows "reconnecting." 20s gives us comfortable margin under
+ * the typical 30s default.
+ */
+const HEARTBEAT_INTERVAL_MS = 20_000;
+
+/**
  * One-shot snapshot event sent immediately on SSE connect so the browser can
  * hydrate full session state without a separate HTTP round-trip.
  */
@@ -128,9 +141,15 @@ export function createSSEClient(reply: FastifyReply, live: LiveSession): SSEClie
      * later phases). Filter-bypass cannot leak SDK events because callers
      * supply already-shaped objects.
      */
+    let heartbeatTimer: NodeJS.Timeout | undefined;
+
     const close = (): void => {
       if (closed) return;
       closed = true;
+      if (heartbeatTimer !== undefined) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = undefined;
+      }
       if (registeredClient !== undefined) live.clients.delete(registeredClient);
       try {
         raw.end();
@@ -196,6 +215,18 @@ export function createSSEClient(reply: FastifyReply, live: LiveSession): SSEClie
     // ordering is cheap insurance.
     raw.on("close", close);
     raw.on("error", close);
+
+    // Idle-timer reset for L7 proxies (OpenShift HAProxy router, nginx,
+    // ALB, etc.). Comment line, no `data:` field — EventSource skips it.
+    // Uses writeRaw so the same backpressure guard applies; if the socket
+    // is wedged the heartbeat will trip the limit and call close(), which
+    // tears the timer down.
+    heartbeatTimer = setInterval(() => {
+      writeRaw(": heartbeat\n\n");
+    }, HEARTBEAT_INTERVAL_MS);
+    // Don't keep the Node event loop alive just for heartbeats — when
+    // the socket closes the close handler clears the timer anyway.
+    heartbeatTimer.unref();
 
     return client;
   } catch (err) {

@@ -642,6 +642,15 @@ function applyEvent(
     if (raf !== undefined) cancelAnimationFrame(raf);
     pendingRaf.delete(sessionId);
     pendingDeltas.delete(sessionId);
+    // Read the server-enriched errorMessage if present (the SDK's
+    // native agent_end carries no error field; session-registry merges
+    // `live.session.errorMessage` in on fan-out). We surface it as an
+    // amber banner so context-overflow / 401 / provider 5xx errors
+    // are visible instead of disappearing into a silent empty
+    // assistant message.
+    const agentErr = (event as { errorMessage?: unknown }).errorMessage;
+    const errorBanner =
+      typeof agentErr === "string" && agentErr.length > 0 ? `Agent error: ${agentErr}` : undefined;
     // Refetch authoritative messages, then clear streaming state. Order
     // matters — the messages array must be in place before the renderer
     // drops the streamingText bubble or we'd see a momentary gap.
@@ -654,11 +663,19 @@ function applyEvent(
           // any blob URLs the optimistic image attachments held.
           const stale = s.messagesBySession[sessionId];
           if (stale !== undefined) revokeOptimisticBlobUrls(stale);
+          // Banner update: only OVERWRITE if agent_end carries its own
+          // errorMessage. An empty errorBanner here would wipe an
+          // error banner set moments earlier by compaction_end or
+          // message_end — those carry the more useful detail for
+          // context-overflow / provider-rejection failures.
+          const existingBanner = s.bannerBySession[sessionId];
+          const nextBanner = errorBanner ?? existingBanner;
           return {
             messagesBySession: { ...s.messagesBySession, [sessionId]: messages },
             streamingBySession: { ...s.streamingBySession, [sessionId]: false },
             streamingTextBySession: { ...s.streamingTextBySession, [sessionId]: "" },
             activeToolBySession: { ...s.activeToolBySession, [sessionId]: undefined },
+            bannerBySession: { ...s.bannerBySession, [sessionId]: nextBanner },
             agentEndCountBySession: {
               ...s.agentEndCountBySession,
               [sessionId]: (s.agentEndCountBySession[sessionId] ?? 0) + 1,
@@ -681,7 +698,10 @@ function applyEvent(
           activeToolBySession: { ...s.activeToolBySession, [sessionId]: undefined },
           bannerBySession: {
             ...s.bannerBySession,
-            [sessionId]: "Couldn't refresh messages after the agent finished — reload to sync",
+            // If the agent reported an error, that's the more useful
+            // message to show; otherwise surface the refetch failure.
+            [sessionId]:
+              errorBanner ?? "Couldn't refresh messages after the agent finished — reload to sync",
           },
           agentEndCountBySession: {
             ...s.agentEndCountBySession,
@@ -805,8 +825,21 @@ function applyEvent(
     return;
   }
   if (event.type === "compaction_end") {
+    // Pi triggers auto-compaction on context overflow. If compaction
+    // can't recover (e.g. even after summarisation the prompt still
+    // exceeds the model's window), the SDK emits compaction_end with
+    // an `errorMessage` field. Without surfacing it, the user briefly
+    // sees "Compacting context…" then a clear banner — and an empty
+    // assistant message — with no idea what went wrong. Show the
+    // error if present; otherwise clear the "Compacting…" banner as
+    // before.
+    const compactErr = (event as { errorMessage?: unknown }).errorMessage;
+    const errorBanner =
+      typeof compactErr === "string" && compactErr.length > 0
+        ? `Agent error: ${compactErr}`
+        : undefined;
     set((s) => ({
-      bannerBySession: { ...s.bannerBySession, [sessionId]: undefined },
+      bannerBySession: { ...s.bannerBySession, [sessionId]: errorBanner },
     }));
     return;
   }
@@ -822,9 +855,37 @@ function applyEvent(
     return;
   }
   if (event.type === "auto_retry_end") {
+    // SDK retried until the cap was hit. `success: false` means we
+    // exhausted retries — keep the failure visible instead of
+    // clearing the "Retrying…" banner. `finalError` carries the
+    // last provider message.
+    const succeeded = (event as { success?: unknown }).success !== false;
+    const finalErr = (event as { finalError?: unknown }).finalError;
+    const errorBanner =
+      !succeeded && typeof finalErr === "string" && finalErr.length > 0
+        ? `Agent error: ${finalErr}`
+        : undefined;
     set((s) => ({
-      bannerBySession: { ...s.bannerBySession, [sessionId]: undefined },
+      bannerBySession: { ...s.bannerBySession, [sessionId]: errorBanner },
     }));
+    return;
+  }
+  if (event.type === "message_end") {
+    // openai-completions and a few other provider adapters surface
+    // upstream errors as message_end with stopReason="error" rather
+    // than throwing — so it's the only signal we get for some
+    // failure modes (notably context-window overflow that pi's
+    // auto-compaction couldn't recover from). Surface the embedded
+    // errorMessage as a banner; otherwise let the event flow through.
+    const msg = (event as { message?: { stopReason?: unknown; errorMessage?: unknown } }).message;
+    if (msg?.stopReason === "error") {
+      const m = typeof msg.errorMessage === "string" ? msg.errorMessage : "";
+      if (m.length > 0) {
+        set((s) => ({
+          bannerBySession: { ...s.bannerBySession, [sessionId]: `Agent error: ${m}` },
+        }));
+      }
+    }
     return;
   }
 
