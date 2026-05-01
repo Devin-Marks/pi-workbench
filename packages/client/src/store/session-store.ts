@@ -694,6 +694,15 @@ function applyEvent(
     return;
   }
 
+  if (event.type === "user_bash_result") {
+    // Cross-tab: another tab on the same session ran a `!` exec. Refetch
+    // so the BashExecutionMessage shows up in this tab's transcript too.
+    // The acting tab refetches off the HTTP response directly and
+    // doesn't wait for this round-trip.
+    scheduleMessagesRefetch(set, sessionId);
+    return;
+  }
+
   if (event.type === "message_update") {
     // Accumulate text deltas into the streaming bubble. The pi SDK's
     // message_update wraps an `assistantMessageEvent` with `type: "text_delta"`

@@ -413,8 +413,15 @@ function Message({ message }: { message: AgentMessageLike }) {
     return <ToolResult message={message} />;
   }
 
-  // Bash execution messages (custom type).
-  if (message.type === "bashExecution" || message.customType === "bashExecution") {
+  // Bash execution messages — surface via either the SDK's native
+  // `role: "bashExecution"` BashExecutionMessage (the `!` chat input
+  // path appends these via session.sessionManager.appendMessage) or
+  // the custom-message-entry shape some flows produce.
+  if (
+    message.role === "bashExecution" ||
+    message.type === "bashExecution" ||
+    message.customType === "bashExecution"
+  ) {
     return <BashExecution message={message} />;
   }
 
@@ -557,11 +564,47 @@ function ToolResult({ message }: { message: AgentMessageLike }) {
 function BashExecution({ message }: { message: AgentMessageLike }) {
   const command = String(message.command ?? "");
   const output = String(message.output ?? "");
+  const exitCode = typeof message.exitCode === "number" ? message.exitCode : undefined;
+  const truncated = message.truncated === true;
+  const cancelled = message.cancelled === true;
+  const excluded = message.excludeFromContext === true;
   return (
     <div className="rounded border border-neutral-800 bg-neutral-950 text-xs">
-      <div className="px-3 py-2 text-neutral-400">
-        <span className="text-neutral-500">$ </span>
-        <span className="font-mono">{command}</span>
+      <div className="flex items-center justify-between gap-2 px-3 py-2 text-neutral-400">
+        <div className="min-w-0 flex-1 truncate">
+          <span className="text-neutral-500">$ </span>
+          <span className="font-mono text-neutral-200">{command}</span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {excluded && (
+            <span
+              className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400"
+              title="!! prefix — kept out of LLM context on the next turn"
+            >
+              local-only
+            </span>
+          )}
+          {cancelled && (
+            <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-amber-300">
+              timed out
+            </span>
+          )}
+          {truncated && !cancelled && (
+            <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-amber-300">
+              truncated
+            </span>
+          )}
+          {exitCode !== undefined && (
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] font-mono ${
+                exitCode === 0 ? "bg-emerald-900/30 text-emerald-300" : "bg-red-900/30 text-red-300"
+              }`}
+              title={exitCode === 0 ? "exit 0" : `exit ${String(exitCode)}`}
+            >
+              exit {exitCode}
+            </span>
+          )}
+        </div>
       </div>
       {output.length > 0 && (
         <pre className="max-h-64 overflow-auto px-3 pb-2 font-mono text-[11px] text-neutral-300">

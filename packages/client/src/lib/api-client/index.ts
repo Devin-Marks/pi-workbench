@@ -1012,6 +1012,40 @@ export const api = {
   },
   abort: (id: string) =>
     request(`/api/v1/sessions/${encodeURIComponent(id)}/abort`, vVoid, { method: "POST" }),
+  /**
+   * Run a one-shot bash command in the session's project cwd. Mirrors
+   * pi-tui's `!` / `!!` semantics — the chat input dispatches here on
+   * either prefix. With `excludeFromContext: true` (the `!!` form) the
+   * resulting BashExecutionMessage is persisted to the session JSONL
+   * but kept out of the next agent turn's LLM input.
+   */
+  exec: (id: string, command: string, opts?: { excludeFromContext?: boolean }) =>
+    request(
+      `/api/v1/sessions/${encodeURIComponent(id)}/exec`,
+      (v, s) => {
+        if (
+          !isObject(v) ||
+          !("exitCode" in v) ||
+          typeof v.output !== "string" ||
+          typeof v.durationMs !== "number" ||
+          typeof v.truncated !== "boolean" ||
+          typeof v.cancelled !== "boolean"
+        ) {
+          fail(s, "expected { exitCode, output, durationMs, truncated, cancelled }");
+        }
+        return {
+          exitCode: typeof v.exitCode === "number" ? v.exitCode : null,
+          output: v.output,
+          durationMs: v.durationMs,
+          truncated: v.truncated,
+          cancelled: v.cancelled,
+        };
+      },
+      {
+        method: "POST",
+        body: { command, excludeFromContext: opts?.excludeFromContext === true },
+      },
+    ),
   setModel: (id: string, provider: string, modelId: string) =>
     request(
       `/api/v1/sessions/${encodeURIComponent(id)}/model`,

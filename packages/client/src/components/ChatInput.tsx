@@ -134,6 +134,7 @@ export function ChatInput({ sessionId }: Props) {
   const isAutoRetrying = banner !== undefined && banner.startsWith("Retrying (");
   const sendPrompt = useSessionStore((s) => s.sendPrompt);
   const sendSteer = useSessionStore((s) => s.sendSteer);
+  const reloadMessages = useSessionStore((s) => s.reloadMessages);
   const abortSession = useSessionStore((s) => s.abortSession);
   const error = useSessionStore((s) => s.error);
 
@@ -330,6 +331,34 @@ export function ChatInput({ sessionId }: Props) {
     if ((value.length === 0 && attachments.length === 0) || submitting) return;
     setSubmitting(true);
     try {
+      // Bash exec dispatch — `!cmd` includes the result in the next
+      // turn's LLM context, `!!cmd` keeps it local-only. Both render
+      // as a BashExecutionMessage in the transcript via the
+      // server-side appendMessage path. Mirrors pi-tui semantics. We
+      // refuse the dispatch while a session is streaming; running a
+      // shell command mid-turn would race the agent's own bash tool
+      // for stdin/cwd state and surprise the user.
+      if (!isStreaming && /^!!?[^!]/.test(value)) {
+        const excludeFromContext = value.startsWith("!!");
+        const command = value.slice(excludeFromContext ? 2 : 1).trim();
+        if (command.length === 0) {
+          setAttachmentError("Empty bash command. Type something after the `!`.");
+          return;
+        }
+        if (attachments.length > 0) {
+          clearAttachments();
+          setAttachmentError("Attachments aren't sent with `!` exec. Cleared.");
+        }
+        await api.exec(sessionId, command, { excludeFromContext });
+        // The acting tab refetches via session-store's user_bash_result
+        // handler too, but we trigger one directly so it lands without
+        // waiting for the SSE round-trip from our own message.
+        reloadMessages(sessionId);
+        setText("");
+        setHistoryIdx(undefined);
+        historyDraftRef.current = "";
+        return;
+      }
       if (isStreaming) {
         // Steer doesn't accept attachments today — the SDK's steer()
         // takes (text, images?) which we COULD wire, but cleaner to
@@ -351,8 +380,11 @@ export function ChatInput({ sessionId }: Props) {
       // should land on it from a fresh empty draft.
       setHistoryIdx(undefined);
       historyDraftRef.current = "";
-    } catch {
-      // store.error renders below
+    } catch (err) {
+      // Surface bash-exec errors inline (api.exec throws ApiError on
+      // 4xx/5xx). Other paths still surface via store.error below.
+      const code = err instanceof ApiError ? err.code : (err as Error).message;
+      setAttachmentError(`Command failed: ${code}`);
     } finally {
       setSubmitting(false);
     }
@@ -491,7 +523,7 @@ export function ChatInput({ sessionId }: Props) {
                 ? "Auto-retry in progress — your message will be queued and sent after the retry completes…"
                 : isStreaming
                   ? "Steer the agent (Enter to send, Shift+Enter for newline)…"
-                  : "Ask pi (Enter to send, Shift+Enter for newline)…"
+                  : "Ask pi (Enter to send, Shift+Enter for newline) — `!cmd` runs bash, `!!cmd` runs without LLM context…"
             }
             title={
               isAutoRetrying

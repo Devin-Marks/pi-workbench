@@ -375,3 +375,12 @@ function filterEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   }
   return out;
 }
+
+/**
+ * Re-export so non-PTY callers (the user-bash `!` exec route) get the
+ * same secret-scrubbing posture without having to re-state the secret
+ * list. The PTY and the one-shot user-bash share an identical threat
+ * model: an authenticated browser user must not be able to `echo
+ * $JWT_SECRET` from a shell the workbench spawned on their behalf.
+ */
+export const scrubbedEnv = (): Record<string, string> => filterEnv(process.env);
