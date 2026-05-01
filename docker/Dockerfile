@@ -3,20 +3,30 @@
 # Multi-stage Dockerfile for pi-workbench.
 #
 #   builder  → install deps, compile server TS, build Vite client
-#   runtime  → minimal node:22-alpine with the compiled output and
-#              hoisted node_modules; runs as a non-root user.
+#   runtime  → minimal node:22-bookworm-slim with the compiled output
+#              and hoisted node_modules; runs as a non-root user.
 #
-# node-pty has a native binding compiled at install time; the build
-# stage installs python3 + make + g++ so the .node file lands. Both
-# stages are alpine (musl), so the compiled artifact is portable across
-# them.
+# Why bookworm-slim and not alpine: the Node native-module ecosystem
+# (node-pty, bcrypt, sharp, better-sqlite3, …) ships prebuilt binaries
+# against glibc. On musl/alpine, prebuild-install can't find a matching
+# binary and falls back to a source build, which both slows the image
+# build and breaks any package without source-build support. The image
+# is ~80 MB larger than alpine; in exchange we get faster builds, fewer
+# native-module footguns, and a friendlier interactive shell for the
+# integrated terminal (bash + readline + a real coreutils).
 
 # ---------- builder ----------
-FROM node:22-alpine AS builder
+FROM node:22-bookworm-slim AS builder
 
 # Native deps for node-pty (Phase 11 will use it; the dep is already in
-# server/package.json, so install needs the toolchain regardless).
-RUN apk add --no-cache python3 make g++
+# server/package.json, so install needs the toolchain regardless). On
+# bookworm-slim, node-pty's prebuilds usually cover the linux-x64 and
+# linux-arm64 paths — but we keep the toolchain so a source build still
+# works on platforms without a prebuild, and so any other native module
+# pulled in transitively still installs cleanly.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -35,7 +45,7 @@ COPY . .
 RUN npm run build
 
 # ---------- runtime ----------
-FROM node:22-alpine AS runtime
+FROM node:22-bookworm-slim AS runtime
 
 # `tini` for proper PID-1 signal handling (Ctrl-C → SIGTERM → graceful
 # shutdown of pi-workbench's onClose hook). Without it, dropped SIGTERMs
@@ -43,30 +53,41 @@ FROM node:22-alpine AS runtime
 #
 # PUID/PGID build args let the user match the container's `pi` user to
 # their host UID/GID. Default 1000 is the common Linux interactive UID.
-# Without this, alpine's `adduser -S` allocates a system-range UID
-# (typically 100) that won't match the host owner of the bind-mounted
-# /workspace + ~/.pi-workbench dirs, and the container can't write to
-# them. Override at build time:
+# Without this, the system-allocated UID won't match the host owner of
+# the bind-mounted /workspace + ~/.pi-workbench dirs, and the container
+# can't write to them. Override at build time:
 #   docker compose build --build-arg PUID=$(id -u) --build-arg PGID=$(id -g)
 ARG PUID=1000
 ARG PGID=1000
 
-# `node:22-alpine` ships with a pre-baked `node` user/group at UID/GID
-# 1000 — the same default we want for `pi`. Drop it before creating
-# `pi`, otherwise `addgroup -g 1000` fails with "gid '1000' in use".
-# `|| true` keeps the build green on any future base image that drops
-# the node user.
+# `node:22-bookworm-slim` ships a pre-baked `node` user/group at
+# UID/GID 1000 — the same default we want for `pi`. Drop it before
+# creating `pi`, otherwise `groupadd -g 1000` fails with "GID '1000'
+# already exists." `|| true` keeps the build green on any future base
+# image that drops the node user.
 #
-# Runtime tools the agent needs:
+# Runtime tools the agent + interactive terminal need:
+#   - tini: PID-1 signal handling (see above)
 #   - git: status / diff / commit / push / etc. — the GitPanel routes
 #     and the agent's `bash` tool both expect git on PATH.
 #   - ripgrep: pi's `grep` tool delegates to ripgrep when present.
 #     Without it, code search inside the agent silently degrades.
-RUN apk add --no-cache tini git ripgrep && \
-    (deluser node 2>/dev/null || true) && \
-    (delgroup node 2>/dev/null || true) && \
-    addgroup -g $PGID pi && \
-    adduser -D -u $PUID -G pi pi
+#   - bash: replaces dash as the integrated terminal's interactive
+#     shell. node-pty defaults to /bin/sh; we set SHELL=/bin/bash
+#     below so xterm sessions land in bash with readline + history +
+#     the prompt expansions users expect.
+#   - curl, ca-certificates, less, procps: minimum interactive-terminal
+#     hygiene. curl for fetching, ca-certificates so HTTPS works, less
+#     so `git log` and similar pagers don't bomb, procps so `ps`/`top`
+#     are present for users debugging long-running tool processes.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      tini git ripgrep bash curl ca-certificates less procps \
+ && rm -rf /var/lib/apt/lists/* \
+ && (userdel node 2>/dev/null || true) \
+ && (groupdel node 2>/dev/null || true) \
+ && groupadd -g $PGID pi \
+ && useradd -m -u $PUID -g $PGID -s /bin/bash pi
 
 WORKDIR /app
 
@@ -85,19 +106,24 @@ COPY --from=builder --chown=pi:pi /app/packages/client/dist ./packages/client/di
 # Workspace + pi config + workbench data dirs are mounted at runtime;
 # create them so non-root `pi` can read them on first start even if the
 # host bind is currently empty.
-RUN mkdir -p /workspace /home/pi/.pi/agent /home/pi/.pi-workbench && \
-    chown -R pi:pi /workspace /home/pi/.pi /home/pi/.pi-workbench
+RUN mkdir -p /workspace /home/pi/.pi/agent /home/pi/.pi-workbench \
+ && chown -R pi:pi /workspace /home/pi/.pi /home/pi/.pi-workbench
 
 USER pi
 
+# SHELL=/bin/bash so node-pty spawns bash for the integrated terminal
+# (pty-manager.ts uses `process.env.SHELL || '/bin/sh'`). TERM hint
+# helps line-editing programs pick a sane terminfo entry inside xterm.
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000 \
     WORKSPACE_PATH=/workspace \
     PI_CONFIG_DIR=/home/pi/.pi/agent \
-    WORKBENCH_DATA_DIR=/home/pi/.pi-workbench
+    WORKBENCH_DATA_DIR=/home/pi/.pi-workbench \
+    SHELL=/bin/bash \
+    TERM=xterm-256color
 
 EXPOSE 3000
 
-ENTRYPOINT ["/sbin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "packages/server/dist/index.js"]

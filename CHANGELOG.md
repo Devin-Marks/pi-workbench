@@ -54,13 +54,17 @@ skill overrides, and a versioned API documented at `/api/docs`.
   count badge, and file-level staging.
 - **Session tree + context inspector.** Indented depth-first session tree
   with fork/leaf badges; per-message inspector for token-level debugging.
-- **Chat input affordances.** `!` / `!!` bash prefixes (pi-tui parity),
-  `@<path>` file references with autocomplete, `/` slash-command palette.
+- **Chat input affordances.** `!` / `!!` bash prefixes (pi-tui parity) with a
+  colored border + corner pill (emerald = output goes to LLM context, amber =
+  local-only) so the mode is unmissable while typing; `@<path>` file
+  references with autocomplete; `/` slash-command palette.
 - **Cross-tab sync.** Session create/delete/rename mirrored across browser
   tabs via the `BroadcastChannel` API; SSE 404 path retained as a safety net
   for out-of-band deletions.
-- **Deployment.** Multi-stage Docker image (`node:22-alpine`) with PUID/PGID
-  bind-mount support; Compose and Kubernetes manifests; healthcheck via
+- **Deployment.** Multi-stage Docker image (`node:22-bookworm-slim` — glibc
+  base for friction-free native-module installs and a richer interactive
+  shell) with PUID/PGID bind-mount support; Compose and Kubernetes
+  manifests; healthcheck via
   `/api/v1/health`; pino structured logging with configurable level.
 - **PWA.** Manifest, raster icons, branded offline page, service worker
   precaching the application shell.
@@ -79,6 +83,19 @@ skill overrides, and a versioned API documented at `/api/docs`.
 - Container hardening in the shipped Compose: `no-new-privileges`,
   `cap_drop: ALL`, pids/mem/cpu limits, localhost-only port bind by default.
 - Login rate limiting via `@fastify/rate-limit`.
+
+### Reliability
+
+- **SSE keepalives.** The SSE bridge sends a comment-line heartbeat every
+  20 s on every open stream so any L7 proxy with the typical 30 s idle
+  timeout (notably OpenShift's HAProxy router) doesn't drop the connection
+  during quiet stretches between agent turns.
+- **MCP route shape fixes.** Master toggle (`PUT /mcp/settings`) returns the
+  full `{ enabled, connected, total }` shape so the header badge updates in
+  one round trip; the upsert route's response schema explicitly declares
+  `{ ok }` so Fastify's response serializer doesn't strip it; both
+  unblocked the Settings → MCP page from `invalid_response_body` errors on
+  every action.
 
 [Unreleased]: https://github.com/Devin-Marks/pi-workbench/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/Devin-Marks/pi-workbench/releases/tag/v1.0.0

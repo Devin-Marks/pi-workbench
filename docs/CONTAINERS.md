@@ -29,10 +29,14 @@ The Dockerfile (`docker/Dockerfile`) is multi-stage:
 
 | Stage | Base | Purpose |
 |---|---|---|
-| `builder` | `node:22-alpine` | Installs all deps (incl. devDeps), compiles native bindings (`node-pty`) against the runtime Node, runs `npm run build` for both packages |
-| `runtime` | `node:22-alpine` | Copies only the production deps + built artifacts. Adds `git` + `ripgrep` for the agent's tools. Switches to a non-root `pi` user. |
+| `builder` | `node:22-bookworm-slim` | Installs all deps (incl. devDeps), compiles native bindings (`node-pty`) against the runtime Node, runs `npm run build` for both packages |
+| `runtime` | `node:22-bookworm-slim` | Copies only the production deps + built artifacts. Adds `git`, `ripgrep`, `bash`, `curl`, `less`, `procps` for the agent's tools and the integrated terminal. Switches to a non-root `pi` user; sets `SHELL=/bin/bash` so xterm sessions land in bash rather than dash. |
 
-Final image is ~250 MB (Alpine + Node runtime + production deps). No build
+Final image is ~330 MB (Debian slim + Node runtime + production deps + interactive
+shell tools). The base was switched from `node:22-alpine` to `node:22-bookworm-slim`
+because the Node native-module ecosystem (node-pty, bcrypt, sharp, …) ships
+prebuilt binaries against glibc; on musl/alpine, those packages fall back to
+source builds, which is both slower and a frequent install-failure mode. No build
 toolchain or devDeps in the runtime image.
 
 ### What's installed at runtime
