@@ -8,13 +8,24 @@ import { create } from "zustand";
  * activates, keeps them in a module-level Map keyed by tab id, and
  * tears them down on close.
  *
- * The tab list IS persisted to localStorage. Combined with the
- * server's reattach-by-tabId path (see pty-manager.ts), a page
- * reload reattaches each tab to its existing PTY and replays a
- * rolling output buffer — the user is back in the SAME shell, not
- * a fresh one. After IDLE_REAP_MS (10 min) of no attached socket
- * the server kills the PTY, at which point the next reconnect
- * silently spawns a fresh shell under the same tab label.
+ * The tab list IS persisted to **sessionStorage** (per browser tab).
+ * Combined with the server's reattach-by-tabId path (see
+ * pty-manager.ts), a page reload reattaches each tab to its existing
+ * PTY and replays a rolling output buffer — the user is back in the
+ * SAME shell, not a fresh one. After IDLE_REAP_MS (10 min) of no
+ * attached socket the server kills the PTY, at which point the next
+ * reconnect silently spawns a fresh shell under the same tab label.
+ *
+ * sessionStorage (NOT localStorage) is intentional. The server's
+ * pty-manager allows ONE active socket per tabId at a time — a
+ * second connect with the same tabId boots the first. Sharing the
+ * tab list across browser tabs (the localStorage behavior we used
+ * to have) meant tabs A and B reused the same tabIds, fought over
+ * the same PTY, and flap-disconnected each other in a loop just by
+ * being open. sessionStorage scopes the list per browser tab:
+ * survives in-tab reload, doesn't bleed into a sibling tab. Closing
+ * the browser tab loses the list — fine, the PTYs themselves get
+ * idle-reaped on the server within 10 min.
  */
 export interface TerminalTab {
   id: string;
@@ -48,7 +59,20 @@ interface PersistedShape {
 
 function readPersisted(): PersistedShape {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    // Migrate any leftover localStorage entry from versions of the
+    // app that used it. One-shot copy + delete on first read so a
+    // user with terminals open at update time doesn't lose them on
+    // the first reload after the upgrade. Only happens once per
+    // browser tab (after copy, sessionStorage owns the value).
+    const sessionRaw = sessionStorage.getItem(STORAGE_KEY);
+    if (sessionRaw === null) {
+      const legacy = localStorage.getItem(STORAGE_KEY);
+      if (legacy !== null) {
+        sessionStorage.setItem(STORAGE_KEY, legacy);
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    }
+    const raw = sessionStorage.getItem(STORAGE_KEY);
     if (raw === null) return { tabs: [], activeTabId: undefined };
     const parsed = JSON.parse(raw) as unknown;
     if (
@@ -87,7 +111,7 @@ function readPersisted(): PersistedShape {
 
 function writePersisted(state: PersistedShape): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch {
     // ignore — choice still applies for this tab session
   }

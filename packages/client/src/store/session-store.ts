@@ -128,6 +128,54 @@ function revokeOptimisticBlobUrls(messages: readonly AgentMessageLike[]): void {
   }
 }
 
+/**
+ * Build a partial-state update that removes every per-session entry
+ * a session keeps: messages, streaming flags, banner, streaming text,
+ * active-tool, agent-end count, queued, and the byProject list entry.
+ * Does NOT touch HTTP — that's the caller's job (`disposeSession`
+ * issues DELETE; the SSE-404 path doesn't need to).
+ *
+ * Also clears `activeSessionId` if it pointed at the removed session.
+ * Caller is responsible for clearing the localStorage `active-session-id`
+ * if appropriate (see disposeSession).
+ *
+ * Revokes blob URLs in the soon-to-be-discarded messages so optimistic
+ * image attachments that never got refetched don't leak.
+ */
+function removeSessionFromState(current: SessionState, sessionId: string): Partial<SessionState> {
+  const stale = current.messagesBySession[sessionId];
+  if (stale !== undefined) revokeOptimisticBlobUrls(stale);
+  const nextMessages = { ...current.messagesBySession };
+  delete nextMessages[sessionId];
+  const nextStreaming = { ...current.streamingBySession };
+  delete nextStreaming[sessionId];
+  const nextBanner = { ...current.bannerBySession };
+  delete nextBanner[sessionId];
+  const nextStreamingText = { ...current.streamingTextBySession };
+  delete nextStreamingText[sessionId];
+  const nextActiveTool = { ...current.activeToolBySession };
+  delete nextActiveTool[sessionId];
+  const nextAgentEndCount = { ...current.agentEndCountBySession };
+  delete nextAgentEndCount[sessionId];
+  const nextQueued = { ...current.queuedBySession };
+  delete nextQueued[sessionId];
+  const byProject: Record<string, UnifiedSession[]> = {};
+  for (const [pid, list] of Object.entries(current.byProject)) {
+    byProject[pid] = list.filter((u) => u.sessionId !== sessionId);
+  }
+  return {
+    messagesBySession: nextMessages,
+    streamingBySession: nextStreaming,
+    bannerBySession: nextBanner,
+    streamingTextBySession: nextStreamingText,
+    activeToolBySession: nextActiveTool,
+    agentEndCountBySession: nextAgentEndCount,
+    queuedBySession: nextQueued,
+    byProject,
+    activeSessionId: current.activeSessionId === sessionId ? undefined : current.activeSessionId,
+  };
+}
+
 interface SessionState {
   /** Sessions per project, deduped + recency-sorted (matches GET /sessions). */
   byProject: Record<string, UnifiedSession[]>;
@@ -360,7 +408,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       },
     }).catch((err: unknown) => {
       // streamSSE returns AbortError as a normal resolution; only real
-      // errors reach here. Surface as a banner; the user can re-select.
+      // errors reach here.
+      // Cross-tab session deletion: another tab (or a script) called
+      // DELETE /sessions/:id, the server disposed, our SSE attempt
+      // got a 404 on reconnect. Drop the session from local state so
+      // the sidebar list / chat view clear immediately, matching the
+      // experience of a same-tab delete. Without this the deleted
+      // session lingered in the list with a stale "stream error"
+      // banner until the user manually refreshed.
+      if (err instanceof ApiError && err.status === 404) {
+        set((s) => removeSessionFromState(s, sessionId));
+        if (get().activeSessionId === undefined) {
+          localStorage.removeItem(ACTIVE_SESSION_KEY);
+        }
+        onTerminate();
+        return;
+      }
       const code = err instanceof ApiError ? err.code : (err as Error).message;
       set((s) => ({
         bannerBySession: { ...s.bannerBySession, [sessionId]: `stream error: ${code}` },
@@ -484,43 +547,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       get().closeStream(sessionId);
       await api.disposeSession(sessionId, opts);
-      set((s) => {
-        // Revoke any blob URLs the disposed session was holding —
-        // optimistic image attachments that never made it through a
-        // canonical refetch (e.g. dispose mid-prompt-flight).
-        const stale = s.messagesBySession[sessionId];
-        if (stale !== undefined) revokeOptimisticBlobUrls(stale);
-        const nextMessages = { ...s.messagesBySession };
-        delete nextMessages[sessionId];
-        const nextStreaming = { ...s.streamingBySession };
-        delete nextStreaming[sessionId];
-        const nextBanner = { ...s.bannerBySession };
-        delete nextBanner[sessionId];
-        const nextStreamingText = { ...s.streamingTextBySession };
-        delete nextStreamingText[sessionId];
-        const nextActiveTool = { ...s.activeToolBySession };
-        delete nextActiveTool[sessionId];
-        const nextAgentEndCount = { ...s.agentEndCountBySession };
-        delete nextAgentEndCount[sessionId];
-        const nextQueued = { ...s.queuedBySession };
-        delete nextQueued[sessionId];
-        // Drop the session from any project's list it may live in.
-        const byProject: Record<string, UnifiedSession[]> = {};
-        for (const [pid, list] of Object.entries(s.byProject)) {
-          byProject[pid] = list.filter((u) => u.sessionId !== sessionId);
-        }
-        return {
-          messagesBySession: nextMessages,
-          streamingBySession: nextStreaming,
-          bannerBySession: nextBanner,
-          streamingTextBySession: nextStreamingText,
-          activeToolBySession: nextActiveTool,
-          agentEndCountBySession: nextAgentEndCount,
-          queuedBySession: nextQueued,
-          byProject,
-          activeSessionId: s.activeSessionId === sessionId ? undefined : s.activeSessionId,
-        };
-      });
+      set((s) => removeSessionFromState(s, sessionId));
       if (get().activeSessionId === undefined) {
         localStorage.removeItem(ACTIVE_SESSION_KEY);
       }
