@@ -178,8 +178,35 @@ services:
     assert("GET /icons/icon.svg returns 200", iconRes.status === 200);
 
     // ---- Swagger UI ----
+    // Status 200 only proves the route accepted the request; assert the
+    // body actually carries Swagger UI's static-asset markers so a future
+    // misconfiguration that returns the SPA shell at /api/docs (the SPA
+    // fallback would happily 200-with-HTML on any unmatched GET) gets
+    // caught. Marker is the script tag swagger-ui-dist injects unchanged
+    // across versions.
     const docsRes = await fetch(`${base}/api/docs`, { redirect: "follow" });
     assert("GET /api/docs returns 200 (Swagger UI)", docsRes.status === 200);
+    const docsBody = await docsRes.text();
+    assert(
+      "GET /api/docs body contains Swagger UI marker",
+      docsBody.includes("swagger-initializer.js") || docsBody.includes("swagger-ui-init.js"),
+      `body did not contain a Swagger UI marker; first 200 chars: ${docsBody.slice(0, 200)}`,
+    );
+    // Raw OpenAPI JSON spec — sibling of the UI; if the UI loads but the
+    // JSON spec doesn't, programmatic clients are silently broken.
+    const docsJsonRes = await fetch(`${base}/api/docs/json`);
+    assert("GET /api/docs/json returns 200", docsJsonRes.status === 200);
+    const spec = (await docsJsonRes.json().catch(() => undefined)) as
+      | { openapi?: string; paths?: Record<string, unknown> }
+      | undefined;
+    assert(
+      "OpenAPI spec has openapi version field",
+      spec !== undefined && typeof spec.openapi === "string" && spec.openapi.length > 0,
+    );
+    assert(
+      "OpenAPI spec lists /sessions",
+      spec !== undefined && Object.keys(spec.paths ?? {}).some((p) => p.includes("/sessions")),
+    );
 
     // ---- Static + SPA fallback ----
     const rootRes = await fetch(`${base}/`);
