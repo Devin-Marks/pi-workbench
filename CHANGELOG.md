@@ -12,6 +12,14 @@ the README for the support window policy.
 
 ## [Unreleased]
 
+### Added
+
+- **Terminal venv auto-activation.** When a new terminal tab is opened
+  in a project containing a Python virtualenv at `.venv/`, `venv/`, or
+  `env/`, the workbench automatically runs `source <dir>/bin/activate`
+  in the freshly-spawned shell. Reattach to an existing PTY does not
+  re-source so manually-switched venvs are preserved.
+
 ## [1.0.0] — 2026-05-01
 
 First tagged release. The browser workbench is feature-complete against the
