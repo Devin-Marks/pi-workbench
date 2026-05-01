@@ -6,6 +6,11 @@ import {
   type AuthStatusResponse,
   type LoginResponse,
   type ChangePasswordResponse,
+  type McpServerConfig,
+  type McpServerStatus,
+  type McpServersResponse,
+  type McpSettingsResponse,
+  type McpToolSummary,
   type Project,
   type BrowseEntry,
   type BrowseResponse,
@@ -299,6 +304,43 @@ function vProvidersListing(value: unknown, status: number): ProvidersListing {
     fail(status, "expected { providers: [...] }");
   }
   return { providers: value.providers as ProvidersListing["providers"] };
+}
+
+function vMcpServers(value: unknown, status: number): McpServersResponse {
+  if (!isObject(value) || !isObject(value.servers) || !Array.isArray(value.status)) {
+    fail(status, "expected { servers, status[] }");
+  }
+  return value as unknown as McpServersResponse;
+}
+
+function vMcpSettings(value: unknown, status: number): McpSettingsResponse {
+  if (
+    !isObject(value) ||
+    typeof value.enabled !== "boolean" ||
+    typeof value.connected !== "number" ||
+    typeof value.total !== "number"
+  ) {
+    fail(status, "expected { enabled, connected, total }");
+  }
+  return {
+    enabled: value.enabled,
+    connected: value.connected,
+    total: value.total,
+  };
+}
+
+function vMcpProbe(value: unknown, status: number): { status: McpServerStatus } {
+  if (!isObject(value) || !isObject(value.status)) {
+    fail(status, "expected { status: {...} }");
+  }
+  return { status: value.status as unknown as McpServerStatus };
+}
+
+function vMcpTools(value: unknown, status: number): { tools: McpToolSummary[] } {
+  if (!isObject(value) || !Array.isArray(value.tools)) {
+    fail(status, "expected { tools: [...] }");
+  }
+  return { tools: value.tools as McpToolSummary[] };
 }
 
 function vAuthSummary(value: unknown, status: number): AuthSummary {
@@ -979,6 +1021,45 @@ export const api = {
     request(`/api/v1/config/auth/${encodeURIComponent(provider)}`, vVoid, {
       method: "DELETE",
     }),
+
+  // ---------------- mcp ----------------
+  getMcpSettings: () => request("/api/v1/mcp/settings", vMcpSettings),
+  setMcpEnabled: (enabled: boolean) =>
+    request("/api/v1/mcp/settings", vMcpSettings, {
+      method: "PUT",
+      body: { enabled },
+    }),
+  /** GLOBAL servers (config + status). Pass projectId to also include
+   *  status entries for the project's `.mcp.json` servers. */
+  listMcpServers: (projectId?: string) => {
+    const qs = projectId !== undefined ? `?projectId=${encodeURIComponent(projectId)}` : "";
+    return request(`/api/v1/mcp/servers${qs}`, vMcpServers);
+  },
+  upsertMcpServer: (name: string, body: McpServerConfig) =>
+    request(`/api/v1/mcp/servers/${encodeURIComponent(name)}`, vVoid, {
+      method: "PUT",
+      body,
+    }),
+  deleteMcpServer: (name: string) =>
+    request(
+      `/api/v1/mcp/servers/${encodeURIComponent(name)}`,
+      (v, s) => {
+        if (!isObject(v) || typeof v.removed !== "boolean") {
+          fail(s, "expected { removed }");
+        }
+        return { removed: v.removed };
+      },
+      { method: "DELETE" },
+    ),
+  probeMcpServer: (name: string, projectId?: string) => {
+    const qs = projectId !== undefined ? `?projectId=${encodeURIComponent(projectId)}` : "";
+    return request(`/api/v1/mcp/servers/${encodeURIComponent(name)}/probe${qs}`, vMcpProbe, {
+      method: "POST",
+      body: {},
+    });
+  },
+  listMcpTools: (projectId: string) =>
+    request(`/api/v1/mcp/tools?projectId=${encodeURIComponent(projectId)}`, vMcpTools),
   listSkills: (projectId: string) =>
     request(`/api/v1/config/skills?projectId=${encodeURIComponent(projectId)}`, vSkillsList),
   setSkillEnabled: (projectId: string, name: string, enabled: boolean) =>

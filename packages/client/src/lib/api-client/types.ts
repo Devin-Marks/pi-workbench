@@ -39,6 +39,51 @@ export interface ChangePasswordResponse {
   mustChangePassword: boolean;
 }
 
+// ---------------- MCP ----------------
+
+export type McpTransport = "auto" | "streamable-http" | "sse";
+export type McpConnectionState = "idle" | "connecting" | "connected" | "error" | "disabled";
+
+export interface McpServerConfig {
+  url: string;
+  transport?: McpTransport;
+  enabled?: boolean;
+  headers?: Record<string, string>;
+}
+
+export interface McpServerStatus {
+  scope: "global" | "project";
+  projectId?: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  state: McpConnectionState;
+  toolCount: number;
+  lastError?: string;
+  transport?: McpTransport;
+}
+
+export interface McpServersResponse {
+  /** GLOBAL config (project servers are read-only via /servers query). */
+  servers: Record<string, McpServerConfig>;
+  /** Status across global + (optionally) the queried project's scope. */
+  status: McpServerStatus[];
+}
+
+export interface McpSettingsResponse {
+  /** Master enable/disable. When false, no MCP tools are passed to sessions. */
+  enabled: boolean;
+  /** Connected count across GLOBAL servers only. */
+  connected: number;
+  /** Total GLOBAL servers configured. */
+  total: number;
+}
+
+export interface McpToolSummary {
+  name: string;
+  description: string;
+}
+
 export interface Project {
   id: string;
   name: string;

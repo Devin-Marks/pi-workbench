@@ -16,6 +16,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { FileBrowserPanel } from "./components/FileBrowserPanel";
 import { EditorPanel } from "./components/EditorPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
+import { McpStatusBadge } from "./components/McpStatusBadge";
 import { TurnDiffPanel } from "./components/TurnDiffPanel";
 import { GitPanel } from "./components/GitPanel";
 import { SearchPanel } from "./components/SearchPanel";
@@ -307,10 +308,11 @@ export function App() {
               Terminal
             </button>
           )}
+          {!minimal && <McpStatusBadge />}
           <button
             onClick={() => setSettingsOpen(true)}
             className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-500"
-            title="Settings (providers, agent defaults, skills)"
+            title="Settings (providers, agent defaults, MCP, skills)"
           >
             Settings
           </button>

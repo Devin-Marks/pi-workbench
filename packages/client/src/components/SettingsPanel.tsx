@@ -3,6 +3,9 @@ import {
   api,
   ApiError,
   type AuthSummary,
+  type McpServerConfig,
+  type McpServerStatus,
+  type McpTransport,
   type ProvidersListing,
   type SkillSummary,
 } from "../lib/api-client";
@@ -10,7 +13,7 @@ import { useActiveProject } from "../store/project-store";
 import { useUiConfigStore } from "../store/ui-config-store";
 import { THEME_DEFS, useThemeStore, type ThemeId } from "../lib/theme";
 
-type Tab = "providers" | "agent" | "skills" | "appearance";
+type Tab = "providers" | "agent" | "mcp" | "skills" | "appearance";
 
 interface Props {
   onClose: () => void;
@@ -46,7 +49,7 @@ export function SettingsPanel({ onClose }: Props) {
     () =>
       minimal
         ? (["skills", "appearance"] as const)
-        : (["providers", "agent", "skills", "appearance"] as const),
+        : (["providers", "agent", "mcp", "skills", "appearance"] as const),
     [minimal],
   );
   const [tab, setTab] = useState<Tab>(minimal ? "skills" : "providers");
@@ -82,9 +85,11 @@ export function SettingsPanel({ onClose }: Props) {
                   ? "Providers"
                   : t === "agent"
                     ? "Agent"
-                    : t === "skills"
-                      ? "Skills"
-                      : "Appearance"}
+                    : t === "mcp"
+                      ? "MCP"
+                      : t === "skills"
+                        ? "Skills"
+                        : "Appearance"}
               </button>
             ))}
           </div>
@@ -106,6 +111,7 @@ export function SettingsPanel({ onClose }: Props) {
         <div className="flex-1 overflow-y-auto px-4 py-3 text-sm text-neutral-200">
           {tab === "providers" && <ProvidersTab onError={setError} />}
           {tab === "agent" && <AgentTab onError={setError} />}
+          {tab === "mcp" && <McpTab onError={setError} />}
           {tab === "skills" && <SkillsTab onError={setError} />}
           {tab === "appearance" && <AppearanceTab />}
         </div>
@@ -837,6 +843,509 @@ function ThemeSwatch({ id }: { id: ThemeId }) {
       <div className="w-4 bg-neutral-800" />
       <div className="w-4 bg-neutral-500" />
       <div className="w-4 bg-neutral-200" />
+    </div>
+  );
+}
+
+// ---------------- MCP tab ----------------
+
+interface McpDraft {
+  name: string;
+  url: string;
+  transport: McpTransport;
+  enabled: boolean;
+  /** Headers as a flat ordered list so the user can manage rows. */
+  headers: { key: string; value: string }[];
+}
+
+const SECRET_PLACEHOLDER = "***REDACTED***";
+
+function emptyDraft(): McpDraft {
+  return {
+    name: "",
+    url: "",
+    transport: "auto",
+    enabled: true,
+    headers: [],
+  };
+}
+
+function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
+  const project = useActiveProject();
+  const [enabled, setEnabled] = useState<boolean | undefined>(undefined);
+  const [servers, setServers] = useState<Record<string, McpServerConfig>>({});
+  const [status, setStatus] = useState<McpServerStatus[]>([]);
+  const [draft, setDraft] = useState<McpDraft | undefined>(undefined);
+  /** When set, draft applies to an existing server (PUT replaces). */
+  const [editingName, setEditingName] = useState<string | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [probing, setProbing] = useState<string | undefined>(undefined);
+
+  const refresh = async (): Promise<void> => {
+    try {
+      const [s, list] = await Promise.all([api.getMcpSettings(), api.listMcpServers(project?.id)]);
+      setEnabled(s.enabled);
+      setServers(list.servers);
+      setStatus(list.status);
+      onError(undefined);
+    } catch (err) {
+      onError(`Failed to load MCP config: ${errorCode(err)}`);
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.id]);
+
+  const toggleMaster = async (next: boolean): Promise<void> => {
+    setBusy(true);
+    try {
+      const r = await api.setMcpEnabled(next);
+      setEnabled(r.enabled);
+      onError(undefined);
+      // Connection counts may shift; refresh status.
+      await refresh();
+    } catch (err) {
+      onError(`Failed to toggle MCP: ${errorCode(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleServer = async (name: string, next: boolean): Promise<void> => {
+    const prev = servers[name];
+    if (prev === undefined) return;
+    setBusy(true);
+    try {
+      await api.upsertMcpServer(name, { ...prev, enabled: next });
+      onError(undefined);
+      await refresh();
+    } catch (err) {
+      onError(`Failed to update server: ${errorCode(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startEdit = (name: string): void => {
+    const cfg = servers[name];
+    if (cfg === undefined) return;
+    setEditingName(name);
+    setDraft({
+      name,
+      url: cfg.url,
+      transport: cfg.transport ?? "auto",
+      enabled: cfg.enabled !== false,
+      headers: Object.entries(cfg.headers ?? {}).map(([k, v]) => ({ key: k, value: v })),
+    });
+  };
+
+  const startAdd = (): void => {
+    setEditingName(undefined);
+    setDraft(emptyDraft());
+  };
+
+  const saveDraft = async (): Promise<void> => {
+    if (draft === undefined) return;
+    if (draft.name.trim().length === 0 || draft.url.trim().length === 0) {
+      onError("Name and URL are required.");
+      return;
+    }
+    const headers: Record<string, string> = {};
+    for (const h of draft.headers) {
+      if (h.key.trim().length === 0) continue;
+      headers[h.key] = h.value;
+    }
+    const body: McpServerConfig = {
+      url: draft.url,
+      transport: draft.transport,
+      enabled: draft.enabled,
+    };
+    if (Object.keys(headers).length > 0) body.headers = headers;
+    setBusy(true);
+    try {
+      await api.upsertMcpServer(draft.name, body);
+      onError(undefined);
+      setDraft(undefined);
+      setEditingName(undefined);
+      await refresh();
+    } catch (err) {
+      onError(`Failed to save server: ${errorCode(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeServer = async (name: string): Promise<void> => {
+    if (!window.confirm(`Remove MCP server '${name}' from the global registry?`)) return;
+    setBusy(true);
+    try {
+      await api.deleteMcpServer(name);
+      onError(undefined);
+      await refresh();
+    } catch (err) {
+      onError(`Failed to remove server: ${errorCode(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const probeServer = async (name: string, scope: "global" | "project"): Promise<void> => {
+    setProbing(name);
+    try {
+      await api.probeMcpServer(name, scope === "project" ? project?.id : undefined);
+      onError(undefined);
+      await refresh();
+    } catch (err) {
+      onError(`Probe failed for '${name}': ${errorCode(err)}`);
+    } finally {
+      setProbing(undefined);
+    }
+  };
+
+  if (enabled === undefined) {
+    return <p className="text-xs italic text-neutral-500">Loading MCP config…</p>;
+  }
+
+  const globalStatus = status.filter((s) => s.scope === "global");
+  const projectStatus = status.filter((s) => s.scope === "project");
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-neutral-500">
+        MCP servers extend the agent with custom tools. Servers configured here are loaded by every
+        new session. Project-scoped servers in <code className="font-mono">.mcp.json</code> at the
+        project root are also loaded for sessions in that project (project entries override globals
+        on name collision).
+      </p>
+
+      <div className="flex items-center justify-between rounded border border-neutral-800 bg-neutral-900/40 p-3">
+        <div>
+          <div className="text-sm font-medium text-neutral-100">MCP tools</div>
+          <div className="text-[11px] text-neutral-500">
+            Master switch. When off, no MCP tools reach the agent regardless of per-server state.
+          </div>
+        </div>
+        <button
+          onClick={() => void toggleMaster(!enabled)}
+          disabled={busy}
+          className={`rounded border px-3 py-1 text-xs ${
+            enabled
+              ? "border-emerald-700/50 bg-emerald-900/20 text-emerald-300"
+              : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+          }`}
+        >
+          {enabled ? "Enabled" : "Disabled"}
+        </button>
+      </div>
+
+      <McpServerList
+        title="Global servers"
+        emptyHint="No global MCP servers configured. Click 'Add server' to add one."
+        servers={globalStatus.map((s) => ({ status: s, config: servers[s.name] }))}
+        editable
+        editingName={editingName ?? null}
+        probingName={probing ?? null}
+        onToggle={(name, next) => void toggleServer(name, next)}
+        onProbe={(name) => void probeServer(name, "global")}
+        onEdit={startEdit}
+        onRemove={(name) => void removeServer(name)}
+      />
+
+      {project !== undefined && (
+        <McpServerList
+          title={`Project servers (${project.name})`}
+          emptyHint={
+            <>
+              No project servers. Add a <code className="font-mono">.mcp.json</code> file at the
+              project root to define some — supports both{" "}
+              <code className="font-mono">{`{ servers: {...} }`}</code> and the standard{" "}
+              <code className="font-mono">{`{ mcpServers: {...} }`}</code> shape.
+            </>
+          }
+          servers={projectStatus.map((s) => ({ status: s, config: undefined }))}
+          editable={false}
+          probingName={probing ?? null}
+          onProbe={(name) => void probeServer(name, "project")}
+        />
+      )}
+
+      {draft === undefined ? (
+        <button
+          onClick={startAdd}
+          className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:border-neutral-500"
+        >
+          + Add server
+        </button>
+      ) : (
+        <McpDraftForm
+          draft={draft}
+          isEditing={editingName !== undefined}
+          busy={busy}
+          onChange={setDraft}
+          onSave={() => void saveDraft()}
+          onCancel={() => {
+            setDraft(undefined);
+            setEditingName(undefined);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+interface ServerRowEntry {
+  status: McpServerStatus;
+  config: McpServerConfig | undefined;
+}
+
+function McpServerList(props: {
+  title: string;
+  emptyHint: React.ReactNode;
+  servers: ServerRowEntry[];
+  editable: boolean;
+  /** `null` (not undefined) when no row is being edited — sidesteps
+   *  `exactOptionalPropertyTypes` complaining about `string | undefined`
+   *  being assigned to an optional prop typed as `string`. */
+  editingName?: string | null;
+  probingName?: string | null;
+  onToggle?: (name: string, enabled: boolean) => void;
+  onProbe: (name: string) => void;
+  onEdit?: (name: string) => void;
+  onRemove?: (name: string) => void;
+}) {
+  return (
+    <section className="space-y-2">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">
+        {props.title}
+      </h3>
+      {props.servers.length === 0 ? (
+        <p className="text-[11px] italic text-neutral-500">{props.emptyHint}</p>
+      ) : (
+        <div className="space-y-2">
+          {props.servers.map((entry) => {
+            const s = entry.status;
+            const isEditing = props.editingName === s.name;
+            const isProbing = props.probingName === s.name;
+            return (
+              <div
+                key={`${s.scope}:${s.name}`}
+                className={`rounded border p-3 ${
+                  isEditing
+                    ? "border-neutral-500 bg-neutral-900"
+                    : "border-neutral-800 bg-neutral-900/40"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <McpStateDot state={s.state} />
+                    <span className="font-mono text-sm text-neutral-100">{s.name}</span>
+                    <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400">
+                      {s.transport ?? "auto"}
+                    </span>
+                    <span className="text-[11px] text-neutral-500">{s.toolCount} tools</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1 text-xs">
+                    {props.editable && props.onToggle !== undefined && (
+                      <button
+                        onClick={() => props.onToggle?.(s.name, !s.enabled)}
+                        className={`rounded border px-2 py-0.5 ${
+                          s.enabled
+                            ? "border-emerald-700/50 bg-emerald-900/20 text-emerald-300"
+                            : "border-neutral-700 text-neutral-400 hover:border-neutral-500"
+                        }`}
+                      >
+                        {s.enabled ? "Enabled" : "Disabled"}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => props.onProbe(s.name)}
+                      disabled={isProbing}
+                      className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-300 hover:border-neutral-500 disabled:opacity-50"
+                      title="Reconnect and refresh tool list"
+                    >
+                      {isProbing ? "Probing…" : "Probe"}
+                    </button>
+                    {props.editable && props.onEdit !== undefined && (
+                      <button
+                        onClick={() => props.onEdit?.(s.name)}
+                        className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-300 hover:border-neutral-500"
+                      >
+                        Edit
+                      </button>
+                    )}
+                    {props.editable && props.onRemove !== undefined && (
+                      <button
+                        onClick={() => props.onRemove?.(s.name)}
+                        className="rounded border border-red-700/50 px-2 py-0.5 text-red-300 hover:bg-red-900/20"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-1 truncate text-[11px] text-neutral-500" title={s.url}>
+                  {s.url}
+                </div>
+                {s.lastError !== undefined && (
+                  <div className="mt-1 truncate text-[11px] text-red-300" title={s.lastError}>
+                    {s.lastError}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function McpStateDot({ state }: { state: McpServerStatus["state"] }) {
+  const cls =
+    state === "connected"
+      ? "bg-emerald-500"
+      : state === "connecting"
+        ? "bg-amber-400 animate-pulse"
+        : state === "error"
+          ? "bg-red-500"
+          : state === "disabled"
+            ? "bg-neutral-700"
+            : "bg-neutral-500";
+  return <span className={`h-2 w-2 rounded-full ${cls}`} title={state} />;
+}
+
+function McpDraftForm(props: {
+  draft: McpDraft;
+  isEditing: boolean;
+  busy: boolean;
+  onChange: (next: McpDraft) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const { draft, busy } = props;
+  const setField = <K extends keyof McpDraft>(key: K, value: McpDraft[K]): void => {
+    props.onChange({ ...draft, [key]: value });
+  };
+  return (
+    <div className="rounded border border-neutral-700 bg-neutral-900 p-3">
+      <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+        {props.isEditing ? `Edit '${draft.name}'` : "Add MCP server"}
+      </h4>
+      <div className="grid grid-cols-[80px_1fr] items-center gap-2 text-xs">
+        <label className="text-neutral-500">Name</label>
+        <input
+          value={draft.name}
+          onChange={(e) => setField("name", e.target.value)}
+          disabled={props.isEditing}
+          placeholder="my-server"
+          className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-neutral-100 outline-none focus:border-neutral-500 disabled:opacity-50"
+        />
+        <label className="text-neutral-500">URL</label>
+        <input
+          value={draft.url}
+          onChange={(e) => setField("url", e.target.value)}
+          placeholder="https://mcp.example.com/sse"
+          className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-neutral-100 outline-none focus:border-neutral-500"
+        />
+        <label className="text-neutral-500">Transport</label>
+        <select
+          value={draft.transport}
+          onChange={(e) => setField("transport", e.target.value as McpTransport)}
+          className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-neutral-100 outline-none focus:border-neutral-500"
+        >
+          <option value="auto">auto (StreamableHTTP, fall back to SSE)</option>
+          <option value="streamable-http">streamable-http</option>
+          <option value="sse">sse</option>
+        </select>
+        <label className="text-neutral-500">Enabled</label>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={draft.enabled}
+            onChange={(e) => setField("enabled", e.target.checked)}
+          />
+          <span className="text-[11px] text-neutral-500">
+            Disabled servers don't connect or contribute tools.
+          </span>
+        </label>
+      </div>
+      <div className="mt-3">
+        <div className="mb-1 flex items-center justify-between">
+          <h5 className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
+            Headers
+          </h5>
+          <button
+            onClick={() => setField("headers", [...draft.headers, { key: "", value: "" }])}
+            className="rounded border border-neutral-700 px-2 py-0.5 text-[11px] text-neutral-300 hover:border-neutral-500"
+          >
+            + Header
+          </button>
+        </div>
+        {draft.headers.length === 0 && (
+          <p className="text-[11px] italic text-neutral-600">
+            No headers. Add `Authorization: Bearer …` here for auth.
+          </p>
+        )}
+        {draft.headers.map((h, i) => (
+          <div key={i} className="mb-1 grid grid-cols-[1fr_2fr_auto] gap-1">
+            <input
+              value={h.key}
+              onChange={(e) => {
+                const next = [...draft.headers];
+                next[i] = { ...h, key: e.target.value };
+                setField("headers", next);
+              }}
+              placeholder="Authorization"
+              className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-[11px] font-mono text-neutral-100 outline-none focus:border-neutral-500"
+            />
+            <input
+              value={h.value === SECRET_PLACEHOLDER ? "" : h.value}
+              onChange={(e) => {
+                const next = [...draft.headers];
+                next[i] = { ...h, value: e.target.value };
+                setField("headers", next);
+              }}
+              placeholder={
+                h.value === SECRET_PLACEHOLDER ? "leave blank to keep stored value" : "Bearer …"
+              }
+              type="password"
+              className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-[11px] font-mono text-neutral-100 outline-none focus:border-neutral-500"
+            />
+            <button
+              onClick={() => {
+                const next = draft.headers.filter((_, j) => j !== i);
+                setField("headers", next);
+              }}
+              className="rounded border border-neutral-700 px-2 text-[11px] text-neutral-400 hover:text-red-300"
+              title="Remove header"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        {draft.headers.some((h) => h.value === SECRET_PLACEHOLDER) && (
+          <p className="mt-1 text-[10px] italic text-neutral-500">
+            Headers with the redaction sentinel keep their stored value when you save.
+          </p>
+        )}
+      </div>
+      <div className="mt-3 flex justify-end gap-2">
+        <button
+          onClick={props.onCancel}
+          className="rounded border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:border-neutral-500"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={props.onSave}
+          disabled={busy}
+          className="rounded bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-900 disabled:opacity-50"
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
     </div>
   );
 }
