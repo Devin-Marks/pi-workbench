@@ -417,15 +417,21 @@ export async function listSkills(
     includeDefaults: true,
   });
   const settings = await readSettings();
-  const enabled = new Set(settings.skills ?? []);
+  // Pi's `settings.skills` is a list of override patterns, NOT a list
+  // of enabled names. A skill is enabled at the global scope unless
+  // an `!<name>` (or `-<name>`) pattern targets it. See the doc-comment
+  // on `effectiveSkillsForProject` for the full pattern semantics.
+  const globalDisabled = disabledNamesFromPatterns(settings.skills ?? []);
   const overrides = await readSkillOverrides();
-  return result.skills.map((s) => skillSummary(s, workspacePath, enabled, overrides, projectId));
+  return result.skills.map((s) =>
+    skillSummary(s, workspacePath, globalDisabled, overrides, projectId),
+  );
 }
 
 function skillSummary(
   s: Skill,
   workspacePath: string,
-  enabled: Set<string>,
+  globalDisabled: Set<string>,
   overrides: SkillOverrides,
   projectId: string | undefined,
 ): SkillSummary {
@@ -433,7 +439,7 @@ function skillSummary(
   // under workspacePath/.pi/skills. Use baseDir prefix as the source
   // discriminator since paths can be normalized differently on macOS/Linux.
   const isProject = s.baseDir.startsWith(workspacePath);
-  const isEnabledGlobal = enabled.has(s.name);
+  const isEnabledGlobal = !globalDisabled.has(s.name);
   const projectOverride =
     projectId !== undefined ? getProjectSkillState(overrides, projectId, s.name) : undefined;
   const effective =
@@ -516,31 +522,89 @@ export async function setSkillEnabled(
   // read+merge+write here rather than calling updateSettings (which
   // would deadlock — the lock is non-reentrant) and use atomicWriteJson
   // directly for the write.
+  //
+  // Pattern semantics: pi auto-discovers every skill on disk and
+  // enables them by default. To DISABLE one we push `!<name>`. To
+  // re-enable we drop any `!<name>` / `-<name>` / `+<name>` for that
+  // name (absence = pi's default-on). We also drop bare-name entries
+  // a prior buggy version of this file may have left on disk — pi
+  // ignores them, so they're inert and just clutter the file.
   await withSettingsLock(async () => {
     const settings = await readSettings();
-    const list = new Set(settings.skills ?? []);
-    if (enabled) list.add(name);
-    else list.delete(name);
-    const next: SettingsJson = { ...settings, skills: Array.from(list) };
+    const existing = settings.skills ?? [];
+    const filtered = existing.filter((p) => {
+      // Drop inert bare entries on every rewrite.
+      if (!p.startsWith("!") && !p.startsWith("+") && !p.startsWith("-")) return false;
+      // Drop any prior pattern targeting THIS skill name; we'll re-add
+      // exactly the one we want below.
+      if (p.slice(1) === name) return false;
+      return true;
+    });
+    if (!enabled) filtered.push(excludePattern(name));
+    const next: SettingsJson = { ...settings, skills: filtered };
     await atomicWriteJson(SETTINGS_FILE(), next);
   });
   return listSkills(workspacePath, opts?.projectId);
 }
 
 /**
- * Read pi's GLOBAL settings.skills + the project's overrides and
- * return the effective enabled list a session in `projectId` should
- * see. Used by session-registry to apply the override at session
- * create via SettingsManager.applyOverrides.
+ * Pi's `settings.skills` is NOT an enabled-allowlist of skill names —
+ * it is a list of override PATTERNS with three prefix conventions:
+ *
+ *   `!<name>`  → exclude (skill won't load if pattern matches)
+ *   `+<name>`  → force include (overrides any `!`)
+ *   `-<name>`  → force exclude (overrides everything)
+ *   bare name  → silently ignored by pi's `getOverridePatterns`
+ *
+ * Pi auto-discovers every skill it finds under the user/project skill
+ * directories and they are ALL ENABLED BY DEFAULT. The only way to
+ * disable one is to push `!<name>` (or `-<name>`) into the patterns
+ * list. Writing bare names accomplishes nothing.
+ *
+ * Helpers below codify this so callers don't need to re-derive it.
+ */
+const excludePattern = (name: string): string => `!${name}`;
+const forceIncludePattern = (name: string): string => `+${name}`;
+
+/** Names that an exclude pattern (`!name` or `-name`) targets. */
+function disabledNamesFromPatterns(patterns: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const p of patterns) {
+    if (p.startsWith("!") || p.startsWith("-")) out.add(p.slice(1));
+  }
+  return out;
+}
+
+/**
+ * Compute the skill-pattern list a session in `projectId` should see —
+ * a merge of pi's global patterns with our per-project overrides.
+ *
+ * Returned values are PATTERNS (`!name` / `+name`), not names. The
+ * session-registry pushes them into the SettingsManager so pi's
+ * package-manager applies them when discovering skills.
+ *
+ * Resolution rules:
+ *   - Start with whatever patterns pi already has at the global scope
+ *     (these come from prior `setSkillEnabled(scope:"global")` writes).
+ *   - For every skill the project marked `disable`, ensure `!<name>`
+ *     is in the list — even if no global exclude exists.
+ *   - For every skill the project marked `enable`, push `+<name>` so
+ *     it force-includes in this project's session even if a global
+ *     `!<name>` would otherwise hide it.
  */
 export async function effectiveSkillsForProject(projectId: string): Promise<string[]> {
   const settings = await readSettings();
   const overrides: SkillOverrides = await readSkillOverrides();
-  const globalEnabled = settings.skills ?? [];
+  // Filter to only valid override patterns; drop any inert bare entries
+  // a prior buggy version of this code might have left on disk.
+  const globalPatterns = (settings.skills ?? []).filter(
+    (p) => p.startsWith("!") || p.startsWith("+") || p.startsWith("-"),
+  );
+  const result = new Set<string>(globalPatterns);
   const entry = overrides.projects[projectId];
-  if (entry === undefined) return [...globalEnabled];
-  const enabled = new Set(globalEnabled);
-  for (const n of entry.enable) enabled.add(n);
-  for (const n of entry.disable) enabled.delete(n);
-  return Array.from(enabled);
+  if (entry !== undefined) {
+    for (const name of entry.disable) result.add(excludePattern(name));
+    for (const name of entry.enable) result.add(forceIncludePattern(name));
+  }
+  return Array.from(result);
 }

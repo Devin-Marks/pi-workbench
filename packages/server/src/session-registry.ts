@@ -252,6 +252,14 @@ function makeSubscribeHandler(live: LiveSession): () => void {
         finalError: e.finalError,
       });
     }
+    // Enrich `agent_end` with the session's authoritative
+    // errorMessage BEFORE fan-out. The SDK's native `agent_end` event
+    // carries no error field — the failure detail lives on
+    // `live.session.errorMessage` (per the SDK type). Without this
+    // enrichment, a context-overflow / 401 / 5xx ends up emitting an
+    // `agent_end` with no detail, the chat UI hides its spinner with
+    // no error banner, and the user sees an empty assistant message.
+    let outboundEvent: AgentSessionEvent = event;
     if (e.type === "agent_end") {
       const errMsg = (live.session as unknown as { errorMessage?: string }).errorMessage;
       if (errMsg !== undefined && errMsg !== "") {
@@ -260,6 +268,15 @@ function makeSubscribeHandler(live: LiveSession): () => void {
           sessionId: live.sessionId,
           errorMessage: errMsg,
         });
+        // Forward a merged event that includes the error detail. Cast
+        // through unknown — the SDK's union doesn't declare an
+        // errorMessage field on agent_end (it expects callers to read
+        // session.errorMessage themselves), but the wire shape is what
+        // the browser consumes and it tolerates the extra field.
+        outboundEvent = {
+          ...(event as object),
+          errorMessage: errMsg,
+        } as unknown as AgentSessionEvent;
       } else if (verbose) {
         logAgentEvent("info", {
           msg: "agent_end (no error)",
@@ -270,7 +287,7 @@ function makeSubscribeHandler(live: LiveSession): () => void {
 
     for (const client of live.clients) {
       try {
-        client.send(event);
+        client.send(outboundEvent);
       } catch {
         // Drop the client on send failure — Phase 5's SSE adapter will
         // also call disposeClient on its socket close hook.
@@ -906,25 +923,49 @@ export async function disposeAllSessions(): Promise<void> {
 }
 
 /**
- * Build a SettingsManager whose `skills` field reflects the
- * effective per-project enabled list (= global ∪ project.enable −
- * project.disable). Pi reads `settings.skills` via the manager when
- * the agent boots, so this is how project-scope toggles take effect
- * WITHOUT mutating pi's actual settings.json on disk (which would
- * race with the pi TUI sharing the same file).
+ * Build a SettingsManager whose `getGlobalSettings()` and
+ * `getProjectSettings()` return augmented `skills` patterns reflecting
+ * the workbench's per-project overrides.
  *
- * `applyOverrides` is runtime-only — pi treats the overrides as an
- * in-memory layer over what it loaded from disk and never persists
- * them back. Confirmed against
- * @mariozechner/pi-coding-agent/dist/core/settings-manager.d.ts.
+ * Why we don't use `applyOverrides({ skills })`: pi's package-manager
+ * (the thing that auto-discovers and filters skills) reads
+ * `getGlobalSettings()` and `getProjectSettings()` SEPARATELY when
+ * resolving which skills the agent sees. `applyOverrides` only mutates
+ * the merged `this.settings` view — `getGlobalSettings`/`getProjectSettings`
+ * still return the un-merged on-disk values, so any skill patterns we
+ * push through `applyOverrides` are silently ignored by skill loading.
+ *
+ * Why monkey-patching instead of subclassing or Proxy: pi internals
+ * use `instanceof SettingsManager` checks in a few places, which a
+ * Proxy breaks. Subclassing would require reaching into private fields
+ * to hand the constructor what it needs. Direct method substitution on
+ * the instance is the smallest change that survives across SDK
+ * upgrades — both methods are public, both return their backing field
+ * via `structuredClone`, both have stable signatures.
+ *
+ * Patterns get injected into BOTH reads because pi applies global
+ * patterns to the user skills dir and project patterns to the project
+ * skills dir; injecting into one would only filter half the discovery.
  */
 async function buildSessionSettingsManager(
   workspacePath: string,
   projectId: string,
 ): Promise<SettingsManager> {
   const sm = SettingsManager.create(workspacePath, config.piConfigDir);
-  const effective = await effectiveSkillsForProject(projectId);
-  sm.applyOverrides({ skills: effective });
+  const patterns = await effectiveSkillsForProject(projectId);
+  if (patterns.length === 0) return sm;
+  const origGlobal = sm.getGlobalSettings.bind(sm);
+  const origProject = sm.getProjectSettings.bind(sm);
+  const merge = (existing: string[] | undefined): string[] =>
+    Array.from(new Set([...(existing ?? []), ...patterns]));
+  sm.getGlobalSettings = (): ReturnType<typeof origGlobal> => {
+    const s = origGlobal();
+    return { ...s, skills: merge(s.skills) };
+  };
+  sm.getProjectSettings = (): ReturnType<typeof origProject> => {
+    const s = origProject();
+    return { ...s, skills: merge(s.skills) };
+  };
   return sm;
 }
 
