@@ -1,3 +1,5 @@
+import { stat } from "node:fs/promises";
+import { join } from "node:path";
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { extractBearer, verifyApiKey, verifyToken } from "../auth.js";
@@ -90,6 +92,42 @@ function parseClientMessage(raw: unknown): ClientMessage | undefined {
  * Either path goes through the same `verifyToken` / `verifyApiKey`
  * checks as REST routes.
  */
+/**
+ * Common Python virtualenv layouts to look for in the project root.
+ * Order matters: `.venv` first because it is the modern convention
+ * (`uv`, `poetry`, recent `python -m venv` docs all default to it),
+ * then the older `venv`, then the legacy `env`. We deliberately do
+ * NOT probe `.env` — that name almost always means a dotenv config
+ * file, not a virtualenv directory.
+ *
+ * Each entry's relative path is what we feed to `source` so the
+ * activation message stays readable to the user (`source .venv/bin/activate`
+ * vs an absolute path that may include their home dir).
+ */
+const VENV_CANDIDATES: readonly string[] = [".venv", "venv", "env"];
+
+/**
+ * Look for a Python virtualenv at well-known paths inside `cwd`.
+ * Returns the relative path to the activate script (e.g.
+ * `.venv/bin/activate`) or undefined if none found.
+ *
+ * The check is best-effort: any stat error (permission denied,
+ * dangling symlink, etc.) is treated as "not a venv" so a transient
+ * filesystem issue can never block opening the terminal.
+ */
+async function findVenvActivate(cwd: string): Promise<string | undefined> {
+  for (const dir of VENV_CANDIDATES) {
+    const rel = `${dir}/bin/activate`;
+    try {
+      const st = await stat(join(cwd, rel));
+      if (st.isFile()) return rel;
+    } catch {
+      // Missing / unreadable — try the next candidate.
+    }
+  }
+  return undefined;
+}
+
 function authorize(req: FastifyRequest): boolean {
   if (!authEnabled()) return true;
   const headerToken = extractBearer(req.headers.authorization);
@@ -211,6 +249,29 @@ export const terminalRoutes: FastifyPluginAsync = async (fastify) => {
         { ptyId: managed.ptyId, tabId: managed.tabId, cwd: project.path, reattached },
         reattached ? "terminal reattached" : "terminal opened",
       );
+
+      // Auto-activate a Python virtualenv if the project has one at a
+      // conventional path. Only on a fresh spawn — a reattach already
+      // has whatever shell state the previous session left behind, and
+      // re-sourcing would either no-op (already active) or stomp on a
+      // venv the user manually switched to. We write `source <path>`
+      // as if the user typed it; using POSIX `.` would also work but
+      // `source` reads better in scrollback and bash/zsh (the only
+      // shells we ship with) both accept it.
+      if (!reattached) {
+        const activate = await findVenvActivate(project.path);
+        if (activate !== undefined) {
+          try {
+            managed.process.write(`source ${activate}\n`);
+            log.info({ ptyId: managed.ptyId, activate }, "auto-activated venv");
+          } catch (err) {
+            // PTY died between spawn and write — extremely unlikely but
+            // not worth tearing down the socket over; the user just
+            // gets a non-activated shell.
+            log.warn({ err, ptyId: managed.ptyId }, "venv auto-activate write failed");
+          }
+        }
+      }
 
       // PTY → client via the manager. attachSink handles the
       // initial buffer replay (recent output before any new
