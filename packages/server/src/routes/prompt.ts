@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import { ConversionError, convertAttachment, pickConverter } from "../attachment-converters.js";
 import { config } from "../config.js";
 import { formatErrorChain } from "../diagnostics.js";
-import { expandFileReferences } from "../file-references.js";
+import { expandFileReferences, languageHintForPath } from "../file-references.js";
 import { getSession, type LiveSession } from "../session-registry.js";
 import { errorSchema } from "./_schemas.js";
 
@@ -20,24 +21,52 @@ import { errorSchema } from "./_schemas.js";
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const MAX_IMAGES_PER_PROMPT = 4;
 const MAX_TEXT_FILES_PER_PROMPT = 4;
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
-/**
- * Cap how much a single text attachment can contribute to the prompt
- * after we read it. The 10 MB file-size limit is the upper hard cap;
- * this is the looser "reasonable to embed in chat" cap. Files larger
- * than this still upload but get truncated with a marker. Avoids
- * silently blowing past the model's context window.
- */
-const MAX_TEXT_PREPEND_BYTES = 256 * 1024;
-/**
- * Hard cap on the assembled prompt text (user input + every prepended
- * text-file body) before it goes to the SDK. 1 MB is well above the
- * largest reasonable single-prompt payload and well below most model
- * context windows; anything beyond it is almost certainly an attempt
- * to burn LLM tokens / context budget.
- */
-const MAX_COMPOSED_PROMPT_BYTES = 1024 * 1024;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
+/**
+ * MIME types we'll trust as text without sniffing (the browser said
+ * so explicitly). `text/*` covers the obvious cases; the
+ * `application/*` allowlist below covers code/data formats whose
+ * canonical MIME starts with `application/` even though the bytes
+ * are UTF-8 text.
+ */
+const TEXT_APPLICATION_MIME_TYPES = new Set([
+  "application/json",
+  "application/xml",
+  "application/yaml",
+  "application/x-yaml",
+  "application/javascript",
+  "application/typescript",
+  "application/sql",
+  "application/x-sh",
+  "application/toml",
+  "application/x-httpd-php",
+]);
+
+function looksLikeTextMime(mime: string): boolean {
+  if (mime.startsWith("text/")) return true;
+  if (TEXT_APPLICATION_MIME_TYPES.has(mime)) return true;
+  // `+json` / `+xml` suffixes (RFC 6839): application/foo+json, etc.
+  if (mime.endsWith("+json") || mime.endsWith("+xml") || mime.endsWith("+yaml")) return true;
+  return false;
+}
+
+/**
+ * Heuristic binary sniff: scan the first chunk of the buffer for NUL
+ * bytes. UTF-8 text files essentially never contain `\x00`; binary
+ * formats (PDFs, Office docs, Visio, images, executables) almost
+ * always do, usually within the first few hundred bytes.
+ *
+ * 8 KB sample is enough to reliably catch every real-world binary
+ * format we care about and cheap enough to run on every upload.
+ */
+function looksBinary(buf: Buffer): boolean {
+  const limit = Math.min(buf.byteLength, 8 * 1024);
+  for (let i = 0; i < limit; i++) {
+    if (buf[i] === 0) return true;
+  }
+  return false;
+}
 interface ParsedImage {
   /** Base64-encoded image data (no data URL prefix). */
   base64: string;
@@ -46,9 +75,7 @@ interface ParsedImage {
 
 interface ParsedTextFile {
   filename: string;
-  /** Already-truncated UTF-8 string. `truncated` indicates a marker was added. */
   content: string;
-  truncated: boolean;
 }
 
 interface ParsedMultipart {
@@ -71,18 +98,18 @@ async function parseMultipart(
   const images: ParsedImage[] = [];
   const textFiles: ParsedTextFile[] = [];
 
-  // Drain helper for early-return paths. Without this, when an early
-  // file-cap triggers a 400, the remaining MBs of the request body
-  // keep flowing in and Fastify buffers them before GC. For a
-  // pathological 8 × 10 MB upload that's ~70 MB of useless transit.
-  // Destroying the raw socket stream signals the client to stop and
-  // releases any in-flight buffers.
+  // No-op drain helper. The previous implementation called
+  // `req.raw.destroy()` to abort the upload on early-error paths and
+  // free in-flight buffers. That's harmful on HTTP/1.1 keep-alive (the
+  // dev server's default): browsers commonly reuse one TCP connection
+  // for multiple requests including the long-lived SSE stream.
+  // Destroying the raw socket killed the SSE alongside the POST,
+  // producing a "Reconnecting" banner in chat right after submitting a
+  // prompt with an attachment. Fastify will close the request normally
+  // once we send the response; the worst-case bandwidth waste from
+  // not pre-aborting is bounded by the multipart `bodyLimit`.
   const drain = (): void => {
-    try {
-      req.raw.destroy();
-    } catch {
-      // already destroyed / closed
-    }
+    // intentionally no-op — see comment above
   };
 
   for await (const part of req.parts()) {
@@ -121,13 +148,58 @@ async function parseMultipart(
       images.push({ base64: buf.toString("base64"), mimeType: mime });
       continue;
     }
-    // Anything else: try to interpret as text. We don't reject binary
-    // non-image attachments outright because users sometimes attach
-    // unrecognized text MIME types (e.g. `.tsx` arriving as
-    // application/octet-stream from some browsers). The
-    // best-effort UTF-8 decode below converts garbled binary to
-    // U+FFFD replacement chars and the model gets noise — better
-    // than silently dropping the attachment.
+    // Anything that isn't an image: decide between "text we can inline
+    // as a fenced block" and "binary we can't do anything useful with."
+    //
+    // Two-step decision:
+    //   1. If the browser declared a text-shaped MIME, trust it and
+    //      treat as text.
+    //   2. Otherwise (typically `application/octet-stream` for files
+    //      with unknown extensions like `.tsx` from some browsers),
+    //      sniff for NUL bytes. No NUL in the first 8 KB → text;
+    //      NUL present → binary, reject with a clear error so the
+    //      user knows their PDF/Visio/Word/etc. didn't go anywhere.
+    //
+    // Without this check, a binary upload was being best-effort UTF-8
+    // decoded into garbled noise + U+FFFD replacement chars and
+    // prepended to the prompt, which broke the session (model errors,
+    // hallucinations, blown context budget).
+    const filename = file.filename ?? "attachment";
+
+    // Office-format conversion. PDF / DOCX / XLSX dispatch to a pure-JS
+    // converter that yields plain text the model can read. Done before
+    // the binary-reject branch so these formats land here even though
+    // their bytes contain NUL.
+    const converter = pickConverter(filename, mime);
+    if (converter !== undefined) {
+      if (textFiles.length >= MAX_TEXT_FILES_PER_PROMPT) {
+        drain();
+        return {
+          error: "too_many_text_files",
+          message: `Up to ${MAX_TEXT_FILES_PER_PROMPT} text attachments per prompt; got more.`,
+        };
+      }
+      try {
+        const content = await convertAttachment(converter, filename, buf);
+        textFiles.push({ filename, content });
+      } catch (err) {
+        drain();
+        const message =
+          err instanceof ConversionError
+            ? err.message
+            : `Failed to convert "${filename}": ${(err as Error).message}`;
+        return { error: "conversion_failed", message };
+      }
+      continue;
+    }
+
+    if (!looksLikeTextMime(mime) && looksBinary(buf)) {
+      drain();
+      return {
+        error: "unsupported_attachment_type",
+        message: `Attachment "${filename}" appears to be binary (${mime}). Only text files and images (PNG/JPEG/GIF/WebP) are supported — convert it first or attach a text/markdown export.`,
+      };
+    }
     if (textFiles.length >= MAX_TEXT_FILES_PER_PROMPT) {
       drain();
       return {
@@ -135,18 +207,16 @@ async function parseMultipart(
         message: `Up to ${MAX_TEXT_FILES_PER_PROMPT} text attachments per prompt; got more.`,
       };
     }
-    let content = buf.toString("utf8");
-    let truncated = false;
-    if (content.length > MAX_TEXT_PREPEND_BYTES) {
-      content =
-        content.slice(0, MAX_TEXT_PREPEND_BYTES) +
-        `\n... [truncated; original was ${buf.byteLength} bytes]`;
-      truncated = true;
-    }
+    // Whole file goes into the prompt. The per-file size cap
+    // (MAX_FILE_BYTES) is the only upper bound — it exists for
+    // memory-pressure reasons during multipart parsing, not LLM
+    // context. If the composed prompt exceeds the model's context
+    // window, the provider returns a clean error and the user sees
+    // it in their chat — no value in pre-truncating to a guess of
+    // what "fits."
     textFiles.push({
-      filename: file.filename ?? "attachment",
-      content,
-      truncated,
+      filename,
+      content: buf.toString("utf8"),
     });
   }
 
@@ -199,10 +269,15 @@ function sanitizeFilename(name: string): string {
 
 function composePromptText(parsed: ParsedMultipart): string {
   if (parsed.textFiles.length === 0) return parsed.text;
+  // Match the format `expandFileReferences` uses for `@<path>` blocks
+  // — `\`\`\`<lang> file: <name>\n...\n\`\`\`` — so the chat-bubble
+  // renderer's `extractFileRefs` regex picks both up the same way and
+  // both render as collapsible badges instead of raw fenced text.
   const blocks = parsed.textFiles.map((f) => {
     const fence = pickFence(f.content);
     const safeName = sanitizeFilename(f.filename);
-    return `${fence}${safeName}\n${f.content}\n${fence}`;
+    const lang = languageHintForPath(safeName);
+    return `${fence}${lang} file: ${safeName}\n${f.content}\n${fence}`;
   });
   return blocks.join("\n\n") + "\n\n" + parsed.text;
 }
@@ -268,8 +343,9 @@ export const promptRoutes: FastifyPluginAsync = async (fastify) => {
           "  - multipart/form-data: `text` field, optional `streamingBehavior` field, " +
           "    `attachments[]` files. Image attachments (PNG/JPEG/GIF/WEBP, max 4) " +
           "    pass into model context; non-image text files are prepended to the " +
-          "    prompt as fenced code blocks. 10 MB per-file cap. Text files larger " +
-          "    than ~256 KB are truncated with an inline marker.",
+          "    prompt as fenced code blocks. 20 MB per-file cap. Whole-file content " +
+          "    is sent — if the assembled prompt exceeds the model's context window, " +
+          "    the provider returns a clean error.",
         tags: ["sessions"],
         consumes: ["application/json", "multipart/form-data"],
         params: {
@@ -371,18 +447,13 @@ export const promptRoutes: FastifyPluginAsync = async (fastify) => {
       // — see file-references.ts for the rules.
       promptText = await expandFileReferences(promptText, live.workspacePath);
 
-      // Hard cap on the assembled prompt text. Per-file caps already
-      // exist (10 MB upload, ~256 KB text-prepend per file, max 4 text
-      // files) but a 4-attachment prompt with a long pasted user text
-      // could still cumulatively exceed what's reasonable to send to
-      // an LLM. 1 MB is well above any realistic single prompt.
+      // No app-level composed-prompt cap: per-file size limits
+      // already prevent runaway memory pressure during multipart
+      // parsing, and if the assembled prompt genuinely exceeds the
+      // model's context window the provider returns a clean error
+      // that surfaces to the client over SSE — no value in pre-
+      // rejecting based on a guess of what "fits."
       const promptBytes = Buffer.byteLength(promptText, "utf8");
-      if (promptBytes > MAX_COMPOSED_PROMPT_BYTES) {
-        return reply.code(413).send({
-          error: "prompt_too_large",
-          message: `Composed prompt is ${promptBytes} bytes; limit is ${MAX_COMPOSED_PROMPT_BYTES}.`,
-        });
-      }
 
       const opts: Parameters<typeof live.session.prompt>[1] = {};
       if (streamingBehavior !== undefined) opts.streamingBehavior = streamingBehavior;

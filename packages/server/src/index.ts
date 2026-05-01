@@ -200,7 +200,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   // safe to apply globally.
   await fastify.register(multipart, {
     limits: {
-      fileSize: 10 * 1024 * 1024, // 10 MB / file (matches dev plan)
+      fileSize: 20 * 1024 * 1024, // 20 MB / file — must match MAX_FILE_BYTES in routes/prompt.ts
       // Tightened from 8 → 6 after security review: the prompt route
       // accepts at most 4 images + 4 text files, so 6 is the smallest
       // cap that doesn't constrain real use (one operator may hit
