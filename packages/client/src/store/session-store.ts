@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { api, ApiError, type SessionSummary, type UnifiedSession } from "../lib/api-client";
 import { streamSSE } from "../lib/sse-client";
+import { postCrossTab, subscribeCrossTab } from "../lib/cross-tab";
 
 const ACTIVE_SESSION_KEY = "pi-workbench/active-session-id";
 
@@ -316,6 +317,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         };
       });
       localStorage.setItem(ACTIVE_SESSION_KEY, summary.sessionId);
+      // Cross-tab: tell other browser tabs viewing this project so
+      // their sidebar inserts the new session immediately. Without
+      // this, tab B doesn't know about tab A's session until the
+      // user manually refreshes.
+      postCrossTab({
+        type: "session_created",
+        projectId,
+        session: unified as unknown as Record<string, unknown>,
+      });
       return summary;
     } catch (err) {
       set({ error: err instanceof ApiError ? err.code : (err as Error).message });
@@ -343,6 +353,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         }
         return { byProject };
       });
+      // Cross-tab: other browser tabs reflect the rename in their
+      // sidebar without a refetch.
+      postCrossTab({ type: "session_renamed", sessionId, name: summary.name });
     } catch (err) {
       set({ error: err instanceof ApiError ? err.code : (err as Error).message });
       throw err;
@@ -546,10 +559,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ error: undefined });
     try {
       get().closeStream(sessionId);
+      // Capture projectId before we wipe the entry — cross-tab
+      // listeners only need the id, but we may want to filter by
+      // project later.
+      const priorProjectId = (() => {
+        for (const [pid, list] of Object.entries(get().byProject)) {
+          if (list.some((u) => u.sessionId === sessionId)) return pid;
+        }
+        return undefined;
+      })();
       await api.disposeSession(sessionId, opts);
       set((s) => removeSessionFromState(s, sessionId));
       if (get().activeSessionId === undefined) {
         localStorage.removeItem(ACTIVE_SESSION_KEY);
+      }
+      // Cross-tab: other browser tabs drop the session from their
+      // sidebar without waiting for their SSE to 404 on next
+      // reconnect (the SSE 404 path stays in place as a safety net
+      // for sessions deleted out-of-band — server restart, manual
+      // JSONL cleanup, etc.).
+      if (priorProjectId !== undefined) {
+        postCrossTab({ type: "session_deleted", projectId: priorProjectId, sessionId });
       }
     } catch (err) {
       set({ error: err instanceof ApiError ? err.code : (err as Error).message });
@@ -883,4 +913,95 @@ function summarizeToolInput(name: string, input: Record<string, unknown>): strin
       return undefined;
     }
   }
+}
+
+// ----- cross-tab session sync -----
+//
+// Listens for `session_created` / `session_deleted` / `session_renamed`
+// broadcasts from sibling browser tabs and applies them to this tab's
+// store. Server state IS the source of truth — broadcasts are pure
+// hints. A tab that misses one (e.g. opened later) still recovers via
+// the existing refetch paths (project-switch reload, SSE 404 catch).
+//
+// Module-level (not per-store-construction) so HMR re-evaluating the
+// module doesn't accumulate listeners. Same pattern auth-store uses
+// for its onUnauthorized handler.
+declare global {
+  var __piWorkbenchSessionCrossTabRegistered: boolean | undefined;
+  var __piWorkbenchSessionCrossTabCleanup: (() => void) | undefined;
+}
+if (!globalThis.__piWorkbenchSessionCrossTabRegistered) {
+  globalThis.__piWorkbenchSessionCrossTabCleanup = subscribeCrossTab((msg) => {
+    if (msg.type === "session_created") {
+      // Insert the new session into this tab's local list. Idempotent
+      // — if we already know about it (race with our own next refetch),
+      // skip. The payload is a plain object — coerce defensively to
+      // UnifiedSession; missing fields fall back to safe defaults so a
+      // malformed broadcast can't crash the sidebar.
+      const s = msg.session;
+      const sessionId = typeof s.sessionId === "string" ? s.sessionId : undefined;
+      if (sessionId === undefined) return;
+      const unified: UnifiedSession = {
+        sessionId,
+        projectId: msg.projectId,
+        isLive: s.isLive === true,
+        workspacePath: typeof s.workspacePath === "string" ? s.workspacePath : "",
+        lastActivityAt:
+          typeof s.lastActivityAt === "string" ? s.lastActivityAt : new Date().toISOString(),
+        createdAt: typeof s.createdAt === "string" ? s.createdAt : new Date().toISOString(),
+        messageCount: typeof s.messageCount === "number" ? s.messageCount : 0,
+        firstMessage: typeof s.firstMessage === "string" ? s.firstMessage : "",
+      };
+      if (typeof s.name === "string") unified.name = s.name;
+      useSessionStore.setState((st) => {
+        const existing = st.byProject[msg.projectId] ?? [];
+        if (existing.some((u) => u.sessionId === sessionId)) return {};
+        return {
+          byProject: { ...st.byProject, [msg.projectId]: [unified, ...existing] },
+        };
+      });
+      return;
+    }
+    if (msg.type === "session_deleted") {
+      // Same cleanup path as the local disposeSession action — drops
+      // the session from byProject + every per-session map and clears
+      // activeSessionId if it pointed there.
+      useSessionStore.setState((st) => removeSessionFromState(st, msg.sessionId));
+      if (useSessionStore.getState().activeSessionId === undefined) {
+        try {
+          localStorage.removeItem(ACTIVE_SESSION_KEY);
+        } catch {
+          // private-mode storage failure — fine
+        }
+      }
+      return;
+    }
+    if (msg.type === "session_renamed") {
+      useSessionStore.setState((st) => {
+        const byProject: Record<string, UnifiedSession[]> = {};
+        for (const [pid, list] of Object.entries(st.byProject)) {
+          byProject[pid] = list.map((u) => {
+            if (u.sessionId !== msg.sessionId) return u;
+            const next: UnifiedSession = { ...u };
+            if (msg.name !== undefined) next.name = msg.name;
+            else delete next.name;
+            return next;
+          });
+        }
+        return { byProject };
+      });
+      return;
+    }
+  });
+  globalThis.__piWorkbenchSessionCrossTabRegistered = true;
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    if (globalThis.__piWorkbenchSessionCrossTabCleanup) {
+      globalThis.__piWorkbenchSessionCrossTabCleanup();
+    }
+    globalThis.__piWorkbenchSessionCrossTabRegistered = false;
+    globalThis.__piWorkbenchSessionCrossTabCleanup = undefined;
+  });
 }
