@@ -15,8 +15,39 @@ env:
   IMAGE_BASE: pi-workbench
 
 jobs:
+  # Gate the release on the tag and the in-tree versions agreeing.
+  # Catches the "tagged v1.0.1 but forgot to bump package.json" mistake
+  # before we spend ~10 minutes building two-arch images that would ship
+  # mislabeled. All three workspace package.json files are checked because
+  # `scripts/bump-version.sh` moves them in lockstep — drift means
+  # someone bumped manually and forgot one.
+  check-version:
+    name: Verify tag matches package.json
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare tag against package.json versions
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          echo "Tag version: $tag"
+          fail=0
+          for f in package.json packages/server/package.json packages/client/package.json; do
+            v=$(node -p "require('./$f').version")
+            if [ "$v" != "$tag" ]; then
+              echo "::error file=$f::version $v does not match tag $tag"
+              fail=1
+            else
+              echo "  $f -> $v ✓"
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::Tag/package.json version drift. Re-run scripts/bump-version.sh and re-tag." >&2
+            exit 1
+          fi
+
   build:
     name: Build ${{ matrix.platform }}
+    needs: check-version
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read

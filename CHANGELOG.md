@@ -20,6 +20,19 @@ the README for the support window policy.
   in the freshly-spawned shell. Reattach to an existing PTY does not
   re-source so manually-switched venvs are preserved.
 
+### Build & release
+
+- **Release tooling.** New `scripts/bump-version.sh <new-version>` that
+  bumps the root and workspace `package.json` files in lockstep, refreshes
+  `package-lock.json`, and rewrites the `## [Unreleased]` section in
+  `CHANGELOG.md` to a dated release header. Refuses to run on a dirty
+  working tree, on a downward / equal version, or with an empty Unreleased
+  body (overridable via `--allow-empty`).
+- **Tag/version drift gate.** The release workflow now runs a
+  `check-version` job on every `v*` tag push that fails the build if the
+  tag doesn't match `package.json#version` in all three workspaces. Catches
+  the "tagged but forgot to bump" mistake before any image is pushed.
+
 ## [1.0.0] — 2026-05-01
 
 First tagged release. The browser workbench is feature-complete against the
