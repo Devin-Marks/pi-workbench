@@ -1,5 +1,6 @@
 import {
   mkdir,
+  open as fsOpen,
   readFile as fsReadFile,
   readdir,
   realpath,
@@ -408,6 +409,51 @@ function looksBinary(buf: Buffer): boolean {
     if (buf[i] === 0) return true;
   }
   return false;
+}
+
+/**
+ * Lightweight existence + safety + binary-sniff for `@<path>` chat
+ * references. Doesn't read the whole file — just verifies the path is
+ * safe, stats it, and peeks the first 8 KB for the binary heuristic.
+ *
+ * Used by `expandFileReferences` so we can leave a literal `@<path>`
+ * marker in the prompt (the model handles loading content via its
+ * read tool) without burning the read on attestable text files of
+ * any size.
+ *
+ * Throws the same error classes as `readFile` (PathOutsideRootError,
+ * NotFoundError, NotAFileError) so the caller's existing error
+ * handling applies.
+ */
+export interface ReferenceCheckResult {
+  path: string;
+  size: number;
+  binary: boolean;
+}
+
+export async function checkFileReference(
+  absPath: string,
+  root: string,
+): Promise<ReferenceCheckResult> {
+  const resolved = await verifyPathSafe(absPath, root);
+  const st = await stat(resolved).catch(() => undefined);
+  if (st === undefined) throw new NotFoundError(resolved);
+  if (!st.isFile()) throw new NotAFileError(resolved);
+  // Real partial read — open the file and read just the first 8 KB
+  // for the NUL-byte heuristic. Avoids slurping the whole file just
+  // to peek at its prefix.
+  const fh = await fsOpen(resolved, "r");
+  try {
+    const buf = Buffer.alloc(8000);
+    const { bytesRead } = await fh.read(buf, 0, 8000, 0);
+    return {
+      path: resolved,
+      size: st.size,
+      binary: looksBinary(buf.subarray(0, bytesRead)),
+    };
+  } finally {
+    await fh.close();
+  }
 }
 
 /* ----------------------------- write ----------------------------- */
