@@ -3,6 +3,7 @@ import { Image as ImageIcon, Paperclip, X } from "lucide-react";
 import { api, ApiError, type ProvidersListing } from "../lib/api-client";
 import { EMPTY_MESSAGES, useSessionStore, type AgentMessageLike } from "../store/session-store";
 import { useActiveProject } from "../store/project-store";
+import { useUiStore } from "../store/ui-store";
 
 /**
  * Pull the user's prior prompts out of the session message history,
@@ -165,6 +166,117 @@ export function ChatInput({ sessionId }: Props) {
   const [acSuggestions, setAcSuggestions] = useState<string[]>([]);
   const [acSelectedIdx, setAcSelectedIdx] = useState(0);
   const acFetchSeqRef = useRef(0); // discard stale fetches on rapid typing
+
+  // ----- /-commands (slash command palette) -----
+  // Triggered when the WHOLE input starts with `/`. The user types
+  // `/co` to filter; ↑/↓ to navigate; Enter or Tab to execute. Esc
+  // closes. Backspacing through the `/` closes too. Each command is
+  // a synchronous handler defined below; commands that need server
+  // I/O resolve via the existing api-client / store actions.
+  const openSettings = useUiStore((s) => s.openSettings);
+  const [slashSelectedIdx, setSlashSelectedIdx] = useState(0);
+  const slashOpen = text.startsWith("/") && !text.includes("\n");
+  const slashQuery = slashOpen ? (text.slice(1).split(/\s/)[0] ?? "") : "";
+
+  interface SlashCommand {
+    name: string; // "/compact"
+    description: string;
+    /** When false, the command is in the catalog but disabled (gray
+     *  + non-selectable). Used by `/abort` to reflect "session not
+     *  streaming." */
+    available: boolean;
+    run: () => void | Promise<void>;
+  }
+
+  const slashCatalog = useMemo<SlashCommand[]>(() => {
+    const commands: SlashCommand[] = [
+      {
+        name: "/compact",
+        description: "Manually compact the session context",
+        available: !isStreaming,
+        run: async () => {
+          try {
+            await api.compact(sessionId);
+            reloadMessages(sessionId);
+          } catch (err) {
+            const code = err instanceof ApiError ? err.code : (err as Error).message;
+            setAttachmentError(`Compact failed: ${code}`);
+          }
+        },
+      },
+      {
+        name: "/clear",
+        description: "Compact context (alias for /compact)",
+        available: !isStreaming,
+        run: async () => {
+          try {
+            await api.compact(sessionId);
+            reloadMessages(sessionId);
+          } catch (err) {
+            const code = err instanceof ApiError ? err.code : (err as Error).message;
+            setAttachmentError(`Clear failed: ${code}`);
+          }
+        },
+      },
+      {
+        name: "/abort",
+        description: "Stop the agent (alias for the Abort button)",
+        available: isStreaming,
+        run: () => abortSession(sessionId),
+      },
+      {
+        name: "/settings",
+        description: "Open the Settings panel",
+        available: true,
+        run: () => openSettings(),
+      },
+      {
+        name: "/skills",
+        description: "Open Settings → Skills",
+        available: true,
+        run: () => openSettings("skills"),
+      },
+      {
+        name: "/mcp",
+        description: "Open Settings → MCP",
+        available: true,
+        run: () => openSettings("mcp"),
+      },
+      {
+        name: "/providers",
+        description: "Open Settings → Providers",
+        available: true,
+        run: () => openSettings("providers"),
+      },
+      {
+        name: "/help",
+        description: "Show what `/`, `!`, `@` do in the input",
+        available: true,
+        run: () => {
+          setAttachmentError(
+            "/<cmd> runs a workbench command (compact, abort, settings, …). " +
+              "!cmd runs bash (output → next LLM context); !!cmd runs bash local-only. " +
+              "@<path> references a project file (autocomplete from the popover).",
+          );
+        },
+      },
+    ];
+    return commands;
+  }, [isStreaming, sessionId, abortSession, reloadMessages, openSettings]);
+
+  const slashFiltered = useMemo(() => {
+    const q = slashQuery.toLowerCase();
+    if (q.length === 0) return slashCatalog;
+    return slashCatalog.filter((c) => c.name.slice(1).toLowerCase().startsWith(q));
+  }, [slashCatalog, slashQuery]);
+
+  const slashRunSelected = (): void => {
+    const cmd = slashFiltered[slashSelectedIdx];
+    if (cmd === undefined || !cmd.available) return;
+    setText("");
+    setSlashSelectedIdx(0);
+    void cmd.run();
+  };
   // Timestamp of the most recent Esc keystroke; second Esc within
   // DOUBLE_ESC_WINDOW_MS triggers abort. Lives in a ref so it
   // doesn't force a re-render on every Esc.
@@ -354,6 +466,19 @@ export function ChatInput({ sessionId }: Props) {
     // sending "look at this" with an image but no caption is a
     // common path. Server still rejects entirely-empty prompts.
     if ((value.length === 0 && attachments.length === 0) || submitting) return;
+    // /-command dispatch — the keyboard path (Enter) handles this
+    // first, but a click on Send also lands here and a `/foo` typed
+    // input shouldn't slip through to the LLM as a regular prompt.
+    if (slashOpen) {
+      if (slashFiltered.length > 0) {
+        slashRunSelected();
+      } else {
+        setAttachmentError(
+          `Unknown command "${text.split(/\s/)[0] ?? text}". Type /help to see commands.`,
+        );
+      }
+      return;
+    }
     setSubmitting(true);
     try {
       // Bash exec dispatch — `!cmd` includes the result in the next
@@ -416,6 +541,47 @@ export function ChatInput({ sessionId }: Props) {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
+    // ----- /-command palette keyboard handling -----
+    // The palette is open whenever `slashOpen` is true (text starts
+    // with `/`, no newline). Same key contract as the @-completion
+    // popover.
+    if (slashOpen) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setText("");
+        return;
+      }
+      // The remaining nav/select keys only mean something when the
+      // palette has at least one matching command. With zero matches
+      // we let the keys fall through — Backspace can still erase
+      // the `/` to drop out of palette mode and send the literal
+      // text to the LLM.
+      if (slashFiltered.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSlashSelectedIdx((i) => Math.min(i + 1, slashFiltered.length - 1));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSlashSelectedIdx((i) => Math.max(i - 1, 0));
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          slashRunSelected();
+          return;
+        }
+      } else if (e.key === "Enter" && !e.shiftKey) {
+        // Open palette + no matches + Enter: refuse rather than
+        // silently sending the literal `/bogus` text to the LLM.
+        e.preventDefault();
+        setAttachmentError(
+          `Unknown command "${text.split(/\s/)[0] ?? text}". Type /help to see commands, or backspace the leading / to send as a prompt.`,
+        );
+        return;
+      }
+    }
     // ----- @-completion popover keyboard handling -----
     // Take priority over the regular Enter-submits / arrow-history
     // paths when the popover is visible, so navigation + insert work
@@ -661,6 +827,47 @@ export function ChatInput({ sessionId }: Props) {
             <Paperclip size={14} />
           </button>
           <div className="relative flex-1">
+            {/* /-command palette — opens whenever the input starts
+                with `/` and has no newline. Listed top-to-bottom in
+                catalog order; filtered by `slashQuery` (chars after
+                the `/` up to the first whitespace). Disabled
+                commands (e.g. /abort when not streaming) render
+                grayed and don't accept Enter. */}
+            {slashOpen && slashFiltered.length > 0 && (
+              <div className="absolute bottom-full left-0 right-0 z-10 mb-1 overflow-hidden rounded-md border border-neutral-700 bg-neutral-900 shadow-lg">
+                <div className="max-h-64 overflow-y-auto py-1">
+                  {slashFiltered.map((cmd, i) => (
+                    <button
+                      key={cmd.name}
+                      onMouseDown={(ev) => {
+                        ev.preventDefault();
+                        if (!cmd.available) return;
+                        setSlashSelectedIdx(i);
+                        slashRunSelected();
+                      }}
+                      onMouseEnter={() => setSlashSelectedIdx(i)}
+                      disabled={!cmd.available}
+                      className={`block w-full px-3 py-1 text-left text-[12px] ${
+                        i === slashSelectedIdx && cmd.available
+                          ? "bg-neutral-800 text-neutral-100"
+                          : "text-neutral-300 hover:bg-neutral-900/80"
+                      } ${cmd.available ? "" : "opacity-40"}`}
+                      title={
+                        cmd.available
+                          ? cmd.description
+                          : `${cmd.description} — unavailable right now`
+                      }
+                    >
+                      <span className="font-mono text-neutral-200">{cmd.name}</span>
+                      <span className="ml-2 text-[10px] text-neutral-500">{cmd.description}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="border-t border-neutral-800 px-3 py-1 text-[10px] text-neutral-500">
+                  ↑↓ navigate · Enter/Tab run · Esc cancel
+                </div>
+              </div>
+            )}
             {/* @-completion popover — anchored above the textarea.
                 Hidden when there's no @ token at the caret OR no
                 matching files. Bottom-up listing so the highlighted
@@ -715,7 +922,7 @@ export function ChatInput({ sessionId }: Props) {
                   ? "Auto-retry in progress — your message will be queued and sent after the retry completes…"
                   : isStreaming
                     ? "Steer the agent (Enter to send, Shift+Enter for newline)…"
-                    : "Ask pi (Enter to send, Shift+Enter for newline) — `!cmd` runs bash, `@path` references files…"
+                    : "Ask pi (Enter to send, Shift+Enter for newline) — `/` runs commands, `!` runs bash, `@path` references files…"
               }
               title={
                 isAutoRetrying

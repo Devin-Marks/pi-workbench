@@ -18,6 +18,7 @@ import { EditorPanel } from "./components/EditorPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { McpStatusBadge } from "./components/McpStatusBadge";
 import { useMcpStore } from "./store/mcp-store";
+import { useUiStore, type SettingsTab } from "./store/ui-store";
 import { TurnDiffPanel } from "./components/TurnDiffPanel";
 import { GitPanel } from "./components/GitPanel";
 import { SearchPanel } from "./components/SearchPanel";
@@ -235,6 +236,22 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [settingsOpen]);
 
+  // ui-store: ChatInput's `/settings`, `/skills`, `/mcp`, `/providers`
+  // slash commands set `settingsRequest` here. We open the panel and
+  // (if a tab was specified) hand the requested tab to SettingsPanel
+  // via `initialTab`. Cleared after handling so a second request to
+  // the same tab still fires (the seq counter on the store guarantees
+  // re-render even when tab is identical).
+  const settingsRequest = useUiStore((s) => s.settingsRequest);
+  const clearSettingsRequest = useUiStore((s) => s.clearSettingsRequest);
+  const [pendingSettingsTab, setPendingSettingsTab] = useState<SettingsTab | undefined>(undefined);
+  useEffect(() => {
+    if (settingsRequest === undefined) return;
+    setSettingsOpen(true);
+    if (settingsRequest.tab !== undefined) setPendingSettingsTab(settingsRequest.tab);
+    clearSettingsRequest();
+  }, [settingsRequest, clearSettingsRequest]);
+
   useEffect(() => {
     void bootstrap();
   }, [bootstrap]);
@@ -339,7 +356,15 @@ export function App() {
         </div>
       </header>
 
-      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsPanel
+          onClose={() => {
+            setSettingsOpen(false);
+            setPendingSettingsTab(undefined);
+          }}
+          {...(pendingSettingsTab !== undefined ? { initialTab: pendingSettingsTab } : {})}
+        />
+      )}
 
       <div className="flex flex-1 flex-col overflow-hidden">
         <div className="flex flex-1 overflow-hidden">

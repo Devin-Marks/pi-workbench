@@ -18,6 +18,11 @@ type Tab = "providers" | "agent" | "mcp" | "skills" | "appearance";
 
 interface Props {
   onClose: () => void;
+  /** Optional tab to land on when the panel opens (or re-opens). The
+   *  slash-command palette uses this to route `/skills`, `/mcp`, etc.
+   *  to the right tab. Honored on every change of value, so the
+   *  parent can re-fire the same tab via a different render path. */
+  initialTab?: Tab;
 }
 
 /**
@@ -40,7 +45,7 @@ interface Props {
  * reflect inflight loads. The panel is read-fresh on every open — no
  * cross-mount caching, since config is small and rarely changes.
  */
-export function SettingsPanel({ onClose }: Props) {
+export function SettingsPanel({ onClose, initialTab }: Props) {
   const minimal = useUiConfigStore((s) => s.minimal);
   // Minimal mode hides Providers + Agent (those are configured at
   // the deploy level when MINIMAL_UI is set), so the default tab
@@ -53,12 +58,21 @@ export function SettingsPanel({ onClose }: Props) {
         : (["providers", "agent", "mcp", "skills", "appearance"] as const),
     [minimal],
   );
-  const [tab, setTab] = useState<Tab>(minimal ? "skills" : "providers");
+  const [tab, setTab] = useState<Tab>(initialTab ?? (minimal ? "skills" : "providers"));
   // If the config flips after mount (rare but possible during hot-
   // reload in dev), pull the active tab back into the visible set.
   useEffect(() => {
     if (!visibleTabs.includes(tab)) setTab(visibleTabs[0]!);
   }, [visibleTabs, tab]);
+  // External-tab-request: slash commands (`/skills`, `/mcp`, etc.)
+  // open the panel via ui-store and pass the requested tab through
+  // App. Re-fire on every change so opening to the same tab twice
+  // still routes correctly.
+  useEffect(() => {
+    if (initialTab !== undefined && visibleTabs.includes(initialTab)) {
+      setTab(initialTab);
+    }
+  }, [initialTab, visibleTabs]);
   const [error, setError] = useState<string | undefined>(undefined);
 
   return (

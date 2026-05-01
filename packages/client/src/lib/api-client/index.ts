@@ -1013,6 +1013,24 @@ export const api = {
   abort: (id: string) =>
     request(`/api/v1/sessions/${encodeURIComponent(id)}/abort`, vVoid, { method: "POST" }),
   /**
+   * Manually compact the session context. Server route accepts an
+   * optional customInstructions string; v1 of the slash-command
+   * palette doesn't expose that surface, so we always omit it.
+   */
+  compact: (id: string) =>
+    request(
+      `/api/v1/sessions/${encodeURIComponent(id)}/compact`,
+      (v, s) => {
+        if (!isObject(v)) fail(s, "expected compact result object");
+        return {
+          summary: typeof v.summary === "string" ? v.summary : undefined,
+          tokensBefore: typeof v.tokensBefore === "number" ? v.tokensBefore : undefined,
+          tokensAfter: typeof v.tokensAfter === "number" ? v.tokensAfter : undefined,
+        };
+      },
+      { method: "POST", body: {} },
+    ),
+  /**
    * Run a one-shot bash command in the session's project cwd. Mirrors
    * pi-tui's `!` / `!!` semantics — the chat input dispatches here on
    * either prefix. With `excludeFromContext: true` (the `!!` form) the
