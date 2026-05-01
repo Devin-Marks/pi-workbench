@@ -7,7 +7,12 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/pi-workbench
+  # GHCR rejects mixed-case repository names. `github.repository_owner`
+  # preserves the original casing of the GitHub username (e.g.
+  # `Devin-Marks`), which would push to `ghcr.io/Devin-Marks/...` and
+  # fail with "repository name must be lowercase". Each job sets
+  # IMAGE_NAME to the lowercased value via GITHUB_ENV in a setup step.
+  IMAGE_BASE: pi-workbench
 
 jobs:
   build:
@@ -26,6 +31,15 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compute lowercase image name
+        # GHCR requires lowercase repo names; ${{ github.repository_owner }}
+        # preserves the original casing. Lowercase via bash parameter
+        # expansion and export to GITHUB_ENV so subsequent steps see it
+        # as ${{ env.IMAGE_NAME }}.
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "IMAGE_NAME=${OWNER,,}/${IMAGE_BASE}" >> "$GITHUB_ENV"
 
       - name: Prepare platform pair
         id: prep
@@ -88,6 +102,12 @@ jobs:
       - name: Checkout
         # Needed so the changelog-extraction step can read CHANGELOG.md.
         uses: actions/checkout@v4
+
+      - name: Compute lowercase image name
+        # See the matching step in the build job for rationale.
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "IMAGE_NAME=${OWNER,,}/${IMAGE_BASE}" >> "$GITHUB_ENV"
 
       - name: Download digests
         uses: actions/download-artifact@v4
