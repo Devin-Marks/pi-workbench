@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import {
   AuthProviderNotFoundError,
   liveProvidersListing,
+  getAllSkillOverrides,
   listSkills,
   readAuthSummary,
   readModelsJsonRedacted,
@@ -109,13 +110,25 @@ const providersListingSchema = {
 
 const skillSchema = {
   type: "object",
-  required: ["name", "description", "source", "filePath", "enabled", "disableModelInvocation"],
+  required: [
+    "name",
+    "description",
+    "source",
+    "filePath",
+    "enabled",
+    "effective",
+    "disableModelInvocation",
+  ],
   properties: {
     name: { type: "string" },
     description: { type: "string" },
     source: { type: "string", enum: ["global", "project"] },
     filePath: { type: "string" },
     enabled: { type: "boolean" },
+    /** Tri-state per-project override; absent = inherit from global. */
+    projectOverride: { type: "string", enum: ["enabled", "disabled"] },
+    /** Resolved state the agent in the queried project would see. */
+    effective: { type: "boolean" },
     disableModelInvocation: { type: "boolean" },
   },
 } as const;
@@ -359,8 +372,53 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ error: "project_not_found" });
       }
       try {
-        const skills = await listSkills(project.path);
+        const skills = await listSkills(project.path, project.id);
         return { skills };
+      } catch (err) {
+        return internalError(reply, err);
+      }
+    },
+  );
+
+  // Cascade view: every per-project override across every project,
+  // for the Settings UI's per-skill expand-and-show-all-projects
+  // affordance. Single small JSON file on disk; one fetch per
+  // tab-open is fine.
+  fastify.get(
+    "/config/skills/overrides",
+    {
+      schema: {
+        description:
+          "All per-project skill overrides across all projects. Returns " +
+          "`{ projects: { <projectId>: { enable: [...], disable: [...] } } }`. " +
+          "Absent project keys mean 'no overrides defined' (the project " +
+          "inherits everything from global).",
+        tags: ["config"],
+        response: {
+          200: {
+            type: "object",
+            required: ["projects"],
+            properties: {
+              projects: {
+                type: "object",
+                additionalProperties: {
+                  type: "object",
+                  required: ["enable", "disable"],
+                  properties: {
+                    enable: { type: "array", items: { type: "string" } },
+                    disable: { type: "array", items: { type: "string" } },
+                  },
+                },
+              },
+            },
+          },
+          500: errorSchema,
+        },
+      },
+    },
+    async (_req, reply) => {
+      try {
+        return await getAllSkillOverrides();
       } catch (err) {
         return internalError(reply, err);
       }
@@ -370,14 +428,21 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.put<{
     Params: { name: string };
     Querystring: { projectId: string };
-    Body: { enabled: boolean };
+    Body: { enabled: boolean; scope?: "global" | "project" };
   }>(
     "/config/skills/:name/enabled",
     {
       schema: {
         description:
-          "Toggle a skill's enabled state. Mutates `settings.skills` (the " +
-          "canonical enable/disable list); other settings are untouched.",
+          "Toggle a skill's enabled state. Default scope=`global` mutates " +
+          "pi's `settings.skills` (canonical enable/disable list shared with " +
+          "the pi TUI). scope=`project` writes to the workbench-private " +
+          "overrides file at `${WORKBENCH_DATA_DIR}/skills-overrides.json` " +
+          "for the project named in `?projectId=`. Project-scope overrides " +
+          "follow tri-state semantics: `enabled` adds, `disabled` removes; " +
+          "absence (cleared via DELETE) inherits from global. Skill changes " +
+          "apply on the NEXT session created in the affected project — live " +
+          "sessions keep the skill set they booted with.",
         tags: ["config"],
         params: {
           type: "object",
@@ -393,7 +458,10 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
           type: "object",
           required: ["enabled"],
           additionalProperties: false,
-          properties: { enabled: { type: "boolean" } },
+          properties: {
+            enabled: { type: "boolean" },
+            scope: { type: "string", enum: ["global", "project"] },
+          },
         },
         response: {
           200: {
@@ -412,7 +480,64 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ error: "project_not_found" });
       }
       try {
-        const skills = await setSkillEnabled(req.params.name, req.body.enabled, project.path);
+        const scope = req.body.scope ?? "global";
+        const skills = await setSkillEnabled(req.params.name, req.body.enabled, project.path, {
+          scope,
+          projectId: project.id,
+        });
+        return { skills };
+      } catch (err) {
+        if (err instanceof SkillNotFoundError) {
+          return reply.code(404).send({ error: "skill_not_found" });
+        }
+        return internalError(reply, err);
+      }
+    },
+  );
+
+  fastify.delete<{
+    Params: { name: string };
+    Querystring: { projectId: string };
+  }>(
+    "/config/skills/:name/enabled",
+    {
+      schema: {
+        description:
+          "Clear a skill's PROJECT override (= return it to inherit from " +
+          "global). Does not affect pi's settings.skills. Use the PUT " +
+          "endpoint to change global state.",
+        tags: ["config"],
+        params: {
+          type: "object",
+          required: ["name"],
+          properties: { name: { type: "string", minLength: 1 } },
+        },
+        querystring: {
+          type: "object",
+          required: ["projectId"],
+          properties: { projectId: { type: "string" } },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["skills"],
+            properties: { skills: { type: "array", items: skillSchema } },
+          },
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const project = await getProject(req.query.projectId);
+      if (project === undefined) {
+        return reply.code(404).send({ error: "project_not_found" });
+      }
+      try {
+        const skills = await setSkillEnabled(req.params.name, undefined, project.path, {
+          scope: "project",
+          projectId: project.id,
+        });
         return { skills };
       } catch (err) {
         if (err instanceof SkillNotFoundError) {

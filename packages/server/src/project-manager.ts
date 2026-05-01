@@ -12,6 +12,7 @@ import {
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
+import { clearProjectOverrides as clearProjectSkillOverrides } from "./skill-overrides.js";
 
 /**
  * Project ids are always `randomUUID()` output. Mirrors the same
@@ -314,6 +315,13 @@ export async function deleteProject(
     const next = projects.filter((p) => p.id !== id);
     if (next.length === projects.length) throw new ProjectNotFoundError(id);
     await writeProjects(next);
+  });
+  // Drop any per-project skill overrides for the deleted project.
+  // Best-effort — a failure here doesn't undo the deletion (project
+  // is already gone). The orphan would just be cosmetic in the UI's
+  // cascade view; it's harmless to read but pointless to keep.
+  await clearProjectSkillOverrides(id).catch((err: unknown) => {
+    warn({ err, id }, "skill-overrides cleanup failed");
   });
   if (opts.cascadeSessionDir === true) {
     // Wipe the project's session directory. Best-effort — a missing

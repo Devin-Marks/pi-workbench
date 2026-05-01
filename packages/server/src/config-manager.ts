@@ -5,6 +5,13 @@ import { AuthStorage, ModelRegistry, type Skill, loadSkills } from "@mariozechne
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { config } from "./config.js";
 import { makeLock } from "./concurrency.js";
+import {
+  getProjectSkillState,
+  readSkillOverrides,
+  setProjectSkillOverride,
+  type SkillOverrides,
+  type SkillOverrideState,
+} from "./skill-overrides.js";
 
 const MODELS_FILE = (): string => join(config.piConfigDir, "models.json");
 const AUTH_FILE = (): string => join(config.piConfigDir, "auth.json");
@@ -381,12 +388,28 @@ export interface SkillSummary {
   description: string;
   source: "global" | "project";
   filePath: string;
+  /** Whether the skill is enabled in pi's GLOBAL settings.skills list. */
   enabled: boolean;
+  /**
+   * Tri-state per-project override for the project the request asked
+   * about. `undefined` means "inherit global." Only populated when
+   * `listSkills` is called with a `projectId`.
+   */
+  projectOverride?: SkillOverrideState;
+  /**
+   * The resolved state the agent in this project would actually see —
+   * `(global ∪ project.enabled) − project.disabled`. Equals `enabled`
+   * when no project context is supplied.
+   */
+  effective: boolean;
   /** When true, this skill is invokable only via /skill:name (not auto-injected). */
   disableModelInvocation: boolean;
 }
 
-export async function listSkills(workspacePath: string): Promise<SkillSummary[]> {
+export async function listSkills(
+  workspacePath: string,
+  projectId?: string,
+): Promise<SkillSummary[]> {
   const result = loadSkills({
     cwd: workspacePath,
     agentDir: config.piConfigDir,
@@ -395,22 +418,46 @@ export async function listSkills(workspacePath: string): Promise<SkillSummary[]>
   });
   const settings = await readSettings();
   const enabled = new Set(settings.skills ?? []);
-  return result.skills.map((s) => skillSummary(s, workspacePath, enabled));
+  const overrides = await readSkillOverrides();
+  return result.skills.map((s) => skillSummary(s, workspacePath, enabled, overrides, projectId));
 }
 
-function skillSummary(s: Skill, workspacePath: string, enabled: Set<string>): SkillSummary {
+function skillSummary(
+  s: Skill,
+  workspacePath: string,
+  enabled: Set<string>,
+  overrides: SkillOverrides,
+  projectId: string | undefined,
+): SkillSummary {
   // The SDK's loadSkills puts global ones under agentDir and project ones
   // under workspacePath/.pi/skills. Use baseDir prefix as the source
   // discriminator since paths can be normalized differently on macOS/Linux.
   const isProject = s.baseDir.startsWith(workspacePath);
-  return {
+  const isEnabledGlobal = enabled.has(s.name);
+  const projectOverride =
+    projectId !== undefined ? getProjectSkillState(overrides, projectId, s.name) : undefined;
+  const effective =
+    projectOverride === "enabled" ? true : projectOverride === "disabled" ? false : isEnabledGlobal;
+  const summary: SkillSummary = {
     name: s.name,
     description: s.description,
     source: isProject ? "project" : "global",
     filePath: s.filePath,
-    enabled: enabled.has(s.name),
+    enabled: isEnabledGlobal,
+    effective,
     disableModelInvocation: s.disableModelInvocation,
   };
+  if (projectOverride !== undefined) summary.projectOverride = projectOverride;
+  return summary;
+}
+
+/**
+ * Returns the full per-project overrides map. Used by the Settings
+ * UI's cascade view to render override rows for projects OTHER than
+ * the active one (e.g. "this skill is disabled in 3 of 8 projects").
+ */
+export async function getAllSkillOverrides(): Promise<SkillOverrides> {
+  return readSkillOverrides();
 }
 
 export class SkillNotFoundError extends Error {
@@ -421,18 +468,47 @@ export class SkillNotFoundError extends Error {
 }
 
 /**
- * Toggle a skill's enabled state. Mutates `settings.skills` (the canonical
- * enable/disable list). The skill must be discoverable in the
- * `loadSkills` result — passing a name that doesn't exist throws
- * SkillNotFoundError so route handlers can return a clean 404.
+ * Toggle a skill's enabled state.
+ *
+ * - `scope: "global"` (the default; back-compat with the original
+ *   one-arg form) writes to pi's `settings.skills` — the canonical
+ *   global enable/disable list.
+ * - `scope: "project"` writes to the workbench-private overrides
+ *   file at `${WORKBENCH_DATA_DIR}/skills-overrides.json` for the
+ *   given `projectId`. Tri-state: `enabled` / `disabled` /
+ *   (passing `enabled: undefined` clears the override = inherit
+ *   from global).
+ *
+ * The skill must be discoverable in the `loadSkills` result — passing
+ * a name that doesn't exist throws SkillNotFoundError so route
+ * handlers can return a clean 404.
  */
 export async function setSkillEnabled(
   name: string,
-  enabled: boolean,
+  enabled: boolean | undefined,
   workspacePath: string,
+  opts?: { scope?: "global" | "project"; projectId?: string },
 ): Promise<SkillSummary[]> {
-  const all = await listSkills(workspacePath);
+  const all = await listSkills(workspacePath, opts?.projectId);
   if (!all.some((s) => s.name === name)) throw new SkillNotFoundError(name);
+  const scope = opts?.scope ?? "global";
+  if (scope === "project") {
+    if (opts?.projectId === undefined) {
+      throw new Error("setSkillEnabled: scope=project requires a projectId");
+    }
+    // Tri-state mapping: true → "enabled", false → "disabled",
+    // undefined → clear (inherit). Project writes don't touch pi's
+    // settings.skills so the global list stays stable across project
+    // switches and other pi clients (TUI) keep their view.
+    const state: SkillOverrideState | undefined =
+      enabled === true ? "enabled" : enabled === false ? "disabled" : undefined;
+    await setProjectSkillOverride(opts.projectId, name, state);
+    return listSkills(workspacePath, opts.projectId);
+  }
+  // global scope (existing behaviour)
+  if (enabled === undefined) {
+    throw new Error("setSkillEnabled: scope=global requires enabled to be true or false");
+  }
   // The skills array is read-modify-write against settings.skills, so
   // serialise the whole sequence under withSettingsLock — without this,
   // toggling two skills in rapid succession (the UI lets the user
@@ -448,5 +524,23 @@ export async function setSkillEnabled(
     const next: SettingsJson = { ...settings, skills: Array.from(list) };
     await atomicWriteJson(SETTINGS_FILE(), next);
   });
-  return listSkills(workspacePath);
+  return listSkills(workspacePath, opts?.projectId);
+}
+
+/**
+ * Read pi's GLOBAL settings.skills + the project's overrides and
+ * return the effective enabled list a session in `projectId` should
+ * see. Used by session-registry to apply the override at session
+ * create via SettingsManager.applyOverrides.
+ */
+export async function effectiveSkillsForProject(projectId: string): Promise<string[]> {
+  const settings = await readSettings();
+  const overrides: SkillOverrides = await readSkillOverrides();
+  const globalEnabled = settings.skills ?? [];
+  const entry = overrides.projects[projectId];
+  if (entry === undefined) return [...globalEnabled];
+  const enabled = new Set(globalEnabled);
+  for (const n of entry.enable) enabled.add(n);
+  for (const n of entry.disable) enabled.delete(n);
+  return Array.from(enabled);
 }

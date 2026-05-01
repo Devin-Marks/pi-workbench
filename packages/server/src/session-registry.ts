@@ -5,10 +5,12 @@ import {
   type AgentSessionEvent,
   createAgentSession,
   SessionManager,
+  SettingsManager,
   type SessionInfo,
 } from "@mariozechner/pi-coding-agent";
 import { config } from "./config.js";
 import { makeDedupe, makeLock } from "./concurrency.js";
+import { effectiveSkillsForProject } from "./config-manager.js";
 import { readProjects } from "./project-manager.js";
 import {
   customToolsForProject as mcpCustomToolsForProject,
@@ -292,9 +294,11 @@ export async function createSession(
   // ignores PI_CONFIG_DIR entirely, breaking auth.json/models.json wiring
   // for Phase 6's prompt route.
   const customTools = await resolveMcpCustomTools(projectId, workspacePath);
+  const settingsManager = await buildSessionSettingsManager(workspacePath, projectId);
   const { session } = await createAgentSession({
     cwd: workspacePath,
     sessionManager,
+    settingsManager,
     agentDir: config.piConfigDir,
     customTools,
   });
@@ -435,9 +439,11 @@ export async function resumeSession(
 
     const sessionManager = SessionManager.open(match.path, dir, workspacePath);
     const customTools = await resolveMcpCustomTools(projectId, workspacePath);
+    const settingsManager = await buildSessionSettingsManager(workspacePath, projectId);
     const { session } = await createAgentSession({
       cwd: workspacePath,
       sessionManager,
+      settingsManager,
       agentDir: config.piConfigDir,
       customTools,
     });
@@ -799,9 +805,11 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
   const dir = sessionDirFor(source.projectId);
   const sessionManager = SessionManager.open(newPath, dir, source.workspacePath);
   const customTools = await resolveMcpCustomTools(source.projectId, source.workspacePath);
+  const settingsManager = await buildSessionSettingsManager(source.workspacePath, source.projectId);
   const { session } = await createAgentSession({
     cwd: source.workspacePath,
     sessionManager,
+    settingsManager,
     agentDir: config.piConfigDir,
     customTools,
   });
@@ -836,9 +844,14 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
         source.projectId,
         source.workspacePath,
       );
+      const restoredSettingsManager = await buildSessionSettingsManager(
+        source.workspacePath,
+        source.projectId,
+      );
       const { session: restoredSession } = await createAgentSession({
         cwd: source.workspacePath,
         sessionManager: restoredManager,
+        settingsManager: restoredSettingsManager,
         agentDir: config.piConfigDir,
         customTools: restoredCustomTools,
       });
@@ -890,6 +903,29 @@ export async function disposeAllSessions(): Promise<void> {
       }),
     ),
   );
+}
+
+/**
+ * Build a SettingsManager whose `skills` field reflects the
+ * effective per-project enabled list (= global ∪ project.enable −
+ * project.disable). Pi reads `settings.skills` via the manager when
+ * the agent boots, so this is how project-scope toggles take effect
+ * WITHOUT mutating pi's actual settings.json on disk (which would
+ * race with the pi TUI sharing the same file).
+ *
+ * `applyOverrides` is runtime-only — pi treats the overrides as an
+ * in-memory layer over what it loaded from disk and never persists
+ * them back. Confirmed against
+ * @mariozechner/pi-coding-agent/dist/core/settings-manager.d.ts.
+ */
+async function buildSessionSettingsManager(
+  workspacePath: string,
+  projectId: string,
+): Promise<SettingsManager> {
+  const sm = SettingsManager.create(workspacePath, config.piConfigDir);
+  const effective = await effectiveSkillsForProject(projectId);
+  sm.applyOverrides({ skills: effective });
+  return sm;
 }
 
 /**

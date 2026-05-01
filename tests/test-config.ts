@@ -314,6 +314,128 @@ async function main(): Promise<void> {
         disabledSkills.find((s) => s.name === "hello")?.enabled === false,
       );
 
+      // ----- per-project overrides (tri-state with global precedence) -----
+      // Re-enable globally so we can test the disable-via-project path.
+      await jsend(base, "PUT", `/api/v1/config/skills/hello/enabled?projectId=${projectId}`, {
+        enabled: true,
+        scope: "global",
+      });
+      // Project-scope: disable in THIS project. Global stays enabled.
+      const projDisable = await jsend(
+        base,
+        "PUT",
+        `/api/v1/config/skills/hello/enabled?projectId=${projectId}`,
+        { enabled: false, scope: "project" },
+      );
+      assert(
+        "scope=project PUT → 200",
+        projDisable.status === 200,
+        JSON.stringify(projDisable.body),
+      );
+      const afterProjDisable = (
+        projDisable.body as {
+          skills: {
+            name: string;
+            enabled: boolean;
+            effective: boolean;
+            projectOverride?: string;
+          }[];
+        }
+      ).skills.find((s) => s.name === "hello");
+      assert(
+        "  global stays enabled",
+        afterProjDisable?.enabled === true,
+        JSON.stringify(afterProjDisable),
+      );
+      assert(
+        "  projectOverride === 'disabled'",
+        afterProjDisable?.projectOverride === "disabled",
+        JSON.stringify(afterProjDisable),
+      );
+      assert(
+        "  effective is false (project disable wins)",
+        afterProjDisable?.effective === false,
+        JSON.stringify(afterProjDisable),
+      );
+
+      // Cascade view shows the override.
+      const overridesView = await jget(base, "/api/v1/config/skills/overrides");
+      assert("GET /config/skills/overrides → 200", overridesView.status === 200);
+      const projects = (
+        overridesView.body as {
+          projects: Record<string, { enable: string[]; disable: string[] }>;
+        }
+      ).projects;
+      assert(
+        "  override file lists this project's disable",
+        projects[projectId]?.disable.includes("hello") === true,
+        JSON.stringify(projects),
+      );
+
+      // pi's settings.json should NOT have absorbed the project override —
+      // project state lives in the workbench-private overrides file.
+      const settingsPostProj = JSON.parse(
+        await readFile(join(configDir, "settings.json"), "utf8"),
+      ) as { skills?: string[] };
+      assert(
+        "  pi settings.skills still lists hello (global view unaffected)",
+        settingsPostProj.skills?.includes("hello") === true,
+      );
+
+      // DELETE clears the project override (= inherit from global).
+      const cleared = await jsend(
+        base,
+        "DELETE",
+        `/api/v1/config/skills/hello/enabled?projectId=${projectId}`,
+      );
+      assert("DELETE /config/skills/:name/enabled → 200", cleared.status === 200);
+      const afterClear = (
+        cleared.body as {
+          skills: { name: string; effective: boolean; projectOverride?: string }[];
+        }
+      ).skills.find((s) => s.name === "hello");
+      assert(
+        "  projectOverride absent after clear",
+        afterClear?.projectOverride === undefined,
+        JSON.stringify(afterClear),
+      );
+      assert(
+        "  effective falls back to global (true)",
+        afterClear?.effective === true,
+        JSON.stringify(afterClear),
+      );
+
+      // Project-scope ENABLE adds a skill that's globally disabled.
+      await jsend(base, "PUT", `/api/v1/config/skills/hello/enabled?projectId=${projectId}`, {
+        enabled: false,
+        scope: "global",
+      });
+      const projEnable = await jsend(
+        base,
+        "PUT",
+        `/api/v1/config/skills/hello/enabled?projectId=${projectId}`,
+        { enabled: true, scope: "project" },
+      );
+      const afterProjEnable = (
+        projEnable.body as {
+          skills: { name: string; enabled: boolean; effective: boolean }[];
+        }
+      ).skills.find((s) => s.name === "hello");
+      assert(
+        "scope=project enable + global disabled → effective true",
+        afterProjEnable?.enabled === false && afterProjEnable.effective === true,
+        JSON.stringify(afterProjEnable),
+      );
+      // Re-enable globally so the rest of the original test sequence
+      // continues to pass (it expects hello to start enabled below).
+      await jsend(base, "PUT", `/api/v1/config/skills/hello/enabled?projectId=${projectId}`, {
+        enabled: true,
+        scope: "global",
+      });
+      // Clean the project override before falling through to the
+      // legacy "PUT enabled: false" assertion below.
+      await jsend(base, "DELETE", `/api/v1/config/skills/hello/enabled?projectId=${projectId}`);
+
       const unknownSkill = await jsend(
         base,
         "PUT",

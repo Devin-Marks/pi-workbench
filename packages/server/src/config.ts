@@ -171,6 +171,14 @@ export const config = Object.freeze({
    */
   mcpConfigFile: join(WORKBENCH_DATA_DIR, "mcp.json"),
   /**
+   * Path to the workbench-private per-project skill overrides file.
+   * Lives in the data dir (NOT in PI_CONFIG_DIR — pi's settings.skills
+   * is global, and not in `<project>/.pi/` — the user picked
+   * workbench-private over team-shared so each install has its own
+   * preferences without bleeding into the project tree).
+   */
+  skillOverridesFile: join(WORKBENCH_DATA_DIR, "skills-overrides.json"),
+  /**
    * Whether `/api/docs` (Swagger UI + OpenAPI JSON spec) is reachable.
    * Defaults to true so Docker / production deploys keep working without
    * extra config (the README quickstart documents `/api/docs`). When
