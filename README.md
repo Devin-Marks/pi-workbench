@@ -6,9 +6,21 @@
 
 A self-hosted browser workbench for the [pi coding agent](https://github.com/badlogic/pi-mono).
 Chat with the agent against your code, browse files, run a terminal, review
-diffs, all from one tab. Single-tenant, container-native.
+diffs, all from one tab.
 
 > Status: in active development. Things will change between releases.
+
+## Why pi-workbench?
+
+- **Self-hosted, single-tenant.** Your code, your provider keys, your container. No cloud.
+  No analytics. No multi-tenant cross-talk. The same machine that runs the agent owns the
+  data the agent reads.
+- **Container-native.** Ships as a Docker image; deploys to Docker Compose, Kubernetes, or
+  OpenShift with the manifests in this repo. Bind-mount your project tree, add an API key,
+  go.
+- **Same API the UI uses.** Every browser interaction is a REST or SSE call documented at
+  `/api/docs`. Scripts, CI pipelines, and the chat UI all hit the same endpoints — no
+  shadow surface.
 
 ## Quick start
 
@@ -26,19 +38,73 @@ session.
 For non-Docker workflows, production deploys, Kubernetes, and configuration
 details, follow the links in [Documentation](#documentation) below.
 
-## What's in the box
+## Features
 
-- **Chat** with the agent over a streaming SSE-backed conversation.
-- **File browser + editor** wired to your project's filesystem, with
-  diff review on every edit the agent makes.
-- **Integrated terminal** in the project's working directory.
-- **Git panel** — status, diff, stage, commit, push, branches, log.
-- **Session branching** — fork at any turn, navigate the tree.
-- **Token + cost inspector** per turn so you see what the agent's
-  spending.
-- **REST + SSE API** — the same surface the UI uses, scriptable from
-  curl / Python / Node. Interactive Swagger at `/api/docs`.
-- **Installable PWA** — add to home screen on desktop or mobile.
+### Sessions & chat
+
+- **Streaming chat** — token-by-token rendering over SSE. Tool calls and their
+  results materialize in the transcript as they happen, not just at the end of a turn.
+- **Branchable session tree** — fork at any prior turn, navigate the resulting tree,
+  bookmark abandoned branches with a label, summarize-on-navigate to keep context.
+- **Per-turn diff panel** — every file the agent touched in the last turn, aggregated
+  into one reviewable changeset. Inline-edit results and project-wide diffs use the
+  same renderer (unified or side-by-side view, your pick).
+- **Context inspector** — token + cost breakdown per turn, lifetime spend, raw
+  message inspector with syntax highlighting, and search across long conversations.
+- **Image + file attachments** — drop into the prompt; the agent sees images natively
+  and gets text-file content as a fenced code block.
+- **Auto-retry on provider errors** — exponential backoff with the retry banner +
+  countdown surfaced in the UI; full error cause-chain logged to the server's stderr.
+
+### Files, code, and git
+
+- **File browser** — tree view with create / rename / delete / move, scoped to the
+  project root with path-traversal protection.
+- **Tabbed CodeMirror editor** — autosave, syntax highlighting, per-file-extension
+  line-wrap toggle (persisted), reload-on-external-change banner.
+- **Workspace search** — ripgrep when available with a Node fallback for substring
+  searches; filter by path globs, regex, case sensitivity.
+- **Git panel** — status, unified or split diff, stage / unstage per file, commit,
+  push, fetch, pull, branch checkout / create / delete, remote management, log with
+  ref decorations, branch graph view.
+- **Integrated terminal** — `node-pty` over WebSocket, persistent across page
+  refresh and project switch (PTY survives 10 minutes of detached idle), per-tab
+  scrollback, multi-tab.
+
+### Configuration & extensibility
+
+- **Provider management** — built-in providers (Anthropic / OpenAI / Google /
+  OpenRouter) plus custom OpenAI-compatible endpoints (vLLM, LiteLLM, Ollama,
+  internal gateways) via `models.json`. Per-provider API keys stored in `auth.json`,
+  presence-only in the API surface (key values never sent to the browser).
+- **MCP server integration** — connect to remote MCP servers over StreamableHTTP or
+  SSE (auto-fallback). Per-project `<project>/.mcp.json` overrides global config on
+  the same name. Header status badge in the app header. Master kill-switch toggle.
+  See [`docs/mcp.md`](./docs/mcp.md).
+- **Skills with per-project overrides** — pi's skills (`.md` files) get a tri-state
+  per-project toggle: enabled, disabled, or inherit-from-global. Cascade view in
+  Settings shows every project's override at a glance.
+- **Five themes** — runtime swap, persisted per browser. Color palettes apply to
+  chrome, editor, and the integrated terminal.
+- **Minimal-mode UI** — `MINIMAL_UI=true` hides terminal, git pane, last-turn pane,
+  providers, and agent settings for locked-down deployments where provider config is
+  managed at the deploy level.
+
+### Auth & operations
+
+- **Browser password + JWT** — short-lived tokens with auto-generated HS256 signing
+  key persisted to the data dir (no `JWT_SECRET` plumbing needed). On first login
+  with the env-supplied password, the user is forced to pick a new one; the new
+  password's scrypt hash takes over and the env value is ignored.
+- **Static API key** — independent of browser auth. Set `API_KEY` for scripts /
+  CI; both can be set together.
+- **Programmatic REST + SSE** — auto-generated OpenAPI 3 spec at `/api/docs/json`
+  and an interactive Swagger UI at `/api/docs`. Same routes the React UI calls.
+- **Installable PWA** — proper manifest with raster + maskable icons, offline page
+  served when the server is unreachable, "Add to Home Screen" on desktop and mobile.
+- **Operator diagnostics** — error cause-chain walker for the SDK's swallowed
+  exceptions (TLS handshake, DNS, ECONNREFUSED), opt-in `DEBUG_FETCH=1` wraps every
+  outbound `fetch` for full request-level visibility.
 
 ## Documentation
 
