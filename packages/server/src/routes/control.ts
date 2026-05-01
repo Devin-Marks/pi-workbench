@@ -12,6 +12,7 @@ import {
   writeSettings,
 } from "../config-manager.js";
 import { config } from "../config.js";
+import { expandFileReferences } from "../file-references.js";
 import { errorSchema, liveSummaryBody, liveSummarySchema } from "./_schemas.js";
 
 /**
@@ -141,12 +142,13 @@ export const controlRoutes: FastifyPluginAsync = async (fastify) => {
       const live = getSession(req.params.id);
       if (live === undefined) return notFound(reply);
       const mode = req.body.mode ?? "steer";
+      // Same `@<path>` expansion as the prompt route — steer/followUp
+      // text is conversationally identical to a fresh prompt; the user
+      // expects file references to work in both places.
+      const text = await expandFileReferences(req.body.text, live.workspacePath);
       // Fire-and-forget: steer/followUp resolve when the message is delivered,
       // which can be many seconds out. The route returns immediately.
-      const target =
-        mode === "followUp"
-          ? live.session.followUp(req.body.text)
-          : live.session.steer(req.body.text);
+      const target = mode === "followUp" ? live.session.followUp(text) : live.session.steer(text);
       target.catch((err: unknown) => {
         fastify.log.warn(
           { err: err instanceof Error ? err.message : String(err), sessionId: req.params.id, mode },

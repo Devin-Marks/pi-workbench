@@ -11,6 +11,7 @@ import {
   deleteEntry,
   downloadStream,
   getTree,
+  listAllFiles,
   makeDirectory,
   moveEntry,
   readFile,
@@ -97,6 +98,21 @@ const readResponseSchema = {
     binary: { type: "boolean" },
   },
 } as const;
+
+/* ----------------------------- helpers ----------------------------- */
+
+/**
+ * Parse + clamp the `limit` query param (string-typed because Fastify
+ * deserializes querystrings as strings). Defaults to 50, caps at 200.
+ * Used by the `@`-completion endpoint where unbounded results would
+ * blow up the popover render.
+ */
+function clampLimit(raw: string | undefined): number {
+  if (raw === undefined) return 50;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return 50;
+  return Math.min(n, 200);
+}
 
 /* ----------------------------- error mapping ----------------------------- */
 
@@ -199,6 +215,90 @@ async function resolveProject(
 /* ----------------------------- routes ----------------------------- */
 
 export const fileRoutes: FastifyPluginAsync = async (fastify) => {
+  // ---- @-completion (chat input file references) ----
+  // Polled on every keystroke inside an `@<query>` token; results
+  // shown in a popover above the input. Returns up to 50 paths
+  // matching the query as a path-substring; ranked so a basename
+  // hit beats a deep-path hit.
+  fastify.get<{ Querystring: { projectId: string; query?: string; limit?: string } }>(
+    "/files/complete",
+    {
+      // Polled per keystroke — silence access logs to keep the
+      // stream readable. Errors still log at warn+.
+      logLevel: "warn",
+      schema: {
+        description:
+          "Flat list of project files matching `query` (path-substring, " +
+          "case-insensitive). Used by the chat input's `@` autocomplete. " +
+          "Skips the same noisy directories as /files/tree. Returns up to " +
+          "`limit` (default 50) POSIX-style paths relative to the project " +
+          "root, ranked so a basename match beats a deep-path match and " +
+          "shorter paths beat longer ones.",
+        tags: ["files"],
+        querystring: {
+          type: "object",
+          required: ["projectId"],
+          properties: {
+            projectId: { type: "string", minLength: 1 },
+            query: { type: "string", maxLength: 256 },
+            limit: { type: "string" },
+          },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["paths"],
+            properties: { paths: { type: "array", items: { type: "string" } } },
+          },
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const project = await getProject(req.query.projectId);
+      if (project === undefined) {
+        return reply.code(404).send({ error: "project_not_found" });
+      }
+      const query = (req.query.query ?? "").toLowerCase();
+      const limit = clampLimit(req.query.limit);
+      try {
+        const all = await listAllFiles(project.path);
+        if (query.length === 0) {
+          // Empty query — return the first `limit` files (alphabetically),
+          // matches editor "Quick Open"-style empty-state behaviour.
+          return { paths: all.sort().slice(0, limit) };
+        }
+        // Score each path: basename match outranks path-substring match;
+        // basename startsWith outranks basename includes; shorter wins
+        // ties. Cheap and predictable.
+        interface Scored {
+          path: string;
+          score: number;
+        }
+        const scored: Scored[] = [];
+        for (const p of all) {
+          const lower = p.toLowerCase();
+          const slash = lower.lastIndexOf("/");
+          const base = slash === -1 ? lower : lower.slice(slash + 1);
+          let score: number;
+          if (base === query) score = 0;
+          else if (base.startsWith(query)) score = 1;
+          else if (base.includes(query)) score = 2;
+          else if (lower.includes(query)) score = 3;
+          else continue;
+          scored.push({ path: p, score });
+        }
+        scored.sort((a, b) =>
+          a.score !== b.score ? a.score - b.score : a.path.length - b.path.length,
+        );
+        return { paths: scored.slice(0, limit).map((s) => s.path) };
+      } catch (err) {
+        return mapError(reply, err);
+      }
+    },
+  );
+
   fastify.get<{ Querystring: { projectId: string; maxDepth?: string } }>(
     "/files/tree",
     {

@@ -342,6 +342,44 @@ export interface ReadResult {
   binary: boolean;
 }
 
+/**
+ * Flat list of every file under `root` (recursive) used by the
+ * chat-input `@` autocomplete. Skips the same directories `getTree`
+ * does. Returns POSIX-style paths RELATIVE to `root` so a single
+ * project's listing transports / sorts predictably; the caller joins
+ * back to `root` when actually reading a file.
+ *
+ * No max-depth — `@` completion is meant to find anything in the
+ * tree. The skip-list keeps `node_modules` etc. out, so the walk
+ * terminates in a reasonable time on real projects. For a 50k-file
+ * monorepo this is probably tens of milliseconds; cache at the
+ * caller (or per-project) if it shows up in profiles.
+ */
+export async function listAllFiles(rootPath: string): Promise<string[]> {
+  const root = resolve(rootPath);
+  const st = await stat(root).catch(() => undefined);
+  if (!st?.isDirectory()) throw new NotFoundError(root);
+  const out: string[] = [];
+  await walkFlat(root, root, "", out);
+  return out;
+}
+
+async function walkFlat(dir: string, root: string, relPath: string, out: string[]): Promise<void> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const name = entry.name;
+    if (entry.isDirectory()) {
+      if (TREE_SKIP_DIRS.has(name)) continue;
+      await walkFlat(join(dir, name), root, relPath === "" ? name : `${relPath}/${name}`, out);
+    } else if (entry.isFile()) {
+      out.push(relPath === "" ? name : `${relPath}/${name}`);
+    }
+    // Symlinks are intentionally skipped — file-manager's read path
+    // realpaths to defeat sym-out-of-root, but the listing surface
+    // doesn't need to invite the failure mode.
+  }
+}
+
 export async function readFile(absPath: string, root: string): Promise<ReadResult> {
   const resolved = await verifyPathSafe(absPath, root);
   const st = await stat(resolved).catch(() => undefined);

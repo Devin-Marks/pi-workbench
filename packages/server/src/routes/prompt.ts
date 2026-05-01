@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { config } from "../config.js";
 import { formatErrorChain } from "../diagnostics.js";
+import { expandFileReferences } from "../file-references.js";
 import { getSession, type LiveSession } from "../session-registry.js";
 import { errorSchema } from "./_schemas.js";
 
@@ -361,6 +362,14 @@ export const promptRoutes: FastifyPluginAsync = async (fastify) => {
         promptText = req.body.text;
         streamingBehavior = req.body.streamingBehavior;
       }
+
+      // Expand `@<path>` file references inline (the chat input's
+      // `@`-autocomplete inserts these markers; server-side
+      // expansion keeps the LLM context as the source of truth and
+      // matches how attachments work). A path that doesn't resolve
+      // to a real file inside the workspace passes through untouched
+      // — see file-references.ts for the rules.
+      promptText = await expandFileReferences(promptText, live.workspacePath);
 
       // Hard cap on the assembled prompt text. Per-file caps already
       // exist (10 MB upload, ~256 KB text-prepend per file, max 4 text

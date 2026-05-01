@@ -1272,6 +1272,31 @@ export const api = {
       ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
     });
   },
+  /**
+   * File-path autocomplete for the chat input's `@` token. Polled per
+   * keystroke (server-side `logLevel: 'warn'` keeps the access logs
+   * clean). Empty query returns the alphabetically-first `limit`
+   * files; non-empty query path-substring matches with basename hits
+   * ranked above deep-path hits.
+   */
+  completeFiles: (
+    projectId: string,
+    query: string,
+    opts?: { limit?: number; signal?: AbortSignal },
+  ) => {
+    const qs = new URLSearchParams({ projectId, query });
+    if (opts?.limit !== undefined) qs.set("limit", String(opts.limit));
+    return request(
+      `/api/v1/files/complete?${qs.toString()}`,
+      (v, s) => {
+        if (!isObject(v) || !Array.isArray(v.paths)) {
+          fail(s, "expected { paths: string[] }");
+        }
+        return { paths: v.paths.filter((p): p is string => typeof p === "string") };
+      },
+      opts?.signal !== undefined ? { signal: opts.signal } : {},
+    );
+  },
   searchFiles: (projectId: string, opts: SearchOptions, signal?: AbortSignal) => {
     const qs = new URLSearchParams({ projectId, q: opts.query });
     if (opts.regex === true) qs.set("regex", "1");

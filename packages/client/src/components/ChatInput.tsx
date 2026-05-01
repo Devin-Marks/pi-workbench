@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { Image as ImageIcon, Paperclip, X } from "lucide-react";
 import { api, ApiError, type ProvidersListing } from "../lib/api-client";
 import { EMPTY_MESSAGES, useSessionStore, type AgentMessageLike } from "../store/session-store";
+import { useActiveProject } from "../store/project-store";
 
 /**
  * Pull the user's prior prompts out of the session message history,
@@ -140,6 +141,30 @@ export function ChatInput({ sessionId }: Props) {
 
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // ----- @-completion (file references in the chat input) -----
+  // The popover is "open" when `acToken` is set; that happens whenever
+  // the caret is inside an `@<query>` token (the `@` is at start-of-
+  // text or after whitespace, with no whitespace between `@` and the
+  // caret). The popover content comes from /files/complete on a 100ms
+  // debounce. Tab/Enter inserts the highlighted suggestion, ↑/↓
+  // navigates, Esc closes. Inserting REPLACES the partial token with
+  // `@<full-path>` (the server expands `@<path>` to a fenced code
+  // block at send time — see file-references.ts).
+  const project = useActiveProject();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  interface AcToken {
+    /** index of the `@` in `text`. */
+    start: number;
+    /** index just past the partial query (= caret position). */
+    end: number;
+    /** the partial query (everything between `@` and `end`). */
+    query: string;
+  }
+  const [acToken, setAcToken] = useState<AcToken | undefined>(undefined);
+  const [acSuggestions, setAcSuggestions] = useState<string[]>([]);
+  const [acSelectedIdx, setAcSelectedIdx] = useState(0);
+  const acFetchSeqRef = useRef(0); // discard stale fetches on rapid typing
   // Timestamp of the most recent Esc keystroke; second Esc within
   // DOUBLE_ESC_WINDOW_MS triggers abort. Lives in a ref so it
   // doesn't force a re-render on every Esc.
@@ -391,6 +416,36 @@ export function ChatInput({ sessionId }: Props) {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
+    // ----- @-completion popover keyboard handling -----
+    // Take priority over the regular Enter-submits / arrow-history
+    // paths when the popover is visible, so navigation + insert work
+    // without sending the prompt by accident.
+    const acOpen = acToken !== undefined && acSuggestions.length > 0;
+    if (acOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setAcSelectedIdx((i) => Math.min(i + 1, acSuggestions.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setAcSelectedIdx((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        const pick = acSuggestions[acSelectedIdx];
+        if (pick !== undefined) {
+          e.preventDefault();
+          acInsert(pick);
+          return;
+        }
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        acClose();
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void submit();
@@ -460,6 +515,97 @@ export function ChatInput({ sessionId }: Props) {
       setHistoryIdx(undefined);
       historyDraftRef.current = "";
     }
+    // Re-evaluate the AC token at the new caret position. We don't
+    // get the caret index from onChange directly; the textarea ref
+    // has it in `selectionStart`. React batches state updates so the
+    // textarea's caret has already moved by the time onChange fires.
+    const caret = textareaRef.current?.selectionStart ?? next.length;
+    const token = detectAcToken(next, caret);
+    setAcToken(token);
+    if (token === undefined) {
+      setAcSuggestions([]);
+    }
+    // Reset the highlighted suggestion when the query changes — the
+    // user typing more characters means the previous selection's
+    // index might point at a now-irrelevant entry.
+    setAcSelectedIdx(0);
+  };
+
+  /** Find the `@<query>` token that contains the caret, if any. */
+  function detectAcToken(value: string, caret: number): AcToken | undefined {
+    // Walk backward from the caret: the token is bounded by either
+    // start-of-string or a whitespace char. If we hit whitespace
+    // before finding an `@`, there's no token. If we hit an `@` whose
+    // PREV char is start-of-string or whitespace, we've got one.
+    let i = caret - 1;
+    while (i >= 0) {
+      const ch = value[i];
+      if (ch === undefined) break;
+      if (/\s/.test(ch)) return undefined;
+      if (ch === "@") {
+        const prev = i === 0 ? " " : value[i - 1];
+        if (prev === undefined || /\s/.test(prev)) {
+          return { start: i, end: caret, query: value.slice(i + 1, caret) };
+        }
+        return undefined; // `email@example.com` — not a marker
+      }
+      i -= 1;
+    }
+    return undefined;
+  }
+
+  // Debounced fetch of suggestions when the AC token changes.
+  // Server's /files/complete is cheap (logLevel:warn keeps the
+  // access logs clean), but we still debounce to avoid one fetch
+  // per keystroke during fast typing. Discard stale responses via a
+  // monotonic sequence counter.
+  useEffect(() => {
+    if (acToken === undefined || project === undefined) return undefined;
+    const seq = acFetchSeqRef.current + 1;
+    acFetchSeqRef.current = seq;
+    const handle = window.setTimeout(() => {
+      api
+        .completeFiles(project.id, acToken.query, { limit: 20 })
+        .then((r) => {
+          if (acFetchSeqRef.current !== seq) return; // stale
+          setAcSuggestions(r.paths);
+          setAcSelectedIdx(0);
+        })
+        .catch(() => {
+          if (acFetchSeqRef.current !== seq) return;
+          setAcSuggestions([]);
+        });
+    }, 100);
+    return () => window.clearTimeout(handle);
+  }, [acToken, project]);
+
+  /** Insert the highlighted suggestion in place of the partial token.
+   *  Cursor lands at the end of the inserted path so the user can keep
+   *  typing (often with a trailing space to start more text). */
+  const acInsert = (path: string): void => {
+    if (acToken === undefined) return;
+    const before = text.slice(0, acToken.start);
+    const after = text.slice(acToken.end);
+    const replacement = `@${path}`;
+    const next = `${before}${replacement}${after}`;
+    setText(next);
+    setAcToken(undefined);
+    setAcSuggestions([]);
+    // Move caret to just after the inserted path. Wrap in
+    // requestAnimationFrame so React's render cycle has updated the
+    // textarea's value before we set the caret.
+    const caret = before.length + replacement.length;
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta === null) return;
+      ta.focus();
+      ta.setSelectionRange(caret, caret);
+    });
+  };
+
+  const acClose = (): void => {
+    setAcToken(undefined);
+    setAcSuggestions([]);
   };
 
   return (
@@ -514,25 +660,72 @@ export function ChatInput({ sessionId }: Props) {
           >
             <Paperclip size={14} />
           </button>
-          <textarea
-            value={text}
-            onChange={(e) => handleTextChange(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder={
-              isAutoRetrying
-                ? "Auto-retry in progress — your message will be queued and sent after the retry completes…"
-                : isStreaming
-                  ? "Steer the agent (Enter to send, Shift+Enter for newline)…"
-                  : "Ask pi (Enter to send, Shift+Enter for newline) — `!cmd` runs bash, `!!cmd` runs without LLM context…"
-            }
-            title={
-              isAutoRetrying
-                ? "The agent is auto-retrying after a provider error. New messages are queued and delivered when the retry succeeds."
-                : undefined
-            }
-            rows={3}
-            className="flex-1 resize-none rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-neutral-500"
-          />
+          <div className="relative flex-1">
+            {/* @-completion popover — anchored above the textarea.
+                Hidden when there's no @ token at the caret OR no
+                matching files. Bottom-up listing so the highlighted
+                item is closest to the input. */}
+            {acToken !== undefined && acSuggestions.length > 0 && (
+              <div className="absolute bottom-full left-0 right-0 z-10 mb-1 overflow-hidden rounded-md border border-neutral-700 bg-neutral-900 shadow-lg">
+                <div className="max-h-64 overflow-y-auto py-1">
+                  {acSuggestions.map((path, i) => (
+                    <button
+                      key={path}
+                      onMouseDown={(ev) => {
+                        // mouseDown (not click) so the textarea
+                        // doesn't lose focus + close the popover
+                        // before our handler fires.
+                        ev.preventDefault();
+                        acInsert(path);
+                      }}
+                      onMouseEnter={() => setAcSelectedIdx(i)}
+                      className={`block w-full truncate px-3 py-1 text-left font-mono text-[12px] ${
+                        i === acSelectedIdx
+                          ? "bg-neutral-800 text-neutral-100"
+                          : "text-neutral-300 hover:bg-neutral-900/80"
+                      }`}
+                      title={path}
+                    >
+                      {path}
+                    </button>
+                  ))}
+                </div>
+                <div className="border-t border-neutral-800 px-3 py-1 text-[10px] text-neutral-500">
+                  ↑↓ navigate · Enter/Tab insert · Esc close
+                </div>
+              </div>
+            )}
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={(e) => handleTextChange(e.target.value)}
+              onKeyDown={onKeyDown}
+              onBlur={() => {
+                // Close on blur — but only on the next tick so a
+                // mousedown on a popover item still fires its handler
+                // first. mouseDown.preventDefault on the buttons
+                // avoids the blur entirely in practice; this is
+                // belt-and-suspenders for tab-out / click-out paths.
+                setTimeout(() => {
+                  if (textareaRef.current !== document.activeElement) acClose();
+                }, 0);
+              }}
+              placeholder={
+                isAutoRetrying
+                  ? "Auto-retry in progress — your message will be queued and sent after the retry completes…"
+                  : isStreaming
+                    ? "Steer the agent (Enter to send, Shift+Enter for newline)…"
+                    : "Ask pi (Enter to send, Shift+Enter for newline) — `!cmd` runs bash, `@path` references files…"
+              }
+              title={
+                isAutoRetrying
+                  ? "The agent is auto-retrying after a provider error. New messages are queued and delivered when the retry succeeds."
+                  : undefined
+              }
+              rows={3}
+              className="w-full resize-none rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-neutral-500"
+            />
+          </div>
           {/*
             Two buttons: Send (always) + Abort (streaming only). Pi's
             SDK picks steer-vs-followUp natively when we POST /steer
