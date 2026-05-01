@@ -17,6 +17,7 @@ import { FileBrowserPanel } from "./components/FileBrowserPanel";
 import { EditorPanel } from "./components/EditorPanel";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { McpStatusBadge } from "./components/McpStatusBadge";
+import { useMcpStore } from "./store/mcp-store";
 import { TurnDiffPanel } from "./components/TurnDiffPanel";
 import { GitPanel } from "./components/GitPanel";
 import { SearchPanel } from "./components/SearchPanel";
@@ -256,6 +257,19 @@ export function App() {
     // path by transitioning isAuthenticated→true with mustChange→false.
     if (isAuthenticated && !mustChangePassword) void loadProjects();
   }, [isAuthenticated, mustChangePassword, loadProjects]);
+
+  // MCP status polling — single 30s ticker shared by the header badge
+  // and the Settings MCP tab. Starts after auth (the route is
+  // protected); stops on logout. Idempotent — safe to call repeatedly.
+  const startMcpPolling = useMcpStore((s) => s.startPolling);
+  const stopMcpPolling = useMcpStore((s) => s.stopPolling);
+  useEffect(() => {
+    if (isAuthenticated && !mustChangePassword) {
+      startMcpPolling();
+    } else {
+      stopMcpPolling();
+    }
+  }, [isAuthenticated, mustChangePassword, startMcpPolling, stopMcpPolling]);
 
   if (!ready) {
     return (

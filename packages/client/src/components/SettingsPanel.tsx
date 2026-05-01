@@ -11,6 +11,7 @@ import {
 } from "../lib/api-client";
 import { useActiveProject } from "../store/project-store";
 import { useUiConfigStore } from "../store/ui-config-store";
+import { useMcpStore } from "../store/mcp-store";
 import { THEME_DEFS, useThemeStore, type ThemeId } from "../lib/theme";
 
 type Tab = "providers" | "agent" | "mcp" | "skills" | "appearance";
@@ -872,40 +873,39 @@ function emptyDraft(): McpDraft {
 
 function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
   const project = useActiveProject();
-  const [enabled, setEnabled] = useState<boolean | undefined>(undefined);
-  const [servers, setServers] = useState<Record<string, McpServerConfig>>({});
-  const [status, setStatus] = useState<McpServerStatus[]>([]);
+  // All polled state lives in mcp-store now (single 30s ticker shared
+  // with the header badge). The tab does its own one-shot per-project
+  // refresh on mount + project switch so the row list reflects the
+  // selected project's .mcp.json without waiting for the next tick.
+  const settings = useMcpStore((s) => s.settings);
+  const servers = useMcpStore((s) => s.globalServers);
+  const status = useMcpStore((s) => s.byProject[project?.id ?? "__no_project__"]?.status ?? []);
+  const refreshProject = useMcpStore((s) => s.refreshProject);
+  const setMcpEnabled = useMcpStore((s) => s.setMcpEnabled);
+  const upsertServer = useMcpStore((s) => s.upsertServer);
+  const deleteServer = useMcpStore((s) => s.deleteServer);
+  const probeServerStore = useMcpStore((s) => s.probeServer);
+
   const [draft, setDraft] = useState<McpDraft | undefined>(undefined);
   /** When set, draft applies to an existing server (PUT replaces). */
   const [editingName, setEditingName] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [probing, setProbing] = useState<string | undefined>(undefined);
 
-  const refresh = async (): Promise<void> => {
-    try {
-      const [s, list] = await Promise.all([api.getMcpSettings(), api.listMcpServers(project?.id)]);
-      setEnabled(s.enabled);
-      setServers(list.servers);
-      setStatus(list.status);
-      onError(undefined);
-    } catch (err) {
-      onError(`Failed to load MCP config: ${errorCode(err)}`);
-    }
-  };
-
   useEffect(() => {
-    void refresh();
+    void refreshProject(project?.id).catch((err: unknown) => {
+      onError(`Failed to load MCP config: ${errorCode(err)}`);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id]);
 
   const toggleMaster = async (next: boolean): Promise<void> => {
     setBusy(true);
     try {
-      const r = await api.setMcpEnabled(next);
-      setEnabled(r.enabled);
+      await setMcpEnabled(next);
       onError(undefined);
-      // Connection counts may shift; refresh status.
-      await refresh();
+      // refreshProject pulls in updated status counts.
+      await refreshProject(project?.id);
     } catch (err) {
       onError(`Failed to toggle MCP: ${errorCode(err)}`);
     } finally {
@@ -918,9 +918,8 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
     if (prev === undefined) return;
     setBusy(true);
     try {
-      await api.upsertMcpServer(name, { ...prev, enabled: next });
+      await upsertServer(name, { ...prev, enabled: next });
       onError(undefined);
-      await refresh();
     } catch (err) {
       onError(`Failed to update server: ${errorCode(err)}`);
     } finally {
@@ -965,11 +964,10 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
     if (Object.keys(headers).length > 0) body.headers = headers;
     setBusy(true);
     try {
-      await api.upsertMcpServer(draft.name, body);
+      await upsertServer(draft.name, body);
       onError(undefined);
       setDraft(undefined);
       setEditingName(undefined);
-      await refresh();
     } catch (err) {
       onError(`Failed to save server: ${errorCode(err)}`);
     } finally {
@@ -981,9 +979,8 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
     if (!window.confirm(`Remove MCP server '${name}' from the global registry?`)) return;
     setBusy(true);
     try {
-      await api.deleteMcpServer(name);
+      await deleteServer(name);
       onError(undefined);
-      await refresh();
     } catch (err) {
       onError(`Failed to remove server: ${errorCode(err)}`);
     } finally {
@@ -994,9 +991,8 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
   const probeServer = async (name: string, scope: "global" | "project"): Promise<void> => {
     setProbing(name);
     try {
-      await api.probeMcpServer(name, scope === "project" ? project?.id : undefined);
+      await probeServerStore(name, scope === "project" ? project?.id : undefined);
       onError(undefined);
-      await refresh();
     } catch (err) {
       onError(`Probe failed for '${name}': ${errorCode(err)}`);
     } finally {
@@ -1004,10 +1000,11 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
     }
   };
 
-  if (enabled === undefined) {
+  if (settings === undefined) {
     return <p className="text-xs italic text-neutral-500">Loading MCP config…</p>;
   }
 
+  const enabled = settings.enabled;
   const globalStatus = status.filter((s) => s.scope === "global");
   const projectStatus = status.filter((s) => s.scope === "project");
 
