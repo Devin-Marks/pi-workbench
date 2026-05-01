@@ -11,7 +11,7 @@ import {
 } from "../lib/api-client";
 import { useActiveProject, useProjectStore } from "../store/project-store";
 import { useUiConfigStore } from "../store/ui-config-store";
-import { useMcpStore } from "../store/mcp-store";
+import { EMPTY_STATUS, useMcpStore } from "../store/mcp-store";
 import { THEME_DEFS, useThemeStore, type ThemeId } from "../lib/theme";
 
 type Tab = "providers" | "agent" | "mcp" | "skills" | "appearance";
@@ -1126,7 +1126,12 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
   // selected project's .mcp.json without waiting for the next tick.
   const settings = useMcpStore((s) => s.settings);
   const servers = useMcpStore((s) => s.globalServers);
-  const status = useMcpStore((s) => s.byProject[project?.id ?? "__no_project__"]?.status ?? []);
+  // Stable EMPTY_STATUS fallback — see store doc-comment. Returning
+  // a fresh `[]` literal from this selector re-renders on every store
+  // update and crashes the tree with "Maximum update depth exceeded."
+  const status = useMcpStore(
+    (s) => s.byProject[project?.id ?? "__no_project__"]?.status ?? EMPTY_STATUS,
+  );
   const refreshProject = useMcpStore((s) => s.refreshProject);
   const setMcpEnabled = useMcpStore((s) => s.setMcpEnabled);
   const upsertServer = useMcpStore((s) => s.upsertServer);

@@ -10,6 +10,17 @@ import {
 const POLL_INTERVAL_MS = 30_000;
 
 /**
+ * Module-level stable empty array. Zustand selectors compare return
+ * values by reference; returning a fresh `[]` from a `useMcpStore(s
+ * => ... ?? [])` selector triggers a re-render on every store update
+ * (the new literal is a different reference even when the underlying
+ * value didn't change), eventually crashing the React tree with
+ * "Maximum update depth exceeded." Mirrors `EMPTY_SESSIONS` in
+ * session-store.ts for the same reason.
+ */
+export const EMPTY_STATUS: McpServerStatus[] = [];
+
+/**
  * Centralised MCP state for every consumer in the client.
  *
  * Why a store and not per-component state: as of v1 there are two
