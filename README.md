@@ -4,6 +4,10 @@
 
 # pi-workbench
 
+[![CI](https://github.com/Devin-Marks/pi-workbench/actions/workflows/ci.yml/badge.svg)](https://github.com/Devin-Marks/pi-workbench/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Devin-Marks/pi-workbench?sort=semver)](https://github.com/Devin-Marks/pi-workbench/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A self-hosted browser workbench for the [pi coding agent](https://github.com/badlogic/pi-mono).
 Chat with the agent against your code, browse files, run a terminal, review
 diffs, all from one tab.
@@ -139,7 +143,8 @@ Support window: only the latest workbench tag is supported. When a
 new tag ships, the previous one is best-effort — security fixes may
 be backported, feature work isn't. Breaking SDK changes that the
 workbench had to absorb show up in the release notes' **Changed**
-section so operators know what to re-test before upgrading.
+section so operators know what to re-test before upgrading. Per-tag
+notes live in [CHANGELOG.md](./CHANGELOG.md).
 
 ## Risks & disclaimer
 
