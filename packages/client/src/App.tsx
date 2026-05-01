@@ -339,7 +339,11 @@ export function App() {
               Terminal
             </button>
           )}
-          {!minimal && <McpStatusBadge />}
+          {/* MCP status badge stays visible in minimal — operators
+              still want to see whether MCP servers are connected,
+              they just can't reconfigure them from a locked-down
+              deploy (the Settings → MCP tab is hidden separately). */}
+          <McpStatusBadge />
           <button
             onClick={() => setSettingsOpen(true)}
             className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-500"
@@ -458,7 +462,13 @@ export function App() {
                       they don't compete for screen real estate. */}
                   <div className="flex border-b border-neutral-800 bg-neutral-900/40">
                     {(minimal
-                      ? (["files", "search"] as const)
+                      ? // Minimal mode keeps Files + Search + Context.
+                        // Context (token usage / message inspector) is
+                        // useful even in locked-down deploys — it's
+                        // read-only and helps users debug their own
+                        // sessions without needing the full diff/git
+                        // toolchain.
+                        (["files", "search", "context"] as const)
                       : (["files", "search", "changes", "git", "context"] as const)
                     ).map((t) => (
                       <button
@@ -499,7 +509,7 @@ export function App() {
                       <TurnDiffPanel />
                     ) : !minimal && rightTab === "git" ? (
                       <GitPanel />
-                    ) : !minimal && rightTab === "context" ? (
+                    ) : rightTab === "context" ? (
                       <ContextInspectorPanel />
                     ) : (
                       // minimal mode: stale persisted "changes"/"git"/"context"

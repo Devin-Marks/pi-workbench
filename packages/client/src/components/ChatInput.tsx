@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Image as ImageIcon, Paperclip, X } from "lucide-react";
+import { AtSign, Image as ImageIcon, Paperclip, X } from "lucide-react";
 import { api, ApiError, type ProvidersListing } from "../lib/api-client";
 import { EMPTY_MESSAGES, useSessionStore, type AgentMessageLike } from "../store/session-store";
 import { useActiveProject } from "../store/project-store";
+import { useUiConfigStore } from "../store/ui-config-store";
 import { useUiStore } from "../store/ui-store";
 
 /**
@@ -22,6 +23,43 @@ import { useUiStore } from "../store/ui-store";
  * trimmed string here, so the consecutive-duplicate dedupe collapses
  * the brief overlap to a single history entry.
  */
+/**
+ * Parse `@<path>` references out of the current draft. Mirrors the
+ * server's regex in `file-references.ts` — same prefix anchor (start
+ * or whitespace), same quoted/unquoted forms. The badge row in the
+ * input header reads from this so users can see which files this turn
+ * will reference.
+ */
+function parseChatFileReferences(text: string): string[] {
+  const re = /(?:^|\s)@(?:"([^"\n]+)"|([^\s]+))/g;
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const p = m[1] ?? m[2];
+    if (p !== undefined) out.push(p);
+  }
+  return out;
+}
+
+/** Escape a string for safe inclusion in a RegExp literal. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Build a regex that matches the `@<path>` (or `@"<path>"`) form
+ * preceded by start-of-string or whitespace, plus any trailing space.
+ * Used by the chip's X button to yank the reference from the draft.
+ */
+function buildFileRefRegex(path: string): RegExp {
+  const escaped = escapeRegExp(path);
+  // Match optional leading whitespace (kept on the line so removing
+  // a chip doesn't yank the user's surrounding space) plus the marker
+  // in either quoted or unquoted form, plus an optional trailing
+  // space so we don't leave a double-space behind.
+  return new RegExp(`(^|\\s)@(?:"${escaped}"|${escaped})\\s?`, "g");
+}
+
 function userHistory(messages: readonly AgentMessageLike[]): string[] {
   const out: string[] = [];
   let last: string | undefined;
@@ -127,6 +165,11 @@ const DOUBLE_ESC_WINDOW_MS = 600;
 
 export function ChatInput({ sessionId }: Props) {
   const isStreaming = useSessionStore((s) => s.streamingBySession[sessionId] ?? false);
+  // Minimal-mode deploys disable the chat-input bash exec (`!` /
+  // `!!`) — locked-down installs can't justify giving end users a
+  // direct shell. The agent's own `bash` tool is unaffected; the
+  // restriction is on the *user* typing raw shell into chat.
+  const minimalUi = useUiConfigStore((s) => s.minimal);
   const banner = useSessionStore((s) => s.bannerBySession[sessionId]);
   // Detect an in-progress auto-retry by the banner shape that
   // session-store sets in applyEvent for `auto_retry_start`. This lets
@@ -174,9 +217,27 @@ export function ChatInput({ sessionId }: Props) {
   // a synchronous handler defined below; commands that need server
   // I/O resolve via the existing api-client / store actions.
   const openSettings = useUiStore((s) => s.openSettings);
+  const chatInsertRequest = useUiStore((s) => s.chatInsertRequest);
+  const clearChatInsertRequest = useUiStore((s) => s.clearChatInsertRequest);
+  const lastChatInsertSeqRef = useRef(0);
   const [slashSelectedIdx, setSlashSelectedIdx] = useState(0);
   const slashOpen = text.startsWith("/") && !text.includes("\n");
   const slashQuery = slashOpen ? (text.slice(1).split(/\s/)[0] ?? "") : "";
+
+  // Bang-prefix mode for the visual treatment around the textarea.
+  // `!!` runs bash local-only (output stays out of LLM context); `!`
+  // runs bash AND feeds the output into the next turn. Both only fire
+  // on submit when the session isn't streaming, so we gate the cue on
+  // the same condition to avoid promising behavior we won't deliver.
+  const bangMode: "context" | "local" | undefined = (() => {
+    if (isStreaming) return undefined;
+    // Bash exec is disabled in minimal — don't promise a mode the
+    // submit handler will refuse.
+    if (minimalUi) return undefined;
+    if (text.startsWith("!!")) return "local";
+    if (text.startsWith("!")) return "context";
+    return undefined;
+  })();
 
   interface SlashCommand {
     name: string; // "/compact"
@@ -250,19 +311,24 @@ export function ChatInput({ sessionId }: Props) {
       },
       {
         name: "/help",
-        description: "Show what `/`, `!`, `@` do in the input",
+        description: minimalUi
+          ? "Show what `/` and `@` do in the input"
+          : "Show what `/`, `!`, `@` do in the input",
         available: true,
         run: () => {
           setAttachmentError(
-            "/<cmd> runs a workbench command (compact, abort, settings, …). " +
-              "!cmd runs bash (output → next LLM context); !!cmd runs bash local-only. " +
-              "@<path> references a project file (autocomplete from the popover).",
+            minimalUi
+              ? "/<cmd> runs a workbench command (compact, abort, settings, …). " +
+                  "@<path> references a project file (autocomplete from the popover)."
+              : "/<cmd> runs a workbench command (compact, abort, settings, …). " +
+                  "!cmd runs bash (output → next LLM context); !!cmd runs bash local-only. " +
+                  "@<path> references a project file (autocomplete from the popover).",
           );
         },
       },
     ];
     return commands;
-  }, [isStreaming, sessionId, abortSession, reloadMessages, openSettings]);
+  }, [isStreaming, sessionId, abortSession, reloadMessages, openSettings, minimalUi]);
 
   const slashFiltered = useMemo(() => {
     const q = slashQuery.toLowerCase();
@@ -292,12 +358,86 @@ export function ChatInput({ sessionId }: Props) {
 
   // Per-file size + count limits mirror the server's. Validating
   // client-side gives instant feedback; the server still re-checks.
-  const MAX_FILE_BYTES = 10 * 1024 * 1024;
+  // The 20 MB cap is the only upper bound — it exists for memory
+  // pressure during multipart parsing, not LLM context. The whole
+  // attached file gets sent; if the model can't fit it the provider
+  // returns a clean error that surfaces in chat.
+  const MAX_FILE_BYTES = 20 * 1024 * 1024;
   const MAX_IMAGES = 4;
   // Server's `files: 8` cap is global (image + text combined). Mirror
   // it client-side so the UI rejects the 9th attachment with a clear
   // message instead of letting the server return `too_many_files`.
   const MAX_TOTAL_FILES = 8;
+  // Common binary file extensions we know the prompt pipeline can't do
+  // anything useful with (only text + supported image MIMEs reach the
+  // LLM). Reject up front for instant feedback; the server's NUL-byte
+  // sniff is the safety net for everything not on this list. Names
+  // here are deliberately conservative — if a format ever becomes
+  // useful (PDF parser, etc.) drop it from this set.
+  const KNOWN_BINARY_EXTENSIONS = new Set([
+    // Office / Visio / OpenDocument — `pdf`, `docx`, `xlsx` are
+    // converted to text server-side and intentionally NOT in this
+    // blocklist. The rest (legacy `.doc`/`.xls`, PowerPoint, Visio,
+    // OpenDocument, RTF) have no conversion path yet and would land
+    // as binary noise in the prompt.
+    "doc",
+    "xls",
+    "ppt",
+    "pptx",
+    "vsd",
+    "vsdx",
+    "odt",
+    "ods",
+    "odp",
+    "rtf",
+    // Archives
+    "zip",
+    "tar",
+    "gz",
+    "bz2",
+    "xz",
+    "7z",
+    "rar",
+    // Executables / native libs
+    "exe",
+    "dll",
+    "so",
+    "dylib",
+    "bin",
+    "o",
+    "a",
+    "class",
+    "jar",
+    "wasm",
+    // Media (and image formats not in IMAGE_MIME_TYPES)
+    "mp3",
+    "mp4",
+    "m4a",
+    "wav",
+    "flac",
+    "ogg",
+    "avi",
+    "mov",
+    "wmv",
+    "mkv",
+    "heic",
+    "heif",
+    "tiff",
+    "tif",
+    "bmp",
+    "ico",
+    "psd",
+    // Fonts / databases / disk images
+    "ttf",
+    "otf",
+    "woff",
+    "woff2",
+    "eot",
+    "sqlite",
+    "db",
+    "iso",
+    "dmg",
+  ]);
   const [attachmentError, setAttachmentError] = useState<string | undefined>(undefined);
 
   const addAttachments = (files: FileList | File[]): void => {
@@ -313,11 +453,22 @@ export function ChatInput({ sessionId }: Props) {
         continue;
       }
       if (f.size > MAX_FILE_BYTES) {
-        setAttachmentError(`"${f.name}" exceeds the 10 MB per-file limit.`);
+        setAttachmentError(`"${f.name}" exceeds the 20 MB per-file limit.`);
         continue;
       }
       if (f.type.startsWith("image/") && imageCount >= MAX_IMAGES) {
         setAttachmentError(`Up to ${MAX_IMAGES} images per message; "${f.name}" dropped.`);
+        continue;
+      }
+      // Known binary types the prompt pipeline can't carry (no PDF /
+      // Office / Visio support yet — only text + supported images
+      // reach the LLM). Reject up front so the user gets immediate
+      // feedback instead of an opaque server-side `unsupported_attachment_type`.
+      const ext = f.name.includes(".") ? f.name.split(".").pop()?.toLowerCase() : undefined;
+      if (ext !== undefined && KNOWN_BINARY_EXTENSIONS.has(ext)) {
+        setAttachmentError(
+          `"${f.name}" is a binary format that the agent can't read directly. Convert to text/markdown (or to a PNG/JPEG screenshot for diagrams) and try again.`,
+        );
         continue;
       }
       next.push(f);
@@ -441,6 +592,32 @@ export function ChatInput({ sessionId }: Props) {
     consumePendingDraft(sessionId);
   }, [pendingDraft, sessionId, consumePendingDraft]);
 
+  // Cross-component chat insert (e.g. file-browser "Add as @ context").
+  // We append the requested text at the END of whatever the user has
+  // typed, separated by a single space when needed so an existing token
+  // doesn't fuse with the new one. Caret moves to the end so the user
+  // can keep typing. Seq-gated so the same fragment doesn't double-fire
+  // on re-renders.
+  useEffect(() => {
+    if (chatInsertRequest === undefined) return;
+    if (chatInsertRequest.seq <= lastChatInsertSeqRef.current) return;
+    lastChatInsertSeqRef.current = chatInsertRequest.seq;
+    const insert = chatInsertRequest.text;
+    setText((prev) => {
+      if (prev.length === 0) return insert;
+      const sep = /\s$/.test(prev) ? "" : " ";
+      return `${prev}${sep}${insert}`;
+    });
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta === null) return;
+      ta.focus();
+      const end = ta.value.length;
+      ta.setSelectionRange(end, end);
+    });
+    clearChatInsertRequest();
+  }, [chatInsertRequest, clearChatInsertRequest]);
+
   const onModelChange = async (value: string): Promise<void> => {
     setModelChoice(value);
     if (value === "") {
@@ -489,6 +666,10 @@ export function ChatInput({ sessionId }: Props) {
       // shell command mid-turn would race the agent's own bash tool
       // for stdin/cwd state and surprise the user.
       if (!isStreaming && /^!!?[^!]/.test(value)) {
+        if (minimalUi) {
+          setAttachmentError("Bash exec is disabled in this deployment.");
+          return;
+        }
         const excludeFromContext = value.startsWith("!!");
         const command = value.slice(excludeFromContext ? 2 : 1).trim();
         if (command.length === 0) {
@@ -752,7 +933,11 @@ export function ChatInput({ sessionId }: Props) {
     if (acToken === undefined) return;
     const before = text.slice(0, acToken.start);
     const after = text.slice(acToken.end);
-    const replacement = `@${path}`;
+    // Wrap paths containing whitespace in double quotes so the
+    // server-side `expandFileReferences` regex can recognize the full
+    // path. The quoted form is documented at file-references.ts.
+    const needsQuotes = /\s/.test(path);
+    const replacement = needsQuotes ? `@"${path}"` : `@${path}`;
     const next = `${before}${replacement}${after}`;
     setText(next);
     setAcToken(undefined);
@@ -774,17 +959,55 @@ export function ChatInput({ sessionId }: Props) {
     setAcSuggestions([]);
   };
 
+  // `@<path>` references in the current draft. The badge row to the
+  // right of the model picker shows the user (and any future
+  // collaborator looking over the shoulder) exactly which files this
+  // turn will reference. Removing the chip strips the matching
+  // `@<path>` token from the input text.
+  const fileRefs = parseChatFileReferences(text);
+
+  const removeFileRef = (path: string): void => {
+    const re = buildFileRefRegex(path);
+    // Replace the match but PRESERVE the captured lead (start anchor
+    // or whitespace) so the surrounding text isn't fused. Trim only
+    // trailing whitespace so we don't strip a deliberate trailing
+    // space the user typed.
+    setText((prev) => prev.replace(re, (_match, lead: string) => lead).trimEnd());
+  };
+
   return (
     <div className="border-t border-neutral-800 bg-neutral-950 px-6 py-3">
       <div className="mx-auto max-w-3xl space-y-2">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <ModelPicker
             providers={providers}
             value={modelChoice}
             onChange={(v) => void onModelChange(v)}
           />
+          {fileRefs.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1">
+              {fileRefs.map((path, i) => (
+                <span
+                  key={`ref-${i}-${path}`}
+                  className="inline-flex max-w-[220px] items-center gap-1 truncate rounded border border-emerald-700/60 bg-emerald-900/20 px-1.5 py-0.5 text-[11px] text-emerald-200"
+                  title={`@${path} — model will use its read tool to load this file when it needs to`}
+                >
+                  <AtSign size={11} className="shrink-0" />
+                  <span className="truncate font-mono">{path}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeFileRef(path)}
+                    className="-mr-0.5 ml-0.5 rounded p-0.5 text-emerald-300/70 hover:bg-emerald-900/40 hover:text-emerald-100"
+                    title={`Remove @${path}`}
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           {modelError !== undefined && (
-            <span className="text-[11px] text-red-400">{modelError}</span>
+            <span className="ml-auto text-[11px] text-red-400">{modelError}</span>
           )}
         </div>
         {error !== undefined && <p className="text-xs text-red-400">Error: {error}</p>}
@@ -922,7 +1145,9 @@ export function ChatInput({ sessionId }: Props) {
                   ? "Auto-retry in progress — your message will be queued and sent after the retry completes…"
                   : isStreaming
                     ? "Steer the agent (Enter to send, Shift+Enter for newline)…"
-                    : "Ask pi (Enter to send, Shift+Enter for newline) — `/` runs commands, `!` runs bash, `@path` references files…"
+                    : minimalUi
+                      ? "Ask pi (Enter to send, Shift+Enter for newline) — `/` runs commands, `@path` references files…"
+                      : "Ask pi (Enter to send, Shift+Enter for newline) — `/` runs commands, `!` runs bash, `@path` references files…"
               }
               title={
                 isAutoRetrying
@@ -930,8 +1155,30 @@ export function ChatInput({ sessionId }: Props) {
                   : undefined
               }
               rows={3}
-              className="w-full resize-none rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-neutral-500"
+              className={`w-full resize-none rounded-md border bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none ${
+                bangMode === "local"
+                  ? "border-amber-500 focus:border-amber-400"
+                  : bangMode === "context"
+                    ? "border-emerald-500 focus:border-emerald-400"
+                    : "border-neutral-700 focus:border-neutral-500"
+              }`}
             />
+            {bangMode !== undefined && (
+              <span
+                className={`pointer-events-none absolute right-2 top-2 select-none rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
+                  bangMode === "local"
+                    ? "bg-amber-500/15 text-amber-300"
+                    : "bg-emerald-500/15 text-emerald-300"
+                }`}
+                title={
+                  bangMode === "local"
+                    ? "!! — runs bash; output stays local (excluded from LLM context)"
+                    : "! — runs bash; output is added to the next turn's LLM context"
+                }
+              >
+                {bangMode === "local" ? "bash · local" : "bash · context"}
+              </span>
+            )}
           </div>
           {/*
             Two buttons: Send (always) + Abort (streaming only). Pi's
@@ -964,11 +1211,12 @@ export function ChatInput({ sessionId }: Props) {
             )}
           </div>
         </div>
-        <p className="text-[10px] text-neutral-600">
-          {isStreaming
-            ? "Send queues at the next agent break — Pi picks steer or follow-up. Abort: stop the agent (or press Esc twice in the textbox)."
-            : "Attachments and token/cost display land in later phases."}
-        </p>
+        {isStreaming && (
+          <p className="text-[10px] text-neutral-600">
+            Send queues at the next agent break — Pi picks steer or follow-up. Abort: stop the agent
+            (or press Esc twice in the textbox).
+          </p>
+        )}
       </div>
     </div>
   );

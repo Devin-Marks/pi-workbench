@@ -1,5 +1,13 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
-import { Columns2, GitBranch, Rows2 } from "lucide-react";
+import {
+  AtSign,
+  ChevronDown,
+  ChevronRight,
+  Columns2,
+  FileCode,
+  GitBranch,
+  Rows2,
+} from "lucide-react";
 import {
   EMPTY_MESSAGES,
   EMPTY_STRING,
@@ -319,13 +327,113 @@ function ChatEditDiff({
   );
 }
 
+/**
+ * Extract every file reference embedded in a stored user-message text
+ * and strip the underlying tokens from the visible text.
+ *
+ * Two forms come through, both rendered as badges in the bubble:
+ *   - "inlined": fenced ``` `<lang> file: <path>` ```-style blocks
+ *     that the server's expandFileReferences (or multipart text-file
+ *     composer) emitted. Content is included; the badge expands to
+ *     show it.
+ *   - "deferred": bare `@<path>` (or `@"path with spaces"`) markers
+ *     that the server left for the model to load on demand. No
+ *     content; the badge just shows the path with a tooltip.
+ *
+ * Backreference (`\1`) on the fenced regex matches the closing fence
+ * length to the opening, mirroring the longest-run-plus-one logic on
+ * the server.
+ */
+type FileRef =
+  | { kind: "inline"; path: string; lang: string; content: string }
+  | { kind: "defer"; path: string };
+
+function extractFileRefs(text: string): { stripped: string; refs: FileRef[] } {
+  const refs: FileRef[] = [];
+  // Step 1: pull out fenced "<lang> file: <path>" blocks.
+  const fenceRe = /(`{3,})(\w*)\s+file:\s+([^\n]+)\n([\s\S]*?)\n\1(?=\n|$)/g;
+  let stripped = text.replace(
+    fenceRe,
+    (_match, _fence: string, lang: string, path: string, content: string) => {
+      refs.push({ kind: "inline", path: path.trim(), lang, content });
+      return "\n";
+    },
+  );
+  // Step 2: pull out bare `@<path>` (or `@"path"`) deferred refs from
+  // what's left. Same prefix anchor as the server regex.
+  const deferRe = /(^|\s)@(?:"([^"\n]+)"|([^\s]+))/g;
+  stripped = stripped.replace(deferRe, (_match, lead: string, quoted: string, bare: string) => {
+    const path = (quoted ?? bare ?? "").trim();
+    if (path.length > 0) refs.push({ kind: "defer", path });
+    // Preserve the leading whitespace/anchor so surrounding text
+    // doesn't fuse together.
+    return lead;
+  });
+  // Collapse any 3+ consecutive newlines (from fenced removal) to a
+  // single blank line, then trim the whole string.
+  stripped = stripped.replace(/\n{3,}/g, "\n\n").trim();
+  return { stripped, refs };
+}
+
+function FileRefBadge({ ref: r }: { ref: FileRef }) {
+  const [expanded, setExpanded] = useState(false);
+  const isInline = r.kind === "inline";
+  return (
+    <div
+      className={`overflow-hidden rounded border bg-neutral-900 ${
+        isInline ? "border-neutral-700" : "border-emerald-700/60 bg-emerald-900/15"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={() => isInline && setExpanded((v) => !v)}
+        disabled={!isInline}
+        className={`flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] ${
+          isInline ? "text-neutral-200 hover:bg-neutral-800" : "cursor-default text-emerald-200"
+        }`}
+        title={
+          isInline
+            ? `${r.path} — click to ${expanded ? "collapse" : "expand"}`
+            : `${r.path} — model will load this on demand using its read tool (file is larger than the inline threshold)`
+        }
+      >
+        {isInline ? (
+          expanded ? (
+            <ChevronDown size={12} />
+          ) : (
+            <ChevronRight size={12} />
+          )
+        ) : (
+          <AtSign size={12} className="text-emerald-300/80" />
+        )}
+        <FileCode size={12} className={isInline ? "text-neutral-400" : "text-emerald-300/80"} />
+        <span className="font-mono">{r.path}</span>
+        {isInline && (
+          <span className="text-[10px] text-neutral-500">
+            {r.content.length < 1024
+              ? `${r.content.length} B`
+              : `${(r.content.length / 1024).toFixed(1)} KB`}
+          </span>
+        )}
+        {!isInline && <span className="text-[10px] text-emerald-300/70">on demand</span>}
+      </button>
+      {isInline && expanded && (
+        <pre className="max-h-72 overflow-auto border-t border-neutral-800 bg-neutral-950 px-3 py-2 font-mono text-[11px] leading-relaxed text-neutral-300">
+          {r.content}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function Message({ message }: { message: AgentMessageLike }) {
   // User text messages — may include image + file attachments per
   // Phase 14. Optimistic shape uses a blob URL on the image block;
   // canonical refetched shape uses raw base64 with a mimeType, which
   // we render via a data URL.
   if (message.role === "user") {
-    const text = extractText(message);
+    const rawText = extractText(message);
+    const { stripped: text, refs: fileRefs } = extractFileRefs(rawText);
     const blocks = Array.isArray(message.content) ? message.content : [];
     const images: { src: string; key: string }[] = [];
     const files: { name: string; size?: number; key: string }[] = [];
@@ -354,6 +462,13 @@ function Message({ message }: { message: AgentMessageLike }) {
           <pre className="whitespace-pre-wrap break-words font-sans text-sm text-neutral-100">
             {text}
           </pre>
+        )}
+        {fileRefs.length > 0 && (
+          <div className="mt-2 flex flex-col gap-1">
+            {fileRefs.map((r, i) => (
+              <FileRefBadge key={`fileref-${i}-${r.path}`} ref={r} />
+            ))}
+          </div>
         )}
         {images.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">

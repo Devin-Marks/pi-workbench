@@ -28,11 +28,29 @@ interface SettingsRequest {
   seq: number;
 }
 
+/** Cross-component request to append text into the active chat input.
+ *  Today only `Add as @ context` from the file-browser context menu
+ *  uses it; future quick-actions (slash commands from elsewhere, etc.)
+ *  can ride the same channel. The chat input listens, appends on every
+ *  seq increment, and calls `clearChatInsertRequest` to reset. */
+interface ChatInsertRequest {
+  /** Text to append; `@<path>` for the current consumer. */
+  text: string;
+  /** Monotonic counter so two consecutive requests with the same text
+   *  still fire (matches the SettingsRequest seq pattern). */
+  seq: number;
+}
+
 interface UiState {
   settingsRequest: SettingsRequest | undefined;
   /** Open the Settings panel; optionally jump to a specific tab. */
   openSettings: (tab?: SettingsTab) => void;
   clearSettingsRequest: () => void;
+  chatInsertRequest: ChatInsertRequest | undefined;
+  /** Ask the chat input to append text (no leading newline; the input
+   *  decides spacing based on its current contents). */
+  requestChatInsert: (text: string) => void;
+  clearChatInsertRequest: () => void;
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
@@ -45,5 +63,13 @@ export const useUiStore = create<UiState>((set, get) => ({
   },
   clearSettingsRequest: () => {
     set({ settingsRequest: undefined });
+  },
+  chatInsertRequest: undefined,
+  requestChatInsert: (text) => {
+    const prev = get().chatInsertRequest?.seq ?? 0;
+    set({ chatInsertRequest: { text, seq: prev + 1 } });
+  },
+  clearChatInsertRequest: () => {
+    set({ chatInsertRequest: undefined });
   },
 }));

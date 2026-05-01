@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import {
+  AtSign,
   ChevronDown,
   ChevronRight,
   Download,
@@ -13,6 +14,7 @@ import {
 } from "lucide-react";
 import { useFileStore } from "../store/file-store";
 import { useActiveProject } from "../store/project-store";
+import { useUiStore } from "../store/ui-store";
 import { api, type FileTreeNode } from "../lib/api-client";
 import { ConfirmDialog, PromptDialog } from "./Modal";
 
@@ -33,9 +35,9 @@ type DialogState =
  *
  * Click a file → opens in EditorPanel. Click a folder → expands.
  * Toolbar at the top: refresh, new file, new folder. Hover a row for
- * rename / delete buttons. We deliberately skip a context menu in v1 —
- * inline icon buttons are good enough and avoid the right-click /
- * permissions dance for PWA installs.
+ * rename / delete buttons. Right-click a file → context menu (today
+ * just "Add as @ context", which appends `@<path>` to the chat input;
+ * extensible to more actions as we add them).
  */
 export function FileBrowserPanel() {
   const project = useActiveProject();
@@ -68,6 +70,12 @@ export function FileBrowserPanel() {
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadTargetRef = useRef<string | undefined>(undefined);
   const uploadFiles = useFileStore((s) => s.uploadFiles);
+  // Right-click context menu — hoisted above the early-return below so
+  // hook ordering stays stable across renders.
+  const [contextMenu, setContextMenu] = useState<
+    { x: number; y: number; absPath: string; isDir: boolean } | undefined
+  >(undefined);
+  const requestChatInsert = useUiStore((s) => s.requestChatInsert);
 
   useEffect(() => {
     if (project !== undefined) void loadTree(project.id);
@@ -134,6 +142,31 @@ export function FileBrowserPanel() {
       return;
     }
     await openFile(project.id, joinPath(project.path, node.path));
+  };
+
+  // Right-click context menu for file rows. State (`contextMenu`) is
+  // hoisted above the early-return up top; the handlers below own the
+  // open/close + per-item dispatch.
+  const openContextMenu = (e: React.MouseEvent, absPath: string, isDir: boolean): void => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, absPath, isDir });
+  };
+
+  const addAsChatContext = (absPath: string): void => {
+    // Compute the path relative to the project root — `@<rel>` is what
+    // expandFileReferences resolves on the server (rooted at workspace
+    // path). file-references.ts joins workspacePath + the captured
+    // path, so we want a project-relative form here.
+    let rel = absPath;
+    if (absPath.startsWith(`${project.path}/`)) {
+      rel = absPath.slice(project.path.length + 1);
+    }
+    // Quote the path if it contains whitespace so the server's regex
+    // captures the full token (matches the same convention the
+    // ChatInput autocomplete uses).
+    const ref = /\s/.test(rel) ? `@"${rel}"` : `@${rel}`;
+    requestChatInsert(ref);
+    setContextMenu(undefined);
   };
 
   /**
@@ -353,6 +386,7 @@ export function FileBrowserPanel() {
             dropTarget={dropTarget}
             onDropTargetChange={setDropTarget}
             onDrop={(e, dir) => void handleDrop(e, dir)}
+            onContextMenu={openContextMenu}
           />
         )}
       </div>
@@ -389,6 +423,69 @@ export function FileBrowserPanel() {
         primaryLabel="Delete"
         tone="danger"
       />
+      {contextMenu !== undefined && (
+        <FileContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          isDir={contextMenu.isDir}
+          onClose={() => setContextMenu(undefined)}
+          onAddAsContext={() => addAsChatContext(contextMenu.absPath)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Floating context menu rendered at viewport coordinates. Closes on
+ * any outside click, on Esc, or when a menu item runs. Items that
+ * don't apply to the current target (e.g. add-as-context for a
+ * directory) render disabled rather than disappearing — keeps the
+ * menu's shape predictable across right-clicks.
+ */
+function FileContextMenu(props: {
+  x: number;
+  y: number;
+  isDir: boolean;
+  onClose: () => void;
+  onAddAsContext: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") props.onClose();
+    };
+    const onMouseDown = (): void => props.onClose();
+    window.addEventListener("keydown", onKey);
+    // mousedown fires before the click handler on the menu items, so
+    // capture-phase + same-tick close would race. Listen on the next
+    // tick so the menu's own click resolves first.
+    const t = setTimeout(() => window.addEventListener("mousedown", onMouseDown), 0);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onMouseDown);
+      clearTimeout(t);
+    };
+  }, [props]);
+  return (
+    <div
+      className="fixed z-50 min-w-[200px] overflow-hidden rounded-md border border-neutral-700 bg-neutral-900 shadow-lg"
+      style={{ left: props.x, top: props.y }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <button
+        type="button"
+        disabled={props.isDir}
+        onClick={props.onAddAsContext}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-neutral-200 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:text-neutral-600 disabled:hover:bg-transparent"
+        title={
+          props.isDir
+            ? "Directory references aren't supported — pick a single file"
+            : "Append @<path> to the chat input so the file's content is sent with the next prompt"
+        }
+      >
+        <AtSign size={12} />
+        Add as @ context
+      </button>
     </div>
   );
 }
@@ -414,6 +511,8 @@ interface TreeProps {
   dropTarget: string | undefined;
   onDropTargetChange: (path: string | undefined) => void;
   onDrop: (e: DragEvent<HTMLElement>, targetDirAbsPath: string) => void;
+  /** Right-click handler — opens the per-row context menu. */
+  onContextMenu: (e: React.MouseEvent, absPath: string, isDir: boolean) => void;
 }
 
 function Tree(props: TreeProps) {
@@ -441,6 +540,9 @@ function Tree(props: TreeProps) {
           isDropTarget ? "bg-emerald-900/30 ring-1 ring-emerald-700/50" : ""
         }`}
         style={{ paddingLeft: `${depth * 12 + 6}px` }}
+        // Right-click → context menu. Skip while renaming so the input
+        // keeps its native context menu (paste, etc.).
+        onContextMenu={isRenaming ? undefined : (e) => props.onContextMenu(e, absPath, isDir)}
         // Drag source: every row is draggable except while inline
         // renaming (the input owns pointer events then).
         draggable={!isRenaming}
