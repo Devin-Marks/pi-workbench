@@ -370,6 +370,20 @@ function vMcpTools(value: unknown, status: number): { tools: McpToolSummary[] } 
   return { tools: value.tools as McpToolSummary[] };
 }
 
+function vMcpUpsert(value: unknown, status: number): { ok: true } {
+  if (!isObject(value) || value.ok !== true) {
+    fail(status, "expected { ok: true }");
+  }
+  return { ok: true };
+}
+
+function vMcpDelete(value: unknown, status: number): { removed: boolean } {
+  if (!isObject(value) || typeof value.removed !== "boolean") {
+    fail(status, "expected { removed: boolean }");
+  }
+  return { removed: value.removed };
+}
+
 function vAuthSummary(value: unknown, status: number): AuthSummary {
   if (!isObject(value) || !isObject(value.providers)) {
     fail(status, "expected { providers: { ... } }");
@@ -1115,21 +1129,14 @@ export const api = {
     return request(`/api/v1/mcp/servers${qs}`, vMcpServers);
   },
   upsertMcpServer: (name: string, body: McpServerConfig) =>
-    request(`/api/v1/mcp/servers/${encodeURIComponent(name)}`, vVoid, {
+    request(`/api/v1/mcp/servers/${encodeURIComponent(name)}`, vMcpUpsert, {
       method: "PUT",
       body,
     }),
   deleteMcpServer: (name: string) =>
-    request(
-      `/api/v1/mcp/servers/${encodeURIComponent(name)}`,
-      (v, s) => {
-        if (!isObject(v) || typeof v.removed !== "boolean") {
-          fail(s, "expected { removed }");
-        }
-        return { removed: v.removed };
-      },
-      { method: "DELETE" },
-    ),
+    request(`/api/v1/mcp/servers/${encodeURIComponent(name)}`, vMcpDelete, {
+      method: "DELETE",
+    }),
   probeMcpServer: (name: string, projectId?: string) => {
     const qs = projectId !== undefined ? `?projectId=${encodeURIComponent(projectId)}` : "";
     return request(`/api/v1/mcp/servers/${encodeURIComponent(name)}/probe${qs}`, vMcpProbe, {

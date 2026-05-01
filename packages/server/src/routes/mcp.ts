@@ -111,8 +111,12 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
         response: {
           200: {
             type: "object",
-            required: ["enabled"],
-            properties: { enabled: { type: "boolean" } },
+            required: ["enabled", "connected", "total"],
+            properties: {
+              enabled: { type: "boolean" },
+              connected: { type: "integer", minimum: 0 },
+              total: { type: "integer", minimum: 0 },
+            },
           },
           400: errorSchema,
         },
@@ -121,7 +125,12 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     async (req) => {
       await setMcpDisabled(!req.body.enabled);
       await reloadGlobal();
-      return { enabled: isGloballyEnabled() };
+      const status = getStatus();
+      return {
+        enabled: isGloballyEnabled(),
+        total: status.length,
+        connected: status.filter((s) => s.state === "connected").length,
+      };
     },
   );
 
@@ -191,7 +200,15 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
           properties: { name: { type: "string", minLength: 1, maxLength: 64 } },
         },
         body: serverConfigSchema,
-        response: { 200: { type: "object" }, 400: errorSchema, 500: errorSchema },
+        response: {
+          200: {
+            type: "object",
+            required: ["ok"],
+            properties: { ok: { type: "boolean" } },
+          },
+          400: errorSchema,
+          500: errorSchema,
+        },
       },
     },
     async (req) => {
