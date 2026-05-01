@@ -9,7 +9,7 @@ import {
   type ProvidersListing,
   type SkillSummary,
 } from "../lib/api-client";
-import { useActiveProject } from "../store/project-store";
+import { useActiveProject, useProjectStore } from "../store/project-store";
 import { useUiConfigStore } from "../store/ui-config-store";
 import { useMcpStore } from "../store/mcp-store";
 import { THEME_DEFS, useThemeStore, type ThemeId } from "../lib/theme";
@@ -709,15 +709,26 @@ function SelectSetting({
 
 function SkillsTab({ onError }: { onError: (msg: string | undefined) => void }) {
   const project = useActiveProject();
+  const projects = useProjectStore((s) => s.projects);
   const [skills, setSkills] = useState<SkillSummary[] | undefined>(undefined);
+  /** All per-project overrides, keyed by projectId. Used for the
+   *  cascade view inside each expanded skill row. */
+  const [allOverrides, setAllOverrides] = useState<
+    Record<string, { enable: string[]; disable: string[] }>
+  >({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
 
   const refresh = async (): Promise<void> => {
     if (project === undefined) return;
     onError(undefined);
     try {
-      const { skills: list } = await api.listSkills(project.id);
+      const [{ skills: list }, overrides] = await Promise.all([
+        api.listSkills(project.id),
+        api.listSkillOverrides(),
+      ]);
       setSkills(list);
+      setAllOverrides(overrides.projects);
     } catch (err) {
       onError(`Failed to load skills: ${errorCode(err)}`);
     }
@@ -740,10 +751,10 @@ function SkillsTab({ onError }: { onError: (msg: string | undefined) => void }) 
     return <p className="text-xs italic text-neutral-500">Loading skills for {project.name}…</p>;
   }
 
-  const toggle = async (name: string, next: boolean): Promise<void> => {
+  const toggleGlobal = async (name: string, next: boolean): Promise<void> => {
     setBusy(true);
     try {
-      const { skills: updated } = await api.setSkillEnabled(project.id, name, next);
+      const { skills: updated } = await api.setSkillEnabled(project.id, name, next, "global");
       setSkills(updated);
     } catch (err) {
       onError(`Toggle failed: ${errorCode(err)}`);
@@ -752,40 +763,276 @@ function SkillsTab({ onError }: { onError: (msg: string | undefined) => void }) 
     }
   };
 
+  /** Set the override for `targetProjectId` to one of three states.
+   *  `state === undefined` clears the override (= inherit from global). */
+  const setProjectOverride = async (
+    targetProjectId: string,
+    name: string,
+    state: "enabled" | "disabled" | undefined,
+  ): Promise<void> => {
+    setBusy(true);
+    try {
+      if (state === undefined) {
+        await api.clearSkillProjectOverride(targetProjectId, name);
+      } else {
+        await api.setSkillEnabled(targetProjectId, name, state === "enabled", "project");
+      }
+      // Pull the canonical state for both the active project's
+      // skills view AND the cascade map.
+      await refresh();
+    } catch (err) {
+      onError(`Override write failed: ${errorCode(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** State of a skill in some other project (for the cascade view). */
+  const overrideStateFor = (
+    targetProjectId: string,
+    skillName: string,
+  ): "enabled" | "disabled" | undefined => {
+    const entry = allOverrides[targetProjectId];
+    if (entry === undefined) return undefined;
+    if (entry.enable.includes(skillName)) return "enabled";
+    if (entry.disable.includes(skillName)) return "disabled";
+    return undefined;
+  };
+
   return (
     <div className="space-y-2">
       <p className="text-xs text-neutral-500">
         Skills discovered in <code className="font-mono">~/.pi/agent/skills/</code> and{" "}
-        <code className="font-mono">{project.path}/.pi/skills/</code>. Toggling writes to{" "}
-        <code className="font-mono">settings.skills</code>.
+        <code className="font-mono">{project.path}/.pi/skills/</code>. The global toggle writes to
+        pi&apos;s <code className="font-mono">settings.skills</code>; per-project overrides write to
+        the workbench-private file at{" "}
+        <code className="font-mono">{`\${WORKBENCH_DATA_DIR}/skills-overrides.json`}</code>.
       </p>
+      <div className="rounded border border-amber-700/40 bg-amber-900/10 px-3 py-2 text-[11px] text-amber-200">
+        Skill changes apply to the <strong>next session</strong> you start in the affected project.
+        Live sessions keep the skill set they booted with — start a new session to use a freshly
+        enabled skill.
+      </div>
       {skills.length === 0 && (
         <p className="text-xs italic text-neutral-500">No skills found for this project.</p>
       )}
-      {skills.map((s) => (
-        <div
-          key={`${s.source}:${s.name}`}
-          className="flex items-start gap-3 rounded border border-neutral-800 bg-neutral-900/40 p-3"
-        >
-          <input
-            type="checkbox"
-            checked={s.enabled}
-            disabled={busy}
-            onChange={(e) => void toggle(s.name, e.target.checked)}
-            className="mt-1"
-          />
-          <div className="flex-1 space-y-0.5">
-            <div className="flex items-center gap-2 text-sm">
-              <span className="font-mono text-neutral-100">{s.name}</span>
-              <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400">
-                {s.source}
-              </span>
+      {skills.map((s) => {
+        const key = `${s.source}:${s.name}`;
+        const isExpanded = expanded[key] === true;
+        // Collect projects with explicit overrides for THIS skill —
+        // shown in the cascade. The active project is included if it
+        // has an override (so the user sees their own opinion in the
+        // same UI as everyone else's).
+        const overrideRows = projects
+          .map((p) => ({
+            project: p,
+            state: overrideStateFor(p.id, s.name),
+          }))
+          .filter((r) => r.state !== undefined);
+        const projectsWithoutOverride = projects.filter(
+          (p) => overrideStateFor(p.id, s.name) === undefined,
+        );
+        return (
+          <div key={key} className="rounded border border-neutral-800 bg-neutral-900/40">
+            <div className="flex items-start gap-3 p-3">
+              {/* Effective-state dot for the active project. */}
+              <span
+                className={`mt-1.5 inline-block h-2.5 w-2.5 rounded-full ${
+                  s.effective ? "bg-emerald-500" : "bg-neutral-700"
+                }`}
+                title={`Effective for ${project.name}: ${s.effective ? "enabled" : "disabled"}`}
+              />
+              <div className="flex-1 space-y-0.5">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="font-mono text-neutral-100">{s.name}</span>
+                  <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400">
+                    {s.source}
+                  </span>
+                  {s.projectOverride !== undefined && (
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${
+                        s.projectOverride === "enabled"
+                          ? "bg-emerald-900/40 text-emerald-300"
+                          : "bg-red-900/40 text-red-300"
+                      }`}
+                      title={`Active project ('${project.name}') has an override`}
+                    >
+                      Project: {s.projectOverride}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-neutral-400">{s.description || "(no description)"}</p>
+                <p className="font-mono text-[10px] text-neutral-600">{s.filePath}</p>
+              </div>
+              <div className="flex shrink-0 items-center gap-1 text-xs">
+                <button
+                  onClick={() => void toggleGlobal(s.name, !s.enabled)}
+                  disabled={busy}
+                  className={`rounded border px-2 py-0.5 ${
+                    s.enabled
+                      ? "border-emerald-700/50 bg-emerald-900/20 text-emerald-300"
+                      : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+                  }`}
+                  title="Global enable in pi's settings.skills"
+                >
+                  Global: {s.enabled ? "enabled" : "disabled"}
+                </button>
+                <button
+                  onClick={() => setExpanded((e) => ({ ...e, [key]: !isExpanded }))}
+                  className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-300 hover:border-neutral-500"
+                  title="Show per-project overrides"
+                >
+                  {isExpanded ? "▾ Overrides" : `▸ Overrides (${overrideRows.length})`}
+                </button>
+              </div>
             </div>
-            <p className="text-xs text-neutral-400">{s.description || "(no description)"}</p>
-            <p className="font-mono text-[10px] text-neutral-600">{s.filePath}</p>
+            {isExpanded && (
+              <div className="border-t border-neutral-800 px-3 py-2">
+                {overrideRows.length === 0 ? (
+                  <p className="mb-2 text-[11px] italic text-neutral-500">
+                    No project overrides yet — every project inherits the global state.
+                  </p>
+                ) : (
+                  <div className="mb-2 space-y-1">
+                    {overrideRows.map(({ project: p, state }) => (
+                      <div
+                        key={p.id}
+                        className="flex items-center justify-between gap-2 rounded bg-neutral-900/60 px-2 py-1 text-xs"
+                      >
+                        <span className="truncate text-neutral-200" title={p.path}>
+                          {p.name}
+                        </span>
+                        <TriStatePicker
+                          value={state}
+                          disabled={busy}
+                          onChange={(next) => void setProjectOverride(p.id, s.name, next)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {projectsWithoutOverride.length > 0 && (
+                  <AddOverrideDropdown
+                    projects={projectsWithoutOverride}
+                    disabled={busy}
+                    onAdd={(targetProjectId, state) =>
+                      void setProjectOverride(targetProjectId, s.name, state)
+                    }
+                  />
+                )}
+              </div>
+            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
+    </div>
+  );
+}
+
+function TriStatePicker({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: "enabled" | "disabled" | undefined;
+  disabled: boolean;
+  onChange: (next: "enabled" | "disabled" | undefined) => void;
+}) {
+  const btn = (label: string, state: "enabled" | "disabled" | undefined, active: boolean) => (
+    <button
+      onClick={() => onChange(state)}
+      disabled={disabled}
+      className={`rounded px-2 py-0.5 text-[11px] ${
+        active
+          ? state === "enabled"
+            ? "bg-emerald-900/40 text-emerald-300"
+            : state === "disabled"
+              ? "bg-red-900/40 text-red-300"
+              : "bg-neutral-800 text-neutral-400"
+          : "text-neutral-500 hover:bg-neutral-800 hover:text-neutral-300"
+      }`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="flex shrink-0 items-center gap-0.5 rounded border border-neutral-700 px-0.5">
+      {btn("Inherit", undefined, value === undefined)}
+      {btn("Enabled", "enabled", value === "enabled")}
+      {btn("Disabled", "disabled", value === "disabled")}
+    </div>
+  );
+}
+
+function AddOverrideDropdown({
+  projects,
+  disabled,
+  onAdd,
+}: {
+  projects: { id: string; name: string }[];
+  disabled: boolean;
+  onAdd: (projectId: string, state: "enabled" | "disabled") => void;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [picked, setPicked] = useState<string>("");
+  if (!pickerOpen) {
+    return (
+      <button
+        onClick={() => setPickerOpen(true)}
+        disabled={disabled}
+        className="rounded border border-neutral-700 px-2 py-0.5 text-[11px] text-neutral-300 hover:border-neutral-500"
+      >
+        + Add override for…
+      </button>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1 text-[11px]">
+      <select
+        value={picked}
+        onChange={(e) => setPicked(e.target.value)}
+        className="rounded border border-neutral-700 bg-neutral-950 px-2 py-0.5 text-neutral-100 outline-none focus:border-neutral-500"
+      >
+        <option value="">Pick project…</option>
+        {projects.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+      <button
+        onClick={() => {
+          if (picked.length === 0) return;
+          onAdd(picked, "enabled");
+          setPickerOpen(false);
+          setPicked("");
+        }}
+        disabled={disabled || picked.length === 0}
+        className="rounded bg-emerald-900/40 px-2 py-0.5 text-emerald-300 disabled:opacity-50"
+      >
+        Enable here
+      </button>
+      <button
+        onClick={() => {
+          if (picked.length === 0) return;
+          onAdd(picked, "disabled");
+          setPickerOpen(false);
+          setPicked("");
+        }}
+        disabled={disabled || picked.length === 0}
+        className="rounded bg-red-900/40 px-2 py-0.5 text-red-300 disabled:opacity-50"
+      >
+        Disable here
+      </button>
+      <button
+        onClick={() => {
+          setPickerOpen(false);
+          setPicked("");
+        }}
+        className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-400 hover:border-neutral-500"
+      >
+        Cancel
+      </button>
     </div>
   );
 }

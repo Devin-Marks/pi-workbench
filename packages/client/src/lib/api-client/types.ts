@@ -140,13 +140,25 @@ export interface SessionSummary {
   isStreaming: boolean;
 }
 
+export type SkillOverrideState = "enabled" | "disabled";
+
 export interface SkillSummary {
   name: string;
   description: string;
   source: "global" | "project";
   filePath: string;
+  /** Global enable from pi's settings.skills. */
   enabled: boolean;
+  /** Tri-state per-project override; absent = inherit from global. */
+  projectOverride?: SkillOverrideState;
+  /** Resolved state for the project the request asked about. */
+  effective: boolean;
   disableModelInvocation: boolean;
+}
+
+export interface SkillOverridesResponse {
+  /** Map from projectId → that project's overrides. */
+  projects: Record<string, { enable: string[]; disable: string[] }>;
 }
 
 export interface ProviderModelEntry {

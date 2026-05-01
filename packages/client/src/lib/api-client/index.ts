@@ -283,20 +283,47 @@ function vSkillsList(value: unknown, status: number): { skills: SkillSummary[] }
         (s.source !== "global" && s.source !== "project") ||
         typeof s.filePath !== "string" ||
         typeof s.enabled !== "boolean" ||
+        typeof s.effective !== "boolean" ||
         typeof s.disableModelInvocation !== "boolean"
       ) {
         fail(status, "expected SkillSummary");
       }
-      return {
+      const summary: SkillSummary = {
         name: s.name,
         description: s.description,
         source: s.source,
         filePath: s.filePath,
         enabled: s.enabled,
+        effective: s.effective,
         disableModelInvocation: s.disableModelInvocation,
       };
+      if (s.projectOverride === "enabled" || s.projectOverride === "disabled") {
+        summary.projectOverride = s.projectOverride;
+      }
+      return summary;
     }),
   };
+}
+
+function vSkillOverrides(
+  value: unknown,
+  status: number,
+): { projects: Record<string, { enable: string[]; disable: string[] }> } {
+  if (!isObject(value) || !isObject(value.projects)) {
+    fail(status, "expected { projects: { ... } }");
+  }
+  const out: Record<string, { enable: string[]; disable: string[] }> = {};
+  for (const [pid, val] of Object.entries(value.projects)) {
+    if (!isObject(val)) continue;
+    const enable = Array.isArray(val.enable)
+      ? val.enable.filter((x): x is string => typeof x === "string")
+      : [];
+    const disable = Array.isArray(val.disable)
+      ? val.disable.filter((x): x is string => typeof x === "string")
+      : [];
+    out[pid] = { enable, disable };
+  }
+  return { projects: out };
 }
 
 function vProvidersListing(value: unknown, status: number): ProvidersListing {
@@ -1062,11 +1089,31 @@ export const api = {
     request(`/api/v1/mcp/tools?projectId=${encodeURIComponent(projectId)}`, vMcpTools),
   listSkills: (projectId: string) =>
     request(`/api/v1/config/skills?projectId=${encodeURIComponent(projectId)}`, vSkillsList),
-  setSkillEnabled: (projectId: string, name: string, enabled: boolean) =>
+  /** Cascade view: every per-project override across every project. */
+  listSkillOverrides: () => request(`/api/v1/config/skills/overrides`, vSkillOverrides),
+  /**
+   * Toggle a skill's enabled state. `scope` defaults to "global" for
+   * back-compat with the original two-arg form. Project scope writes
+   * the workbench-private overrides file; clear an override (= return
+   * to inherit) via `clearSkillProjectOverride` below.
+   */
+  setSkillEnabled: (
+    projectId: string,
+    name: string,
+    enabled: boolean,
+    scope: "global" | "project" = "global",
+  ) =>
     request(
       `/api/v1/config/skills/${encodeURIComponent(name)}/enabled?projectId=${encodeURIComponent(projectId)}`,
       vSkillsList,
-      { method: "PUT", body: { enabled } },
+      { method: "PUT", body: { enabled, scope } },
+    ),
+  /** Clear a project-scope override so the skill inherits from global. */
+  clearSkillProjectOverride: (projectId: string, name: string) =>
+    request(
+      `/api/v1/config/skills/${encodeURIComponent(name)}/enabled?projectId=${encodeURIComponent(projectId)}`,
+      vSkillsList,
+      { method: "DELETE" },
     ),
 
   // ---------------- files ----------------
