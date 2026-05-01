@@ -370,6 +370,13 @@ These are facts about the pi SDK that are easy to get wrong:
   The registry must then load this new session before it can be used.
 - `session.navigateTree()` operates IN-PLACE on the current session file. It does
   not create a new session.
+- Pi does NOT have native MCP (Model Context Protocol) support. MCP is provided
+  by pi-workbench itself: `packages/server/src/mcp/manager.ts` connects to
+  remote MCP servers via `@modelcontextprotocol/sdk`, translates each
+  advertised tool into a pi `ToolDefinition`, and feeds the aggregate into
+  every `createAgentSession` call as `customTools`. See
+  [`docs/mcp.md`](./docs/mcp.md) for the user-facing surface; the doc-comment
+  at the top of `mcp/manager.ts` is the integration contract.
 
 ---
 

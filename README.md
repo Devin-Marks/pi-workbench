@@ -46,6 +46,7 @@ details, follow the links in [Documentation](#documentation) below.
 |---|---|
 | Architecture & data flow | [`docs/architecture.md`](./docs/architecture.md) |
 | Configuration & env vars | [`docs/configuration.md`](./docs/configuration.md) |
+| MCP servers | [`docs/mcp.md`](./docs/mcp.md) |
 | Docker image | [`docs/CONTAINERS.md`](./docs/CONTAINERS.md) |
 | Production deployment | [`docs/deployment.md`](./docs/deployment.md) |
 | Kubernetes / OpenShift | [`kubernetes/DEPLOY.md`](./kubernetes/DEPLOY.md) |

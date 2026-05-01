@@ -259,16 +259,13 @@ they'd resolve to invalid paths inside the container's filesystem.
 Setting both to the same host path requires also using the same
 workspace path semantics.
 
-## MCP servers (Phase 17 — when shipped)
+## MCP servers
 
-When the optional MCP adapter lands, MCP server definitions will live in
-their own config file (likely `${PI_CONFIG_DIR}/mcp.json`). The Settings
-panel will gain an MCP tab with the same install/list/remove pattern the
-Providers tab uses.
-
-Until then, MCP support is provided by community packages
-(e.g. `@nicobailon/pi-mcp-adapter`) that add a generic `mcp` tool to the
-agent. Configure those out-of-band via the package's own setup.
+MCP server definitions live in `${WORKBENCH_DATA_DIR}/mcp.json` (global)
+and `<projectPath>/.mcp.json` (project-scoped). Manage them from the
+**Settings → MCP** tab in the browser, or edit the files directly. See
+[`mcp.md`](./mcp.md) for the field reference, transport options,
+auth model, and troubleshooting.
 
 ## See also
 
