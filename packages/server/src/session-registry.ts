@@ -10,6 +10,11 @@ import {
 import { config } from "./config.js";
 import { makeDedupe, makeLock } from "./concurrency.js";
 import { readProjects } from "./project-manager.js";
+import {
+  customToolsForProject as mcpCustomToolsForProject,
+  ensureProjectLoaded as mcpEnsureProjectLoaded,
+  isGloballyEnabled as mcpIsGloballyEnabled,
+} from "./mcp/manager.js";
 
 /**
  * Minimal SSE client contract used by the registry to fan out events.
@@ -286,10 +291,12 @@ export async function createSession(
   // agentDir IS passed: without it, the SDK falls back to ~/.pi/agent and
   // ignores PI_CONFIG_DIR entirely, breaking auth.json/models.json wiring
   // for Phase 6's prompt route.
+  const customTools = await resolveMcpCustomTools(projectId, workspacePath);
   const { session } = await createAgentSession({
     cwd: workspacePath,
     sessionManager,
     agentDir: config.piConfigDir,
+    customTools,
   });
 
   const now = new Date();
@@ -427,10 +434,12 @@ export async function resumeSession(
     if (match === undefined) throw new SessionNotFoundError(sessionId);
 
     const sessionManager = SessionManager.open(match.path, dir, workspacePath);
+    const customTools = await resolveMcpCustomTools(projectId, workspacePath);
     const { session } = await createAgentSession({
       cwd: workspacePath,
       sessionManager,
       agentDir: config.piConfigDir,
+      customTools,
     });
 
     const now = new Date();
@@ -789,10 +798,12 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
 
   const dir = sessionDirFor(source.projectId);
   const sessionManager = SessionManager.open(newPath, dir, source.workspacePath);
+  const customTools = await resolveMcpCustomTools(source.projectId, source.workspacePath);
   const { session } = await createAgentSession({
     cwd: source.workspacePath,
     sessionManager,
     agentDir: config.piConfigDir,
+    customTools,
   });
 
   const now = new Date();
@@ -821,10 +832,15 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
     try {
       source.unsubscribe();
       const restoredManager = SessionManager.open(originalSourceFile, dir, source.workspacePath);
+      const restoredCustomTools = await resolveMcpCustomTools(
+        source.projectId,
+        source.workspacePath,
+      );
       const { session: restoredSession } = await createAgentSession({
         cwd: source.workspacePath,
         sessionManager: restoredManager,
         agentDir: config.piConfigDir,
+        customTools: restoredCustomTools,
       });
       // Mutate the existing LiveSession in place rather than
       // replacing the registry entry — any SSE client holding a
@@ -874,4 +890,26 @@ export async function disposeAllSessions(): Promise<void> {
       }),
     ),
   );
+}
+
+/**
+ * Resolve the `customTools` array passed to `createAgentSession`.
+ *
+ * Returns the union of every connected, enabled MCP server's tools —
+ * global servers (from ${WORKBENCH_DATA_DIR}/mcp.json) plus the
+ * project-scoped servers (from <projectPath>/.mcp.json), with
+ * project entries winning on name collisions.
+ *
+ * Honors the master `disabled` toggle in mcp.json: if MCP is globally
+ * off, returns an empty array regardless of per-server state. Boot-
+ * time `loadGlobal()` is called in index.ts; project-scope is loaded
+ * lazily here on first session-create per project.
+ */
+async function resolveMcpCustomTools(
+  projectId: string,
+  workspacePath: string,
+): Promise<ReturnType<typeof mcpCustomToolsForProject>> {
+  if (!mcpIsGloballyEnabled()) return [];
+  await mcpEnsureProjectLoaded(projectId, workspacePath).catch(() => undefined);
+  return mcpCustomToolsForProject(projectId);
 }

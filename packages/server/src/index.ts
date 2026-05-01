@@ -22,7 +22,9 @@ import { controlRoutes } from "./routes/control.js";
 import { configRoutes } from "./routes/config.js";
 import { fileRoutes } from "./routes/files.js";
 import { gitRoutes } from "./routes/git.js";
+import { mcpRoutes } from "./routes/mcp.js";
 import { terminalRoutes } from "./routes/terminal.js";
+import { disposeAll as disposeAllMcp, loadGlobal as loadGlobalMcp } from "./mcp/manager.js";
 import { disposeAllSessions } from "./session-registry.js";
 import { disposeAllPtys, installPtyExitHandler } from "./pty-manager.js";
 
@@ -318,6 +320,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       await api.register(configRoutes);
       await api.register(fileRoutes);
       await api.register(gitRoutes);
+      await api.register(mcpRoutes);
       await api.register(terminalRoutes);
     },
     { prefix: "/api/v1" },
@@ -389,6 +392,16 @@ export async function buildServer(): Promise<FastifyInstance> {
   fastify.addHook("onClose", async () => {
     await disposeAllSessions();
     disposeAllPtys();
+    await disposeAllMcp();
+  });
+
+  // Boot-time MCP load. Eagerly connects every enabled GLOBAL server
+  // so /mcp/settings reports honest connection counts before the
+  // first session is created. Project-scope servers load lazily on
+  // first session-create per project. Failure here is non-fatal —
+  // a bad mcp.json shouldn't keep the workbench from booting.
+  loadGlobalMcp().catch((err: unknown) => {
+    fastify.log.error({ err }, "mcp: initial load failed");
   });
 
   return fastify;

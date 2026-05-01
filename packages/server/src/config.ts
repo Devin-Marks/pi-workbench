@@ -164,6 +164,13 @@ export const config = Object.freeze({
    */
   hideBuiltinProviders: readBool("HIDE_BUILTIN_PROVIDERS", false),
   /**
+   * Path to the workbench-owned MCP server registry. Lives in the
+   * data dir (not pi's config dir) because pi has no native MCP
+   * support — `mcp.json` is purely a workbench file, surfaced to
+   * the agent via `customTools` on createAgentSession.
+   */
+  mcpConfigFile: join(WORKBENCH_DATA_DIR, "mcp.json"),
+  /**
    * Whether `/api/docs` (Swagger UI + OpenAPI JSON spec) is reachable.
    * Defaults to true so Docker / production deploys keep working without
    * extra config (the README quickstart documents `/api/docs`). When
