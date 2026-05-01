@@ -60,6 +60,21 @@ details, follow the links in [Documentation](#documentation) below.
 For project conventions and the agent-facing architecture notes, see
 [`CLAUDE.md`](./CLAUDE.md).
 
+## Versions
+
+pi-workbench tracks the [`@mariozechner/pi-coding-agent`](https://www.npmjs.com/package/@mariozechner/pi-coding-agent)
+SDK closely. Each workbench release pins an exact patch version of the
+pi SDK trio (`pi-coding-agent`, `pi-agent-core`, `pi-ai`) — no
+caret/tilde — so a transparent SDK upgrade can't surprise an existing
+workbench install. The pinned versions live in
+[`packages/server/package.json`](./packages/server/package.json).
+
+Support window: only the latest workbench tag is supported. When a
+new tag ships, the previous one is best-effort — security fixes may
+be backported, feature work isn't. Breaking SDK changes that the
+workbench had to absorb show up in the release notes' **Changed**
+section so operators know what to re-test before upgrading.
+
 ## Risks & disclaimer
 
 pi-workbench is a self-hosted developer tool, provided **"as is"** under
