@@ -117,25 +117,42 @@ export async function reloadGlobal(): Promise<void> {
  * not the global one).
  */
 export function customToolsForProject(projectId: string): ToolDefinition[] {
-  const seen = new Set<string>();
+  // Server-name override: when the project has a server with the
+  // same NAME as a global server, the project entry replaces the
+  // global one entirely (not just on tool-name collision). Reason:
+  // operators expect a project's `.mcp.json` to fully shadow a same-
+  // named global entry — different auth tokens, different `enabled`
+  // flags, and (if URLs match) one TCP connection rather than two.
+  const projectServerNames = new Set<string>();
+  for (const e of pool.values()) {
+    if (e.scope === "global") continue;
+    if (e.scope.project !== projectId) continue;
+    projectServerNames.add(e.name);
+  }
+  const seenToolNames = new Set<string>();
   const out: ToolDefinition[] = [];
-  // Project first so its tools win on name collision.
+  // Project entries first so their tools land in `seen` and any
+  // remaining tool-name collisions across other servers go to the
+  // project's version.
   for (const e of pool.values()) {
     if (e.scope === "global") continue;
     if (e.scope.project !== projectId) continue;
     if (e.state !== "connected") continue;
     for (const t of e.bridged) {
-      if (seen.has(t.name)) continue;
-      seen.add(t.name);
+      if (seenToolNames.has(t.name)) continue;
+      seenToolNames.add(t.name);
       out.push(t);
     }
   }
   for (const e of pool.values()) {
     if (e.scope !== "global") continue;
+    // Server-name shadowed by a project entry — skip the global
+    // entry entirely.
+    if (projectServerNames.has(e.name)) continue;
     if (e.state !== "connected") continue;
     for (const t of e.bridged) {
-      if (seen.has(t.name)) continue;
-      seen.add(t.name);
+      if (seenToolNames.has(t.name)) continue;
+      seenToolNames.add(t.name);
       out.push(t);
     }
   }

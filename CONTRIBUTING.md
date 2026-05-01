@@ -67,6 +67,7 @@ There's no Jest. Each phase has a hand-rolled integration script under
 | Diff routes | `npx tsx tests/test-diff.ts` |
 | Git routes | `npx tsx tests/test-git.ts` |
 | Multipart attachments | `npx tsx tests/test-attachments.ts` |
+| MCP integration | `npx tsx tests/test-mcp.ts` |
 
 Each script spawns its own Fastify server (no shared global state), prints
 PASS/FAIL per assertion, and exits 0 or 1. They're safe to run in parallel
