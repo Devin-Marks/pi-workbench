@@ -9,7 +9,13 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["icons/icon.svg", "offline.html"],
+      includeAssets: [
+        "icons/icon.svg",
+        "icons/icon-192.png",
+        "icons/icon-512.png",
+        "icons/icon-maskable-512.png",
+        "offline.html",
+      ],
       manifest: {
         name: "pi web ui",
         short_name: "pi",
@@ -19,16 +25,40 @@ export default defineConfig({
         display: "standalone",
         start_url: "/",
         scope: "/",
-        // SVG icon with `purpose: any maskable` covers Chrome, Edge,
-        // Firefox, and Android. iOS Safari home-screen install prefers
-        // an apple-touch-icon (PNG) — we add that link tag in
-        // index.html. Phase 18 swaps in real raster icons.
+        // Raster PNGs for the standard install sizes (192/512 are the
+        // PWA spec's recommended baseline) plus a dedicated maskable
+        // 512×512 with the glyph rendered into the middle 80% of the
+        // canvas — Android adaptive icons crop the outer 20% so a
+        // full-bleed glyph would lose its edges. SVG kept as a
+        // vector-quality fallback for browsers that prefer it
+        // (Chrome/Edge/Firefox desktop will pick the SVG over the
+        // rasters when both are advertised). iOS Safari uses the
+        // apple-touch-icon link tag in index.html for home-screen
+        // installs; the rasters above also serve that path.
         icons: [
+          {
+            src: "/icons/icon-192.png",
+            sizes: "192x192",
+            type: "image/png",
+            purpose: "any",
+          },
+          {
+            src: "/icons/icon-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "any",
+          },
+          {
+            src: "/icons/icon-maskable-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "maskable",
+          },
           {
             src: "/icons/icon.svg",
             sizes: "any",
             type: "image/svg+xml",
-            purpose: "any maskable",
+            purpose: "any",
           },
         ],
       },
