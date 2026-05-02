@@ -27,3 +27,12 @@ jobs:
 
       - name: Typecheck + lint + format
         run: npm run check
+
+      - name: Integration tests
+        # Loops every tests/test-*.ts. The runner skips test-docker
+        # (long Docker image build, run locally before releases) and
+        # the live-LLM gated branches inside test-session/sse/api skip
+        # themselves because PI_TEST_LIVE_PROMPT isn't set. Native
+        # ubuntu-latest provides node-pty/ripgrep/git out of the box —
+        # no extra setup needed.
+        run: npm run test:ci
