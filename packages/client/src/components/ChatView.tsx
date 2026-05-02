@@ -510,7 +510,15 @@ function Message({
         </div>
         {text.length > 0 && (
           <div className="text-neutral-100">
-            {showRaw ? <RawText text={text} /> : <ChatMarkdown text={text} />}
+            {showRaw ? (
+              <RawText text={text} />
+            ) : (
+              // Chat-style hard breaks for user input only — see
+              // ChatMarkdown's `chatStyleBreaks` prop docstring for
+              // the trade-off (tables in user input need a leading
+              // blank line; this matches what most users type).
+              <ChatMarkdown text={text} chatStyleBreaks />
+            )}
           </div>
         )}
         {fileRefs.length > 0 && (

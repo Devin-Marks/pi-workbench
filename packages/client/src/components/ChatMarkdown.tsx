@@ -51,18 +51,53 @@ interface Props {
    * default matches the assistant text block (text-sm).
    */
   size?: "sm" | "xs";
+  /**
+   * Enable chat-style hard breaks (single `\n` → `<br>`) via
+   * `remark-breaks`. Default `false`.
+   *
+   * User messages set this to `true` because chat input is typed
+   * as prose with line breaks the user expects to see — the
+   * Slack / Discord / GitHub-comments dialect. The user's primary
+   * use is "paste a list of items separated by newlines and have
+   * each on its own line."
+   *
+   * Trade-off knowingly accepted: GFM tables in user input that
+   * AREN'T preceded by a blank line can render with each row as
+   * a `<br>`-separated paragraph instead of a real table (the
+   * table parser fails when the table runs on from a preceding
+   * paragraph; remark-breaks then renders the failed parse as
+   * line-broken text). Workaround: leave a blank line above the
+   * table. Assistant output keeps standard CommonMark behavior
+   * because the model emits real markdown structure that depends
+   * on the standard line-break semantics.
+   */
+  chatStyleBreaks?: boolean;
 }
 
 /**
  * react-markdown 10 dropped the `inline` prop on the code component.
- * The convention now: fenced blocks come through with a
- * `className="language-foo"` from the fence's lang hint; inline
- * code (single backticks) has no className. We branch on that to
- * pick the inline-styled span vs the prism-highlighted block.
+ *
+ * Detection: we treat the code as a block whenever (a) it has a
+ * `language-*` className (fenced block with explicit lang hint), or
+ * (b) its text contains a newline (fenced block without a lang
+ * hint — react-markdown still hands those through as `<code>`
+ * inside a `<pre>`, just with no className). Anything else is
+ * single-backtick inline code.
+ *
+ * Earlier versions branched only on className, which silently
+ * routed unlanged ` ``` ` blocks to the inline span and lost the
+ * block layout entirely. Block-vs-inline is the user-visible
+ * decision, so we make it on the right signal.
  */
 const CodeRenderer = ({ className, children, ...rest }: HTMLAttributes<HTMLElement>): ReactNode => {
   const langMatch = /language-([\w-]+)/.exec(className ?? "");
-  if (langMatch === null) {
+  // children is the code text. Coerce to string and strip a single
+  // trailing newline that `react-markdown` reliably adds — leaving
+  // it produces an awkward blank last line in the highlight.
+  const code = String(children ?? "").replace(/\n$/, "");
+  const isBlock = langMatch !== null || code.includes("\n");
+
+  if (!isBlock) {
     return (
       <code
         className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[0.9em] text-neutral-100"
@@ -72,11 +107,9 @@ const CodeRenderer = ({ className, children, ...rest }: HTMLAttributes<HTMLEleme
       </code>
     );
   }
-  const language = langMatch[1] ?? "text";
-  // children is the code text. Coerce to string and strip a single
-  // trailing newline that `react-markdown` reliably adds — leaving
-  // it produces an awkward blank last line in the highlight.
-  const code = String(children ?? "").replace(/\n$/, "");
+  // Default to plain "text" so prism still wraps the block with
+  // its <pre> chrome (no token highlighting, just the styling).
+  const language = langMatch?.[1] ?? "text";
 
   return (
     <Highlight code={code} language={language} theme={prismThemes.vsDark}>
@@ -167,7 +200,7 @@ const components: Components = {
   pre: ({ children }) => <>{children}</>,
 };
 
-export function ChatMarkdown({ text, size = "sm" }: Props) {
+export function ChatMarkdown({ text, size = "sm", chatStyleBreaks = false }: Props) {
   // The outer container holds the typography scale + breaks long
   // unbroken tokens (URLs, identifiers, base64 dumps) so a single
   // gigantic word can't blow out the bubble width. Tailwind's
@@ -175,19 +208,19 @@ export function ChatMarkdown({ text, size = "sm" }: Props) {
   // catches the rare hostile-input case (very long unbroken hex
   // strings, etc.).
   //
-  // remark-breaks: standard CommonMark folds a single `\n` into
-  // whitespace, so "line one\nline two" would join on one line.
-  // That defies what users expect from a chat surface (Slack,
-  // Discord, GitHub comments all preserve single newlines).
-  // remark-breaks rewrites the AST so each lone newline becomes a
-  // hard break — without changing the dialect for the rest
-  // (paragraph breaks at blank lines, fenced blocks unaffected,
-  // etc.). Applied alongside remark-gfm so tables / strikethrough
-  // / autolinks still work.
+  // Line-break dialect is controlled by `chatStyleBreaks` (default
+  // off, on for user messages). Off = standard CommonMark — single
+  // `\n` folds into whitespace, blank line starts a new paragraph,
+  // two trailing spaces before `\n` are a hard break (same dialect
+  // GitHub issue comments use). On = remark-breaks rewrites each
+  // `\n` to a hard break — chat-style, what users expect from
+  // pasted lists. See the prop docstring for the trade-off and why
+  // it's user-only.
   const sizeClass = size === "xs" ? "text-xs" : "text-sm";
+  const plugins = chatStyleBreaks ? [remarkGfm, remarkBreaks] : [remarkGfm];
   return (
     <div className={`${sizeClass} break-words [overflow-wrap:anywhere]`}>
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
+      <ReactMarkdown remarkPlugins={plugins} components={components}>
         {text}
       </ReactMarkdown>
     </div>
