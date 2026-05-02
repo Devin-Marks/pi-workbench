@@ -274,6 +274,46 @@ async function main(): Promise<void> {
       // assert no error closes the socket.
       await new Promise((r) => setTimeout(r, 100));
       assert("socket still open after resize", term.ws.readyState === WebSocket.OPEN);
+
+      // ---- Env allowlist: secrets dropped, harmless vars passed through ----
+      // The workbench server process has API_KEY set (we passed it
+      // above), but the PTY shell must NOT inherit it. Wrap the
+      // expansion with two sentinels: if API_KEY expanded to empty,
+      // the sentinels appear adjacent in the printf OUTPUT line
+      // (distinct from the shell's input echo, which contains quotes
+      // between them and so won't match the adjacency probe).
+      const sL = "ENVCHK_L_" + randomBytes(3).toString("hex");
+      const sR = "_ENVCHK_R_" + randomBytes(3).toString("hex");
+      send(term.ws, {
+        type: "input",
+        data: `printf '%s%s%s\\n' "${sL}" "$API_KEY" "${sR}"\n`,
+      });
+      const adjacent = `${sL}${sR}`;
+      const sawAdjacent = await waitForOutput(term, adjacent, 5_000);
+      assert(
+        "API_KEY is NOT inherited by PTY shell",
+        sawAdjacent,
+        `expected sentinels ${sL} and ${sR} to appear adjacent (API_KEY empty); ` +
+          `last output: ${term.output.slice(-400)}`,
+      );
+
+      // PATH must still come through — a shell with no PATH can't even
+      // run `ls`. Sanity-check the allowlist actually allows things.
+      const pL = "PATHCHK_L_" + randomBytes(3).toString("hex");
+      const pR = "_PATHCHK_R_" + randomBytes(3).toString("hex");
+      send(term.ws, {
+        type: "input",
+        data: `printf '%s%s%s\\n' "${pL}" "$PATH" "${pR}"\n`,
+      });
+      const pathAdjacent = `${pL}${pR}`;
+      const sawPath = await waitForOutput(term, pR, 5_000);
+      assert("PATH echo wraps reach client", sawPath);
+      assert(
+        "PATH is inherited by PTY shell (not empty)",
+        !term.output.includes(pathAdjacent),
+        `unexpected adjacent sentinels — PATH expanded to empty. ` +
+          `last output: ${term.output.slice(-400)}`,
+      );
     }
 
     // ---- Concurrent terminal ----

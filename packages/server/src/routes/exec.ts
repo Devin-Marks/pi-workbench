@@ -32,10 +32,13 @@ import { scrubbedEnv } from "../pty-manager.js";
  * inject context.
  *
  * Security posture: BashOperations is overridden to inject our
- * `scrubbedEnv()` (no JWT_SECRET / API_KEY / UI_PASSWORD / provider
- * keys), matching the integrated terminal's posture. The agent's own
- * bash TOOL may still have an env-exposure surface — that's a
- * separate fix for a separate code path.
+ * `scrubbedEnv()` — an allowlist-based filter that only passes
+ * known-harmless system vars (PATH, HOME, TERM, locales, …). Workbench
+ * secrets, provider keys, cloud credentials, and any other host-env
+ * vars are dropped unless the operator opts them back in via
+ * `TERMINAL_PASSTHROUGH_ENV`. Matches the integrated terminal's
+ * posture. The agent's own bash TOOL may still have an env-exposure
+ * surface — that's a separate fix for a separate code path.
  */
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -49,8 +52,9 @@ interface ExecBody {
  * Build a BashOperations that delegates to local spawn, but with our
  * scrubbed env. createLocalBashOperations from the SDK would inherit
  * `process.env` verbatim, leaking secrets the workbench process
- * carries (JWT_SECRET, API_KEY, etc.) — see pty-manager.SCRUB_ENV_VARS
- * for the full list and rationale.
+ * carries (JWT_SECRET, API_KEY, etc.) — see
+ * pty-manager.TERMINAL_ENV_ALLOWLIST for the full set of allowed
+ * passthrough vars and rationale.
  */
 function workbenchBashOperations(): BashOperations {
   return {

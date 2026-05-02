@@ -8,6 +8,7 @@ import {
   SettingsManager,
   type SessionInfo,
 } from "@mariozechner/pi-coding-agent";
+import { buildWorkbenchResourceLoader } from "./agent-resource-loader.js";
 import { config } from "./config.js";
 import { makeDedupe, makeLock } from "./concurrency.js";
 import { effectiveSkillsForProject } from "./config-manager.js";
@@ -312,10 +313,16 @@ export async function createSession(
   // for Phase 6's prompt route.
   const customTools = await resolveMcpCustomTools(projectId, workspacePath);
   const settingsManager = await buildSessionSettingsManager(workspacePath, projectId);
+  const resourceLoader = await buildWorkbenchResourceLoader(
+    workspacePath,
+    config.piConfigDir,
+    settingsManager,
+  );
   const { session } = await createAgentSession({
     cwd: workspacePath,
     sessionManager,
     settingsManager,
+    resourceLoader,
     agentDir: config.piConfigDir,
     customTools,
   });
@@ -457,10 +464,16 @@ export async function resumeSession(
     const sessionManager = SessionManager.open(match.path, dir, workspacePath);
     const customTools = await resolveMcpCustomTools(projectId, workspacePath);
     const settingsManager = await buildSessionSettingsManager(workspacePath, projectId);
+    const resourceLoader = await buildWorkbenchResourceLoader(
+      workspacePath,
+      config.piConfigDir,
+      settingsManager,
+    );
     const { session } = await createAgentSession({
       cwd: workspacePath,
       sessionManager,
       settingsManager,
+      resourceLoader,
       agentDir: config.piConfigDir,
       customTools,
     });
@@ -823,10 +836,16 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
   const sessionManager = SessionManager.open(newPath, dir, source.workspacePath);
   const customTools = await resolveMcpCustomTools(source.projectId, source.workspacePath);
   const settingsManager = await buildSessionSettingsManager(source.workspacePath, source.projectId);
+  const resourceLoader = await buildWorkbenchResourceLoader(
+    source.workspacePath,
+    config.piConfigDir,
+    settingsManager,
+  );
   const { session } = await createAgentSession({
     cwd: source.workspacePath,
     sessionManager,
     settingsManager,
+    resourceLoader,
     agentDir: config.piConfigDir,
     customTools,
   });
@@ -865,10 +884,16 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
         source.workspacePath,
         source.projectId,
       );
+      const restoredResourceLoader = await buildWorkbenchResourceLoader(
+        source.workspacePath,
+        config.piConfigDir,
+        restoredSettingsManager,
+      );
       const { session: restoredSession } = await createAgentSession({
         cwd: source.workspacePath,
         sessionManager: restoredManager,
         settingsManager: restoredSettingsManager,
+        resourceLoader: restoredResourceLoader,
         agentDir: config.piConfigDir,
         customTools: restoredCustomTools,
       });

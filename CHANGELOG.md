@@ -20,6 +20,36 @@ the README for the support window policy.
   in the freshly-spawned shell. Reattach to an existing PTY does not
   re-source so manually-switched venvs are preserved.
 
+### Security
+
+- **Agent secret-hygiene system-prompt rule (opt-in).** When
+  `AGENT_SECRET_HYGIENE_RULE=true`, every `createAgentSession` ships
+  an `appendSystemPrompt` addendum telling the model to treat env-var
+  values as credentials by default and not echo them into responses
+  or tool outputs unless explicitly asked. Phrased around *displaying
+  values* (not accessing variables) so legitimate skill workflows
+  that need `$GITHUB_TOKEN`, `$AWS_*`, etc. continue to work —
+  `curl -H "Authorization: Bearer $X"` is fine, `printenv X` to
+  reflect the value back to the user is not. Default OFF: kept opt-in
+  so the workbench doesn't ship invisible behavioral rules. The flag
+  is intentionally absent from `docker-compose.yml` and
+  `.env.example` — operators discover it via [SECURITY.md](./SECURITY.md)
+  alongside the threat-model caveats (behavioral nudge, not a
+  security control).
+- **Terminal env-var allowlist.** The integrated terminal and the `!`
+  exec route now start from an allowlist of harmless system vars
+  (`PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `LANG`/`LC_*`, `TZ`, …)
+  instead of inheriting the workbench process's full env minus a
+  named denylist. Workbench secrets, provider API keys, cloud
+  credentials, and any other host-env var are dropped before spawn,
+  so `printenv` / `echo $X` returns nothing for them. Operators who
+  need a specific var in-shell opt it back in via the new
+  `TERMINAL_PASSTHROUGH_ENV` env (comma- or whitespace-separated).
+  Closes the previous fail-open denylist that leaked any
+  newly-named secret variable until added to the list. See
+  [SECURITY.md](./SECURITY.md) for the full rationale and a note on
+  the unrelated terminal-can-read-pi-config-files limitation.
+
 ### Build & release
 
 - **Release tooling.** New `scripts/bump-version.sh <new-version>` that
