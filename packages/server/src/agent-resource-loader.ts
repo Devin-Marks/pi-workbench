@@ -85,9 +85,7 @@ export async function buildWorkbenchResourceLoader(
   agentDir: string,
   settingsManager: SettingsManager,
 ): Promise<ResourceLoader> {
-  const appendSystemPrompt = config.agentSecretHygieneRule
-    ? [WORKBENCH_SECRET_HYGIENE_RULE]
-    : [];
+  const appendSystemPrompt = config.agentSecretHygieneRule ? [WORKBENCH_SECRET_HYGIENE_RULE] : [];
   const loader = new DefaultResourceLoader({
     cwd,
     agentDir,
