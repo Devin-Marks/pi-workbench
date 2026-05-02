@@ -54,14 +54,28 @@ interface Props {
 
 /**
  * react-markdown 10 dropped the `inline` prop on the code component.
- * The convention now: fenced blocks come through with a
- * `className="language-foo"` from the fence's lang hint; inline
- * code (single backticks) has no className. We branch on that to
- * pick the inline-styled span vs the prism-highlighted block.
+ *
+ * Detection: we treat the code as a block whenever (a) it has a
+ * `language-*` className (fenced block with explicit lang hint), or
+ * (b) its text contains a newline (fenced block without a lang
+ * hint — react-markdown still hands those through as `<code>`
+ * inside a `<pre>`, just with no className). Anything else is
+ * single-backtick inline code.
+ *
+ * Earlier versions branched only on className, which silently
+ * routed unlanged ` ``` ` blocks to the inline span and lost the
+ * block layout entirely. Block-vs-inline is the user-visible
+ * decision, so we make it on the right signal.
  */
 const CodeRenderer = ({ className, children, ...rest }: HTMLAttributes<HTMLElement>): ReactNode => {
   const langMatch = /language-([\w-]+)/.exec(className ?? "");
-  if (langMatch === null) {
+  // children is the code text. Coerce to string and strip a single
+  // trailing newline that `react-markdown` reliably adds — leaving
+  // it produces an awkward blank last line in the highlight.
+  const code = String(children ?? "").replace(/\n$/, "");
+  const isBlock = langMatch !== null || code.includes("\n");
+
+  if (!isBlock) {
     return (
       <code
         className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[0.9em] text-neutral-100"
@@ -71,11 +85,9 @@ const CodeRenderer = ({ className, children, ...rest }: HTMLAttributes<HTMLEleme
       </code>
     );
   }
-  const language = langMatch[1] ?? "text";
-  // children is the code text. Coerce to string and strip a single
-  // trailing newline that `react-markdown` reliably adds — leaving
-  // it produces an awkward blank last line in the highlight.
-  const code = String(children ?? "").replace(/\n$/, "");
+  // Default to plain "text" so prism still wraps the block with
+  // its <pre> chrome (no token highlighting, just the styling).
+  const language = langMatch?.[1] ?? "text";
 
   return (
     <Highlight code={code} language={language} theme={prismThemes.vsDark}>
