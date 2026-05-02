@@ -163,9 +163,39 @@ export function ChatView({ sessionId }: Props) {
             </p>
           )}
           <div className="mx-auto max-w-3xl space-y-4">
-            {messages.map((m, i) => (
-              <Message key={i} message={m} />
-            ))}
+            {(() => {
+              // Pair toolCall blocks (in assistant messages) with their
+              // matching toolResult messages (by toolCallId) so each
+              // tool invocation renders as one collapsed entry instead
+              // of two separate boxes. Loose toolResults — orphans
+              // from older sessions, or results whose call we never
+              // saw — still render via the standalone path.
+              const toolResultsById = new Map<string, AgentMessageLike>();
+              const pairedIds = new Set<string>();
+              for (const m of messages) {
+                if (m.role === "toolResult" && typeof m.toolCallId === "string") {
+                  toolResultsById.set(m.toolCallId, m);
+                }
+              }
+              for (const m of messages) {
+                if (m.role !== "assistant" || !Array.isArray(m.content)) continue;
+                for (const block of m.content as Record<string, unknown>[]) {
+                  if (block.type === "toolCall" && typeof block.id === "string") {
+                    pairedIds.add(block.id);
+                  }
+                }
+              }
+              return messages.map((m, i) => {
+                if (
+                  m.role === "toolResult" &&
+                  typeof m.toolCallId === "string" &&
+                  pairedIds.has(m.toolCallId)
+                ) {
+                  return null; // rendered inline next to its toolCall
+                }
+                return <Message key={i} message={m} toolResultsById={toolResultsById} />;
+              });
+            })()}
             {streamingText.length > 0 && (
               <div className="rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3">
                 <div className="mb-1 text-[10px] uppercase tracking-wider text-neutral-500">
@@ -426,7 +456,13 @@ function FileRefBadge({ ref: r }: { ref: FileRef }) {
   );
 }
 
-function Message({ message }: { message: AgentMessageLike }) {
+function Message({
+  message,
+  toolResultsById,
+}: {
+  message: AgentMessageLike;
+  toolResultsById?: Map<string, AgentMessageLike>;
+}) {
   // User text messages — may include image + file attachments per
   // Phase 14. Optimistic shape uses a blob URL on the image block;
   // canonical refetched shape uses raw base64 with a mimeType, which
@@ -515,9 +551,14 @@ function Message({ message }: { message: AgentMessageLike }) {
       <div className="rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3">
         <div className="mb-1 text-[10px] uppercase tracking-wider text-neutral-500">assistant</div>
         <div className="space-y-2 text-sm text-neutral-100">
-          {content.map((block, i) => (
-            <AssistantBlock key={i} block={block as Record<string, unknown>} />
-          ))}
+          {content.map((block, i) => {
+            const blockProps: {
+              block: Record<string, unknown>;
+              toolResultsById?: Map<string, AgentMessageLike>;
+            } = { block: block as Record<string, unknown> };
+            if (toolResultsById !== undefined) blockProps.toolResultsById = toolResultsById;
+            return <AssistantBlock key={i} {...blockProps} />;
+          })}
         </div>
       </div>
     );
@@ -553,7 +594,13 @@ function Message({ message }: { message: AgentMessageLike }) {
   );
 }
 
-function AssistantBlock({ block }: { block: Record<string, unknown> }) {
+function AssistantBlock({
+  block,
+  toolResultsById,
+}: {
+  block: Record<string, unknown>;
+  toolResultsById?: Map<string, AgentMessageLike>;
+}) {
   const type = block.type;
 
   if (type === "text" && typeof block.text === "string") {
@@ -572,19 +619,9 @@ function AssistantBlock({ block }: { block: Record<string, unknown> }) {
   }
 
   if (type === "toolCall") {
-    const name = String(block.name ?? "tool");
-    const args = block.input ?? block.arguments ?? {};
-    return (
-      <div className="rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs">
-        <div className="mb-1 text-neutral-300">
-          <span className="text-neutral-500">→ </span>
-          <span className="font-mono">{name}</span>
-        </div>
-        <pre className="overflow-auto text-[11px] text-neutral-400">
-          {typeof args === "string" ? args : JSON.stringify(args, null, 2)}
-        </pre>
-      </div>
-    );
+    const id = typeof block.id === "string" ? block.id : undefined;
+    const result = id !== undefined ? toolResultsById?.get(id) : undefined;
+    return <ToolCallEntry block={block} result={result} />;
   }
 
   return (
@@ -594,6 +631,132 @@ function AssistantBlock({ block }: { block: Record<string, unknown> }) {
         {JSON.stringify(block, null, 2)}
       </pre>
     </details>
+  );
+}
+
+/**
+ * One tool invocation rendered as a single entry: header (always
+ * visible) + collapsible Input row + collapsible Output row.
+ *
+ * Replaces the prior layout where the assistant-side toolCall block
+ * and its matching toolResult message rendered as two separate boxes.
+ * Pairing happens in the parent render loop via toolCallId; if no
+ * result has arrived yet (mid-streaming) the Output row shows
+ * "running…" and is not collapsible.
+ *
+ * `edit` keeps its specialized diff renderer inside the Output row —
+ * the diff is the most informative content for that tool, and
+ * showing it inside the same collapsed entry keeps the visual
+ * grouping while preserving the per-file +/- gutter the user is
+ * used to.
+ */
+function ToolCallEntry({
+  block,
+  result,
+}: {
+  block: Record<string, unknown>;
+  result: AgentMessageLike | undefined;
+}) {
+  const name = String(block.name ?? "tool");
+  const args = block.input ?? block.arguments ?? {};
+  const argsText = typeof args === "string" ? args : JSON.stringify(args, null, 2);
+
+  const isError = result?.isError === true;
+  const resultContent = Array.isArray(result?.content) ? result?.content : [];
+  const outputText = resultContent
+    .filter((c): c is { type: "text"; text: string } => {
+      const o = c as { type?: unknown; text?: unknown };
+      return o.type === "text" && typeof o.text === "string";
+    })
+    .map((c) => c.text)
+    .join("\n");
+
+  // For `edit`, prefer the unified diff string the SDK puts on
+  // result.details over the joined text body — same logic the prior
+  // standalone ToolResult used; keeping it here means edit results
+  // still render as a real diff once expanded.
+  const editDiff =
+    name === "edit" && result !== undefined
+      ? (() => {
+          const d = (result.details as { diff?: unknown } | undefined)?.diff;
+          return typeof d === "string" ? d : outputText;
+        })()
+      : undefined;
+  const editFn = name === "edit" && result !== undefined ? extractFilename(result) : undefined;
+  const editStats = editDiff !== undefined ? countDiffLines(editDiff) : undefined;
+
+  // Border tint reflects success/error/pending so the user can scan
+  // a long thread without expanding every entry.
+  const borderClass =
+    result === undefined
+      ? "border-neutral-700"
+      : isError
+        ? "border-red-700/50"
+        : "border-neutral-800";
+
+  return (
+    <div className={`rounded border ${borderClass} bg-neutral-950 text-xs`}>
+      <div className="flex items-center justify-between px-3 py-2 text-neutral-300">
+        <div className="min-w-0 truncate">
+          <span className="text-neutral-500">→ </span>
+          <span className="font-mono">{name}</span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {result === undefined && (
+            <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400">
+              running…
+            </span>
+          )}
+          {isError && (
+            <span className="rounded bg-red-900/30 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-red-300">
+              error
+            </span>
+          )}
+        </div>
+      </div>
+
+      {argsText.length > 0 && (
+        <details className="border-t border-neutral-800/60">
+          <summary className="cursor-pointer px-3 py-1.5 text-[11px] text-neutral-500 hover:text-neutral-300">
+            Input
+          </summary>
+          <pre className="overflow-auto px-3 pb-2 font-mono text-[11px] text-neutral-400">
+            {argsText}
+          </pre>
+        </details>
+      )}
+
+      {result !== undefined && (
+        <details className="border-t border-neutral-800/60">
+          <summary className="cursor-pointer px-3 py-1.5 text-[11px] text-neutral-500 hover:text-neutral-300">
+            Output
+            {editStats !== undefined && (
+              <span className="ml-2 font-mono text-[10px]">
+                <span className="text-emerald-400">+{editStats.adds}</span>{" "}
+                <span className="text-red-400">-{editStats.dels}</span>
+              </span>
+            )}
+            {editFn !== undefined && (
+              <span className="ml-2 font-mono text-[10px] text-neutral-500">{editFn}</span>
+            )}
+          </summary>
+          {editDiff !== undefined && editStats !== undefined ? (
+            <div className="px-3 pb-2">
+              <ChatEditDiff
+                diff={editDiff}
+                filename={editFn}
+                adds={editStats.adds}
+                dels={editStats.dels}
+              />
+            </div>
+          ) : (
+            <pre className="max-h-96 overflow-auto px-3 pb-2 font-mono text-[11px] text-neutral-300">
+              {outputText.length > 0 ? outputText : "(empty)"}
+            </pre>
+          )}
+        </details>
+      )}
+    </div>
   );
 }
 
