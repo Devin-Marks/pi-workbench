@@ -22,6 +22,17 @@ the README for the support window policy.
 
 ### Security
 
+- **Agent secret-hygiene system-prompt rule.** Every `createAgentSession`
+  now ships an `appendSystemPrompt` addendum telling the model to treat
+  env-var values as credentials by default and not echo them into
+  responses or tool outputs unless explicitly asked. Phrased around
+  *displaying values* (not accessing variables) so legitimate skill
+  workflows that need `$GITHUB_TOKEN`, `$AWS_*`, etc. continue to work
+  — `curl -H "Authorization: Bearer $X"` is fine, `printenv X` to
+  reflect the value back to the user is not. This is a behavioral
+  nudge against accidental disclosure (model decides on its own to
+  `printenv` while debugging), not a security control — see
+  [SECURITY.md](./SECURITY.md) for the threat-model framing.
 - **Terminal env-var allowlist.** The integrated terminal and the `!`
   exec route now start from an allowlist of harmless system vars
   (`PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `LANG`/`LC_*`, `TZ`, …)

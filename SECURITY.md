@@ -72,6 +72,22 @@ workspace root. The threat model assumes:
   them. Operators who legitimately need a specific var in-shell opt it back
   in via `TERMINAL_PASSTHROUGH_ENV` (comma- or whitespace-separated). The
   list lives in `packages/server/src/pty-manager.ts#TERMINAL_ENV_ALLOWLIST`.
+- **Accidental secret disclosure by the agent**. The agent's autonomous
+  `bash` tool DOES inherit the workbench process env (deliberately — skills
+  often legitimately need `$GITHUB_TOKEN`, `$AWS_*`, etc. to do their job).
+  To reduce the realistic failure mode where the model decides on its own
+  to `printenv` while debugging and dumps secrets into the assistant
+  transcript, every session ships a system-prompt addendum
+  (`packages/server/src/agent-resource-loader.ts#WORKBENCH_SECRET_HYGIENE_RULE`)
+  that tells the model to treat env-var values as credentials by default
+  and to reference them by name (`$X`) rather than expanding them inline.
+  This is a **behavioral nudge, not a control** — a determined user, a
+  prompt injection in a tool result, or the model's own reasoning can talk
+  it out of compliance. Operators with adversarial threat models should
+  pair it with the deployment posture below (don't run with sensitive env
+  vars in `process.env` if the agent doesn't need them; prefer
+  `~/.pi/agent/auth.json` for provider credentials, since those are read
+  by the SDK before tool spawn rather than passed through).
 
 ## Known limitations
 
