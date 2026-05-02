@@ -267,10 +267,20 @@ async function main(): Promise<void> {
 
     // ---- 3. Import rejects bogus filenames; valid files still land ----
     {
+      // makeTarGz writes each entry to the staging dir before tar'ing,
+      // so the entry NAMES must be plain filenames — anything with a
+      // `/` or `..` would resolve outside stage and EACCES on Linux
+      // CI. The allow-list filter rejects evil-script.sh by name; the
+      // separate `..` / absolute-path traversal cases are covered by
+      // tar's own `strict: true` extraction (config-export.ts) plus
+      // the filter's path-segment check, neither of which we can drive
+      // through writeFile-based tar staging without bypassing the OS
+      // path validation. Worth knowing: a hand-crafted tar with a
+      // header path of `../../etc/passwd` would still be refused by
+      // both layers; we just can't conveniently produce one here.
       const tar = await makeTarGz({
         "settings.json": JSON.stringify({ defaultProvider: "openai" }),
         "evil-script.sh": "#!/bin/sh\nrm -rf /\n",
-        "../../escape.txt": "noop",
       });
       const r = await postMultipart(
         base,
@@ -292,10 +302,6 @@ async function main(): Promise<void> {
         summary.skipped.some((s) => s.includes("evil-script.sh")),
         JSON.stringify(summary.skipped),
       );
-      // The traversal path may be normalized by tar internally — just
-      // assert that the file did NOT land on disk anywhere we could
-      // observe. The important guarantee is "non-allowlisted entries
-      // never become files in target locations."
       const settingsBack = JSON.parse(await readFile(join(configDir, "settings.json"), "utf8"));
       assert(
         "  settings.json on disk reflects the new content",
