@@ -116,6 +116,33 @@ export class EntryNotFoundError extends Error {
 
 const registry = new Map<string, LiveSession>();
 
+/**
+ * Built-in pi tools we activate on every session. Pi's SDK ships
+ * seven `read | bash | edit | write | grep | find | ls` (see
+ * `node_modules/@mariozechner/pi-coding-agent/dist/core/tools/index.d.ts`),
+ * but only the first four are activated when `tools` is left
+ * undefined. We enable all seven so the agent gets first-class
+ * filesystem-read affordances (grep / find / ls) instead of
+ * shelling out via bash for every directory listing or content
+ * search — same UX the pi TUI ships with.
+ *
+ * Passing `tools: [...]` to `createAgentSession` ALSO filters
+ * customTools (MCP) by name (see agent-session.js
+ * `_refreshToolRegistry`), so each callsite below extends this
+ * list with the names of its MCP customTools before passing it
+ * through. Without that union, enabling the read-only set would
+ * silently disable MCP.
+ */
+const BUILTIN_TOOL_NAMES: readonly string[] = [
+  "read",
+  "bash",
+  "edit",
+  "write",
+  "grep",
+  "find",
+  "ls",
+];
+
 /** Match the project-manager UUID shape; defends against ad-hoc project IDs. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -325,6 +352,7 @@ export async function createSession(
     resourceLoader,
     agentDir: config.piConfigDir,
     customTools,
+    tools: [...BUILTIN_TOOL_NAMES, ...customTools.map((t) => t.name)],
   });
 
   const now = new Date();
@@ -476,6 +504,7 @@ export async function resumeSession(
       resourceLoader,
       agentDir: config.piConfigDir,
       customTools,
+      tools: [...BUILTIN_TOOL_NAMES, ...customTools.map((t) => t.name)],
     });
 
     const now = new Date();
@@ -848,6 +877,7 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
     resourceLoader,
     agentDir: config.piConfigDir,
     customTools,
+    tools: [...BUILTIN_TOOL_NAMES, ...customTools.map((t) => t.name)],
   });
 
   const now = new Date();
@@ -896,6 +926,7 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
         resourceLoader: restoredResourceLoader,
         agentDir: config.piConfigDir,
         customTools: restoredCustomTools,
+        tools: [...BUILTIN_TOOL_NAMES, ...restoredCustomTools.map((t) => t.name)],
       });
       // Mutate the existing LiveSession in place rather than
       // replacing the registry entry — any SSE client holding a

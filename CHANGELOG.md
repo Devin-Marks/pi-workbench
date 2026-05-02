@@ -47,6 +47,15 @@ the README for the support window policy.
 
 ### Added
 
+- **Agent gets `grep`, `find`, and `ls` tools.** Pi's SDK ships
+  seven built-in coding tools — `read`, `bash`, `edit`, `write`,
+  `grep`, `find`, `ls` — but only the first four are activated
+  when `tools` is left undefined on `createAgentSession`. We now
+  pass the full set on every session so the agent has first-class
+  filesystem-read affordances instead of shelling out via `bash`
+  for every directory listing or content search. MCP tool names
+  are unioned into the same allowlist at each call site so the
+  added `tools: [...]` arg doesn't filter custom tools.
 - **Config export / import as `.tar.gz`.** New `Settings → Backup`
   tab and matching API routes — `GET /api/v1/config/export` streams a
   flat tar with `mcp.json`, `settings.json`, and `models.json`;
