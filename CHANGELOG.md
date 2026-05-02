@@ -12,6 +12,21 @@ the README for the support window policy.
 
 ## [Unreleased]
 
+### Changed
+
+- **Tool calls render as one collapsed entry per call.** Previously
+  the assistant-side `toolCall` block and its matching `toolResult`
+  message rendered as two separate boxes in the chat — one showing
+  `→ <tool>` plus a JSON dump of arguments, the other showing the
+  tool's output. Now each tool invocation is paired by `toolCallId`
+  and rendered as a single entry with three rows: header
+  (`→ <tool>` + an error / running badge), collapsible **Input**
+  (closed by default), and collapsible **Output** (closed by
+  default). The `edit` tool keeps its specialized diff renderer
+  inside the Output row so file diffs still display as +/- lines
+  once expanded. Mid-stream calls without a result yet show a
+  "running…" badge in the header.
+
 ### Added
 
 - **Config export / import as `.tar.gz`.** New `Settings → Backup`
