@@ -291,6 +291,23 @@ export const config = Object.freeze({
    * the same time they meet its caveats.
    */
   agentSecretHygieneRule: readBool("AGENT_SECRET_HYGIENE_RULE", false),
+  /**
+   * How long a detached PTY (its WebSocket closed but no replacement
+   * attached yet) is held alive before being reaped. The 10-minute
+   * default protects the common reattach use case: page refresh,
+   * transient network blip, laptop sleep — none of those should kill
+   * the user's shell.
+   *
+   * Operators in resource-constrained envs (kiosks, low-RAM
+   * containers) can shrink this. The integration test pins it to
+   * ~200 ms so the reap-on-close assertion completes within a normal
+   * test budget instead of waiting 10 minutes.
+   *
+   * Read by `pty-manager.ts#IDLE_REAP_MS` at module load. Setting
+   * this to 0 effectively disables reattach-after-WS-drop (every WS
+   * close becomes a hard kill); use that deliberately or not at all.
+   */
+  terminalIdleReapMs: readInt("PTY_IDLE_REAP_MS", 10 * 60 * 1000),
 } as const);
 
 export function authEnabled(): boolean {
