@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP Servers — pi-workbench</title>
+  <meta name="description" content="Connecting external Model Context Protocol servers to the workbench.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="../index.html" class="logo">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="#0d0d10"/>
+  <path d="M9 11 L6 16 L9 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M23 11 L26 16 L23 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M12 13 H20 M14 13 V21 M18 13 V21" stroke="#e6e7eb" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
+        pi-workbench
+      </a>
+      <nav class="nav-links" id="navLinks">
+        <a href="../index.html#features">Features</a>
+        <a href="../index.html#quickstart">Quick Start</a>
+        <a href="architecture.html">Docs</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench" class="nav-cta">GitHub</a>
+      </nav>
+      <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">&#9776;</button>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docsSidebar">
+      <div class="sidebar-section">
+        <h4>Documentation</h4>
+        <a href="architecture.html">Architecture</a>
+        <a href="configuration.html">Configuration</a>
+        <a href="containers.html">Containers</a>
+        <a href="deployment.html">Deployment</a>
+        <a href="api.html">API Examples</a>
+        <a href="mcp.html" class="active">MCP Servers</a>
+        <a href="sse-events.html">SSE Events</a>
+      </div>
+      <div class="sidebar-section">
+        <h4>Project</h4>
+        <a href="https://github.com/Devin-Marks/pi-workbench">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/SECURITY.md">Security</a>
+      </div>
+    </aside>
+
+    <main class="docs-main">
+      <h1>MCP Servers</h1>
+      <p class="docs-subtitle">Connecting external Model Context Protocol servers to the workbench.</p>
+<p>pi-workbench can connect to MCP servers and surface their tools to the
+agent. Configure servers from <strong>Settings → MCP</strong> in the browser, or by
+editing config files directly.</p>
+<blockquote>
+<p>Pi itself has no native MCP support. The integration is workbench-
+internal — see <a href="../packages/server/src/mcp/manager.ts"><code>packages/server/src/mcp/manager.ts</code></a>
+for the contract.</p>
+</blockquote>
+<h2>Scope of v1</h2>
+<ul>
+<li><strong>Remote servers only.</strong> Transports: <code>streamable-http</code> (newer MCP
+spec) and <code>sse</code> (legacy). The default <code>auto</code> transport tries
+<code>streamable-http</code> first and falls back to <code>sse</code> — covers
+<a href="https://github.com/jlowin/fastmcp" target="_blank" rel="noopener noreferrer">fastmcp</a> servers regardless of
+which transport you exposed.</li>
+<li><strong>stdio is not supported.</strong> The workbench is container-native and
+arbitrary subprocess spawning has different security trade-offs.
+Run stdio MCP servers as a separate process and expose them over
+HTTP/SSE if you need them in the workbench.</li>
+<li><strong>Static-header auth only.</strong> Bearer tokens, custom auth headers —
+whatever your MCP server expects. OAuth (per-server consent flow,
+callback handling) is deferred.</li>
+</ul>
+<h2>Where servers live</h2>
+<p>Two layers, merged at session create time:</p>
+<table>
+<thead>
+<tr>
+<th>Scope</th>
+<th>File</th>
+<th>Editable from UI?</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Global</td>
+<td><code>${WORKBENCH_DATA_DIR}/mcp.json</code></td>
+<td>Yes (Settings → MCP)</td>
+</tr>
+<tr>
+<td>Project</td>
+<td><code>&lt;projectPath&gt;/.mcp.json</code></td>
+<td>No — edit in your repo</td>
+</tr>
+</tbody></table>
+<p>Project entries <strong>override</strong> global entries when the server names
+collide. The override is per-server (not per-tool); add a project
+entry with the same <code>name</code> to swap a global server for a project-
+specific one inside that project&#39;s sessions.</p>
+<h2>File format</h2>
+<p><code>mcp.json</code> (workbench-native shape, written by the UI):</p>
+<pre><code class="language-json">{
+  &quot;disabled&quot;: false,
+  &quot;servers&quot;: {
+    &quot;my-server&quot;: {
+      &quot;url&quot;: &quot;https://mcp.example.com/sse&quot;,
+      &quot;transport&quot;: &quot;auto&quot;,
+      &quot;enabled&quot;: true,
+      &quot;headers&quot;: {
+        &quot;Authorization&quot;: &quot;Bearer sk-...&quot;
+      }
+    }
+  }
+}
+</code></pre>
+<p>Project <code>.mcp.json</code> accepts both shapes — workbench-native and the
+Claude Desktop / pi-mcp-adapter standard:</p>
+<pre><code class="language-json">{
+  &quot;mcpServers&quot;: {
+    &quot;chrome-devtools&quot;: {
+      &quot;url&quot;: &quot;https://mcp.example.com/sse&quot;
+    }
+  }
+}
+</code></pre>
+<p>This way an existing project that already had a <code>.mcp.json</code> for other
+MCP clients works without rewriting.</p>
+<h3>Field reference</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>url</code></td>
+<td>string</td>
+<td>(required)</td>
+<td>The MCP endpoint URL.</td>
+</tr>
+<tr>
+<td><code>transport</code></td>
+<td><code>&quot;auto&quot;</code> | <code>&quot;streamable-http&quot;</code> | <code>&quot;sse&quot;</code></td>
+<td><code>&quot;auto&quot;</code></td>
+<td>Connection probe order. <code>auto</code> tries StreamableHTTP first.</td>
+</tr>
+<tr>
+<td><code>enabled</code></td>
+<td>boolean</td>
+<td><code>true</code></td>
+<td>Disabled servers don&#39;t connect or contribute tools.</td>
+</tr>
+<tr>
+<td><code>headers</code></td>
+<td><code>Record&lt;string, string&gt;</code></td>
+<td>(none)</td>
+<td>Forwarded on every MCP RPC. Treated as secret on read — <code>GET /mcp/servers</code> returns <code>***REDACTED***</code> for every value.</td>
+</tr>
+<tr>
+<td><code>disabled</code></td>
+<td>boolean (top-level)</td>
+<td><code>false</code></td>
+<td>Master kill-switch. When <code>true</code>, NO MCP tools reach the agent regardless of per-server <code>enabled</code>. Surfaced as the toggle at the top of Settings → MCP.</td>
+</tr>
+</tbody></table>
+<h2>How the agent sees the tools</h2>
+<p>Each MCP tool advertised by a connected, enabled server becomes a pi
+<code>ToolDefinition</code> namespaced as <strong><code>&lt;server&gt;__&lt;tool&gt;</code></strong>. The prefix
+guarantees uniqueness so two servers can both advertise <code>search</code>
+without colliding.</p>
+<p>The agent calls them like any other tool. <code>client.callTool()</code> forwards
+the call; the MCP <code>CallToolResult.content</code> array is mapped into pi&#39;s
+content shape:</p>
+<ul>
+<li><code>text</code> → text content</li>
+<li><code>image</code> (with <code>mimeType</code>) → image content (data is base64)</li>
+<li><code>resource_link</code> / <code>resource</code> / unknown blocks → JSON-stringified
+into a text block (so the agent at least sees them rather than
+silently dropping)</li>
+</ul>
+<p><code>isError: true</code> on the MCP response prefixes the first text block with
+<code>[error]</code> so the agent has something actionable in its tool result.</p>
+<h2>Lifecycle</h2>
+<ul>
+<li><strong>Boot.</strong> The server eagerly loads <code>${WORKBENCH_DATA_DIR}/mcp.json</code>
+and connects every enabled global server. Connection failures are
+non-fatal — the server stays in <code>error</code> state and the workbench
+comes up regardless.</li>
+<li><strong>Project sessions.</strong> <code>&lt;projectPath&gt;/.mcp.json</code> is read lazily on
+the first <code>createAgentSession</code> for that project, then cached. A
+config change to that file requires either restarting the workbench
+or hitting the project&#39;s &quot;Probe&quot; button to pick up changes.</li>
+<li><strong>Save.</strong> A <code>PUT</code> from the Settings UI rewrites <code>mcp.json</code>
+atomically (<code>.tmp</code> + <code>rename</code>, mode 0600), then re-syncs the pool
+(disconnect + reconnect entries whose URL / transport / headers
+changed).</li>
+<li><strong>Master toggle.</strong> Flipping the toggle off in Settings doesn&#39;t
+disconnect anything — it just causes future <code>createAgentSession</code>
+calls to skip the <code>customTools</code> injection. Existing live sessions
+keep the tools they booted with.</li>
+</ul>
+<h2>Header status badge</h2>
+<p>The header next to <strong>Settings</strong> shows a colored dot + <code>MCP X/Y</code>:</p>
+<ul>
+<li><strong>emerald</strong> — every configured global server is connected</li>
+<li><strong>amber</strong> — some connected, some not (check Settings → MCP for the
+per-server <code>lastError</code>)</li>
+<li><strong>red</strong> — none connected (and at least one configured)</li>
+<li><strong>neutral</strong> — master toggle off</li>
+</ul>
+<p>Hidden when no servers are configured (keeps the header clean on
+deployments that don&#39;t use MCP) and in <code>MINIMAL_UI</code> mode.</p>
+<h2>Troubleshooting</h2>
+<p><strong>Status stuck in <code>error</code></strong> — open Settings → MCP, expand the server&#39;s
+row, and read <code>lastError</code>. Common causes: wrong URL, missing
+<code>Authorization</code> header, server returning 4xx on <code>tools/list</code>. The
+<strong>Probe</strong> button forces a reconnect + tool re-list; the result lands
+in the same row.</p>
+<p><strong>Both transports fail</strong> — pin <code>transport</code> explicitly. <code>auto</code> tries
+<code>streamable-http</code> and falls back to <code>sse</code>; if the server is misconfigured
+to advertise both but only one works, the auto-probe round-trip wastes
+a few hundred milliseconds on every reconnect. Pinning skips that.</p>
+<p><strong>Headers reset to <code>***REDACTED***</code></strong> — that&#39;s the read-path sentinel,
+not real data. The persisted file still has the real value. When you
+edit the form and save, leaving a sentinel value blank keeps the prior
+on-disk secret; supplying a new value overwrites it (same
+write-merge pattern as <code>models.json</code>).</p>
+<p><strong>Tools don&#39;t show up after editing project <code>.mcp.json</code></strong> — the file
+is read once per project per server lifetime. Hit Probe on the row,
+or restart the workbench, to pick up edits.</p>
+<h2>API surface</h2>
+<p>For automation. All routes are under <code>/api/v1/mcp/</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>GET</code></td>
+<td><code>/mcp/settings</code></td>
+<td>Master enable + connected/total count (header badge)</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/mcp/settings</code></td>
+<td>Toggle the master flag</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/mcp/servers[?projectId=…]</code></td>
+<td>Global config (redacted) + status (global ∪ project)</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/mcp/servers/:name</code></td>
+<td>Upsert a global server</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/mcp/servers/:name</code></td>
+<td>Remove a global server</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/mcp/servers/:name/probe[?projectId=…]</code></td>
+<td>Force reconnect + re-list, returns new status</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/mcp/tools?projectId=…</code></td>
+<td>Flat tool list available to sessions in the project</td>
+</tr>
+</tbody></table>
+<p>The Swagger UI at <code>/api/docs</code> has the request/response schemas.</p>
+<h2>See also</h2>
+<ul>
+<li><a href="./configuration.md"><code>docs/configuration.md</code></a> — workbench env vars
+including <code>WORKBENCH_DATA_DIR</code></li>
+<li><a href="./architecture.md"><code>docs/architecture.md</code></a> — where the manager
+sits in the request flow</li>
+<li><a href="../packages/server/src/mcp/manager.ts"><code>packages/server/src/mcp/manager.ts</code></a>
+— integration contract</li>
+</ul>
+
+    </main>
+  </div>
+
+  <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">&#9776;</button>
+
+  <script>
+    document.getElementById('mobileToggle').addEventListener('click', () => {
+      document.getElementById('navLinks').classList.toggle('open');
+    });
+    document.getElementById('sidebarToggle').addEventListener('click', () => {
+      document.getElementById('docsSidebar').classList.toggle('open');
+    });
+  </script>
+</body>
+</html>

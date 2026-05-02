@@ -1,0 +1,43 @@
+name: Deploy GitHub Pages
+
+# Pages site source: docs/site/. The static HTML there is generated
+# by `npm run build:site` (scripts/build-site.mjs) — generated output
+# is committed alongside the script so the deploy job is a pure copy
+# (no Node install, no marked dependency, no version surprises in CI).
+#
+# Re-runs whenever docs/site/** changes on main, OR on manual
+# dispatch (handy when only the workflow itself changes).
+
+on:
+  push:
+    branches: [main]
+    paths: [docs/site/**]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# A single in-flight Pages deploy at a time — no parallel runs.
+# `cancel-in-progress: false` so a PR-merge-and-immediately-push
+# scenario lands both deploys in order rather than one cancelling
+# the other.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/site
+      - id: deployment
+        uses: actions/deploy-pages@v4

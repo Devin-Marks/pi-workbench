@@ -122,11 +122,14 @@ export default tseslint.config(
       "@typescript-eslint/prefer-for-of": "off",
     },
   },
-  // Plain JS files (this very config) don't have a tsconfig; turn off
-  // the type-aware rules for them so the project can lint cleanly.
+  // Plain JS files (this very config, scripts/*.mjs) don't have a
+  // tsconfig; turn off the type-aware rules and inject Node globals
+  // so they lint cleanly without a per-file `/* global console */`
+  // ceremony.
   {
     files: ["**/*.{js,mjs,cjs}"],
     ...tseslint.configs.disableTypeChecked,
+    languageOptions: { globals: { ...globals.node } },
   },
   prettier,
 );

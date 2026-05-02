@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Examples — pi-workbench</title>
+  <meta name="description" content="End-to-end scripting recipes against the REST + SSE surface.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="../index.html" class="logo">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="#0d0d10"/>
+  <path d="M9 11 L6 16 L9 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M23 11 L26 16 L23 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M12 13 H20 M14 13 V21 M18 13 V21" stroke="#e6e7eb" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
+        pi-workbench
+      </a>
+      <nav class="nav-links" id="navLinks">
+        <a href="../index.html#features">Features</a>
+        <a href="../index.html#quickstart">Quick Start</a>
+        <a href="architecture.html">Docs</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench" class="nav-cta">GitHub</a>
+      </nav>
+      <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">&#9776;</button>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docsSidebar">
+      <div class="sidebar-section">
+        <h4>Documentation</h4>
+        <a href="architecture.html">Architecture</a>
+        <a href="configuration.html">Configuration</a>
+        <a href="containers.html">Containers</a>
+        <a href="deployment.html">Deployment</a>
+        <a href="api.html" class="active">API Examples</a>
+        <a href="mcp.html">MCP Servers</a>
+        <a href="sse-events.html">SSE Events</a>
+      </div>
+      <div class="sidebar-section">
+        <h4>Project</h4>
+        <a href="https://github.com/Devin-Marks/pi-workbench">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/SECURITY.md">Security</a>
+      </div>
+    </aside>
+
+    <main class="docs-main">
+      <h1>API Examples</h1>
+      <p class="docs-subtitle">End-to-end scripting recipes against the REST + SSE surface.</p>
+<p>End-to-end recipes for the most common things you&#39;ll do programmatically:
+list projects, create a session, send a prompt, stream the response, abort,
+fetch the turn diff, run git commands, upload files. Examples in curl,
+Python, and Node — all three follow the same shape.</p>
+<p>For the full route reference, open <code>/api/docs</code> in your deploy (Swagger UI
+auto-generated from the route schemas). For the SSE side, see
+<a href="./sse-events.md"><code>docs/sse-events.md</code></a>.</p>
+<h2>Setup</h2>
+<pre><code class="language-bash">BASE=http://localhost:3000
+KEY=&lt;your API_KEY&gt;
+</code></pre>
+<p>All requests use <code>Authorization: Bearer &lt;key&gt;</code>. If your deploy uses
+<code>UI_PASSWORD</code> instead, get a JWT first:</p>
+<pre><code class="language-bash">TOKEN=$(curl -s -X POST $BASE/api/v1/auth/login \
+  -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{&quot;password&quot;:&quot;your-ui-password&quot;}&#39; | jq -r &#39;.token&#39;)
+KEY=$TOKEN
+</code></pre>
+<p>JWTs expire (default 7 days, configurable via <code>JWT_EXPIRES_IN_SECONDS</code>);
+API keys don&#39;t.</p>
+<h2>Health probe (no auth)</h2>
+<pre><code class="language-bash">curl -s $BASE/api/v1/health
+# {&quot;status&quot;:&quot;ok&quot;,&quot;activeSessions&quot;:0,&quot;activePtys&quot;:0}
+</code></pre>
+<pre><code class="language-python">import httpx
+print(httpx.get(f&quot;{BASE}/api/v1/health&quot;).json())
+</code></pre>
+<pre><code class="language-javascript">const res = await fetch(`${BASE}/api/v1/health`);
+console.log(await res.json());
+</code></pre>
+<h2>End-to-end: create session, send prompt, stream response</h2>
+<h3>curl</h3>
+<pre><code class="language-bash"># 1. List projects
+curl -s -H &quot;Authorization: Bearer $KEY&quot; $BASE/api/v1/projects
+
+# 2. Create a session
+SESSION=$(curl -s -X POST $BASE/api/v1/sessions \
+  -H &quot;Authorization: Bearer $KEY&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{&quot;projectId&quot;:&quot;&lt;projectId&gt;&quot;}&#39; | jq -r &#39;.sessionId&#39;)
+echo &quot;Session: $SESSION&quot;
+
+# 3. Send a prompt (fire-and-forget — response comes via SSE)
+curl -s -X POST $BASE/api/v1/sessions/$SESSION/prompt \
+  -H &quot;Authorization: Bearer $KEY&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{&quot;text&quot;:&quot;Refactor packages/server/src/auth.ts to extract the JWT verifier into its own function&quot;}&#39;
+# {&quot;accepted&quot;:true}
+
+# 4. Stream the response (Ctrl+C to stop)
+curl -N -H &quot;Authorization: Bearer $KEY&quot; \
+  $BASE/api/v1/sessions/$SESSION/stream
+
+# 5. Abort if needed
+curl -X POST -H &quot;Authorization: Bearer $KEY&quot; $BASE/api/v1/sessions/$SESSION/abort
+</code></pre>
+<h3>Python</h3>
+<pre><code class="language-python">import json
+import httpx
+
+BASE = &quot;http://localhost:3000&quot;
+KEY = &quot;&lt;your API_KEY&gt;&quot;
+H = {&quot;Authorization&quot;: f&quot;Bearer {KEY}&quot;}
+
+# 1. List projects
+projects = httpx.get(f&quot;{BASE}/api/v1/projects&quot;, headers=H).json()[&quot;projects&quot;]
+print(f&quot;Found {len(projects)} projects&quot;)
+
+# 2. Create a session
+session = httpx.post(
+    f&quot;{BASE}/api/v1/sessions&quot;,
+    headers=H,
+    json={&quot;projectId&quot;: projects[0][&quot;id&quot;]},
+).json()
+session_id = session[&quot;sessionId&quot;]
+print(f&quot;Created session {session_id}&quot;)
+
+# 3. Send a prompt
+httpx.post(
+    f&quot;{BASE}/api/v1/sessions/{session_id}/prompt&quot;,
+    headers=H,
+    json={&quot;text&quot;: &quot;Run the test suite and fix any failures.&quot;},
+)
+
+# 4. Stream the response
+streaming_text = &quot;&quot;
+with httpx.stream(
+    &quot;GET&quot;,
+    f&quot;{BASE}/api/v1/sessions/{session_id}/stream&quot;,
+    headers={**H, &quot;Accept&quot;: &quot;text/event-stream&quot;},
+    timeout=None,
+) as r:
+    buffer = &quot;&quot;
+    for chunk in r.iter_text():
+        buffer += chunk
+        while &quot;\n\n&quot; in buffer:
+            event, buffer = buffer.split(&quot;\n\n&quot;, 1)
+            for line in event.splitlines():
+                if not line.startswith(&quot;data: &quot;):
+                    continue
+                payload = json.loads(line[6:])
+                if payload[&quot;type&quot;] == &quot;message_update&quot;:
+                    e = payload.get(&quot;assistantMessageEvent&quot;) or {}
+                    if e.get(&quot;type&quot;) == &quot;text_delta&quot;:
+                        streaming_text += e[&quot;delta&quot;]
+                        print(e[&quot;delta&quot;], end=&quot;&quot;, flush=True)
+                elif payload[&quot;type&quot;] == &quot;agent_end&quot;:
+                    print(&quot;\n\n[turn complete]&quot;)
+                    raise SystemExit(0)
+</code></pre>
+<h3>Node</h3>
+<pre><code class="language-javascript">const BASE = &quot;http://localhost:3000&quot;;
+const KEY = &quot;&lt;your API_KEY&gt;&quot;;
+const H = { Authorization: `Bearer ${KEY}` };
+
+// 1. List projects
+const projects = (await (await fetch(`${BASE}/api/v1/projects`, { headers: H })).json())
+  .projects;
+console.log(`Found ${projects.length} projects`);
+
+// 2. Create a session
+const session = await (
+  await fetch(`${BASE}/api/v1/sessions`, {
+    method: &quot;POST&quot;,
+    headers: { ...H, &quot;Content-Type&quot;: &quot;application/json&quot; },
+    body: JSON.stringify({ projectId: projects[0].id }),
+  })
+).json();
+const sessionId = session.sessionId;
+console.log(`Created session ${sessionId}`);
+
+// 3. Send a prompt
+await fetch(`${BASE}/api/v1/sessions/${sessionId}/prompt`, {
+  method: &quot;POST&quot;,
+  headers: { ...H, &quot;Content-Type&quot;: &quot;application/json&quot; },
+  body: JSON.stringify({ text: &quot;Run npm test and fix the failures.&quot; }),
+});
+
+// 4. Stream the response
+const streamRes = await fetch(`${BASE}/api/v1/sessions/${sessionId}/stream`, {
+  headers: { ...H, Accept: &quot;text/event-stream&quot; },
+});
+const reader = streamRes.body.pipeThrough(new TextDecoderStream()).getReader();
+let buffer = &quot;&quot;;
+while (true) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  buffer += value;
+  let idx;
+  while ((idx = buffer.indexOf(&quot;\n\n&quot;)) !== -1) {
+    const event = buffer.slice(0, idx);
+    buffer = buffer.slice(idx + 2);
+    for (const line of event.split(&quot;\n&quot;)) {
+      if (!line.startsWith(&quot;data: &quot;)) continue;
+      const payload = JSON.parse(line.slice(6));
+      if (payload.type === &quot;message_update&quot;) {
+        const e = payload.assistantMessageEvent ?? {};
+        if (e.type === &quot;text_delta&quot;) process.stdout.write(e.delta);
+      } else if (payload.type === &quot;agent_end&quot;) {
+        console.log(&quot;\n\n[turn complete]&quot;);
+        process.exit(0);
+      }
+    }
+  }
+}
+</code></pre>
+<h2>Project CRUD</h2>
+<h3>List</h3>
+<pre><code class="language-bash">curl -s -H &quot;Authorization: Bearer $KEY&quot; $BASE/api/v1/projects
+# { &quot;projects&quot;: [{ &quot;id&quot;: &quot;...&quot;, &quot;name&quot;: &quot;...&quot;, &quot;path&quot;: &quot;...&quot;, &quot;createdAt&quot;: &quot;...&quot; }] }
+</code></pre>
+<h3>Create</h3>
+<pre><code class="language-bash">curl -s -X POST -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/projects \
+  -d &#39;{&quot;name&quot;:&quot;my-app&quot;,&quot;path&quot;:&quot;/workspace/my-app&quot;}&#39;
+</code></pre>
+<p>The path must be an existing directory inside <code>WORKSPACE_PATH</code>. Server
+returns 403 if outside, 409 if a project with that path already exists.</p>
+<h3>Browse for a folder (folder picker)</h3>
+<pre><code class="language-bash">curl -s -H &quot;Authorization: Bearer $KEY&quot; \
+  &quot;$BASE/api/v1/projects/browse?path=/workspace&quot;
+# { &quot;path&quot;:&quot;/workspace&quot;, &quot;parentPath&quot;:null, &quot;entries&quot;:[{ &quot;name&quot;,&quot;path&quot;,&quot;isGitRepo&quot; }] }
+</code></pre>
+<p>Omit <code>path</code> to start at <code>WORKSPACE_PATH</code>.</p>
+<h3>Rename / delete</h3>
+<pre><code class="language-bash">curl -s -X PATCH -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/projects/$PROJECT_ID \
+  -d &#39;{&quot;name&quot;:&quot;new-name&quot;}&#39;
+
+# Plain delete: removes the workbench&#39;s record, leaves session JSONLs orphaned
+curl -s -X DELETE -H &quot;Authorization: Bearer $KEY&quot; $BASE/api/v1/projects/$PROJECT_ID
+
+# Cascade delete: also rm -rf the project&#39;s session directory
+curl -s -X DELETE -H &quot;Authorization: Bearer $KEY&quot; &quot;$BASE/api/v1/projects/$PROJECT_ID?cascade=1&quot;
+</code></pre>
+<h2>Session lifecycle</h2>
+<blockquote>
+<p><strong>Cold sessions and lazy resume.</strong> A session created earlier and not currently
+active in the registry is &quot;cold&quot; — it lives only as a <code>.jsonl</code> on disk.
+<code>/sessions/:id/tree</code> and <code>/sessions/:id/context</code> will lazy-resume a cold
+session into memory automatically. <code>/sessions/:id/messages</code>,
+<code>/sessions/:id/turn-diff</code>, and <code>/sessions/:id/name</code> do <strong>not</strong> auto-resume
+and return <code>404 session_not_found</code> on a cold id. The reliable workaround
+is to open the SSE stream first (<code>GET /sessions/:id/stream</code>), which always
+auto-resumes; subsequent calls then succeed.</p>
+</blockquote>
+<h3>List sessions for a project</h3>
+<pre><code class="language-bash">curl -s -H &quot;Authorization: Bearer $KEY&quot; \
+  &quot;$BASE/api/v1/sessions?projectId=$PROJECT_ID&quot;
+# { &quot;sessions&quot;: [{ sessionId, projectId, workspacePath, isLive, name?, createdAt, lastActivityAt, messageCount, firstMessage }] }
+</code></pre>
+<h3>Get full message history</h3>
+<pre><code class="language-bash">curl -s -H &quot;Authorization: Bearer $KEY&quot; \
+  $BASE/api/v1/sessions/$SESSION/messages
+# { &quot;messages&quot;: [...] }
+</code></pre>
+<h3>Get token + cost telemetry</h3>
+<pre><code class="language-bash">curl -s -H &quot;Authorization: Bearer $KEY&quot; \
+  $BASE/api/v1/sessions/$SESSION/context
+# { messages, totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, totalTokens, totalCost, turns[], contextUsage }
+</code></pre>
+<p><code>turns[]</code> is the per-turn breakdown derived from each
+<code>AssistantMessage.usage</code>. <code>contextUsage.tokens</code> may be omitted when the
+SDK doesn&#39;t have a fresh count (right after compaction). The <code>messages</code>
+array mirrors the SSE <code>snapshot.messages</code> payload — it can be large
+(tens of KB) for a long session, so consider polling sparingly.</p>
+<h3>Get session tree (branching history)</h3>
+<pre><code class="language-bash">curl -s -H &quot;Authorization: Bearer $KEY&quot; \
+  $BASE/api/v1/sessions/$SESSION/tree
+# { leafId, branchIds[], entries: [{ id, parentId, type, timestamp, role?, preview?, label? }] }
+</code></pre>
+<p><code>leafId</code> is the current branch tip; <code>branchIds</code> is the full path from
+root to leaf (= the active branch). Off-path entries are alternate
+branches.</p>
+<h3>Navigate to a different leaf</h3>
+<pre><code class="language-bash">curl -s -X POST -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/sessions/$SESSION/navigate \
+  -d &#39;{&quot;entryId&quot;:&quot;&lt;some-entry-id&gt;&quot;}&#39;
+# Optional: { entryId, summarize: true, customInstructions: &quot;...&quot;, label: &quot;...&quot; }
+</code></pre>
+<p><code>summarize: true</code> writes a <code>branch_summary</code> entry capturing what the
+abandoned branch did. <code>label</code> bookmarks the abandoned tip.</p>
+<h3>Fork from an entry into a new session</h3>
+<pre><code class="language-bash">curl -s -X POST -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/sessions/$SESSION/fork \
+  -d &#39;{&quot;entryId&quot;:&quot;&lt;some-entry-id&gt;&quot;}&#39;
+# Returns the new session&#39;s summary
+</code></pre>
+<p>The new session&#39;s path-to-leaf includes everything from the root through
+<code>entryId</code>. The source session is preserved (in-memory restoration of the
+source session manager happens server-side after the SDK&#39;s destructive
+fork operation).</p>
+<h3>Set the model for THIS session only</h3>
+<pre><code class="language-bash">curl -s -X POST -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/sessions/$SESSION/model \
+  -d &#39;{&quot;provider&quot;:&quot;anthropic&quot;,&quot;modelId&quot;:&quot;claude-sonnet-4-5-20250929&quot;}&#39;
+</code></pre>
+<p>The route snapshots <code>settings.json</code> before calling the SDK and restores
+it after, so per-session model picks don&#39;t mutate the global default.</p>
+<h3>Steer or follow up</h3>
+<pre><code class="language-bash"># Steer (interrupt at next tool boundary)
+curl -s -X POST -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/sessions/$SESSION/steer \
+  -d &#39;{&quot;text&quot;:&quot;Actually, use TypeScript not JavaScript&quot;,&quot;mode&quot;:&quot;steer&quot;}&#39;
+
+# Follow up (queue for after the current run)
+curl -s -X POST -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/sessions/$SESSION/steer \
+  -d &#39;{&quot;text&quot;:&quot;And then run the tests&quot;,&quot;mode&quot;:&quot;followUp&quot;}&#39;
+</code></pre>
+<h3>Abort the current run</h3>
+<pre><code class="language-bash">curl -X POST -H &quot;Authorization: Bearer $KEY&quot; $BASE/api/v1/sessions/$SESSION/abort
+</code></pre>
+<h3>Dispose / hard-delete</h3>
+<pre><code class="language-bash"># Dispose only — kills the live session, preserves the JSONL
+curl -X DELETE -H &quot;Authorization: Bearer $KEY&quot; $BASE/api/v1/sessions/$SESSION
+
+# Hard delete — disposes AND removes the JSONL
+curl -X DELETE -H &quot;Authorization: Bearer $KEY&quot; &quot;$BASE/api/v1/sessions/$SESSION?hard=1&quot;
+</code></pre>
+<h2>Multipart prompt with attachments</h2>
+<pre><code class="language-bash">curl -s -X POST -H &quot;Authorization: Bearer $KEY&quot; \
+  $BASE/api/v1/sessions/$SESSION/prompt \
+  -F &quot;text=Look at this screenshot and tell me what&#39;s wrong&quot; \
+  -F &quot;attachments=@./screenshot.png&quot; \
+  -F &quot;attachments=@./logs.txt&quot;
+</code></pre>
+<p>Image attachments are base64-encoded and forwarded as <code>images</code> to the
+SDK. Text attachments are decoded as UTF-8 and prepended to the prompt
+as fenced code blocks (with backtick-fence-break-safe fence selection).
+Caps: 10 MB / file, 8 files, 4 images max.</p>
+<h2>File operations</h2>
+<h3>List the project tree</h3>
+<pre><code class="language-bash">curl -s -H &quot;Authorization: Bearer $KEY&quot; \
+  &quot;$BASE/api/v1/files/tree?projectId=$PROJECT_ID&amp;maxDepth=4&quot;
+</code></pre>
+<h3>Read a file</h3>
+<pre><code class="language-bash">curl -s -H &quot;Authorization: Bearer $KEY&quot; \
+  &quot;$BASE/api/v1/files/read?projectId=$PROJECT_ID&amp;path=/workspace/my-app/src/index.ts&quot;
+# { path, content, size, language, binary }
+</code></pre>
+<h3>Write / create a file (atomic tmp + rename)</h3>
+<pre><code class="language-bash">curl -s -X PUT -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/files/write \
+  -d &#39;{&quot;projectId&quot;:&quot;...&quot;,&quot;path&quot;:&quot;/workspace/my-app/notes.md&quot;,&quot;content&quot;:&quot;# Notes\n\n...&quot;}&#39;
+</code></pre>
+<h3>Search</h3>
+<pre><code class="language-bash">curl -s -H &quot;Authorization: Bearer $KEY&quot; \
+  &quot;$BASE/api/v1/files/search?projectId=$PROJECT_ID&amp;q=TODO&amp;caseSensitive=1&quot;
+# { engine: &quot;ripgrep&quot; | &quot;node&quot;, matches: [...], truncated: bool }
+</code></pre>
+<h3>Upload (multipart, with SHA-256 verification)</h3>
+<pre><code class="language-bash"># Compute SHA-256 yourself, send as `sha256:&lt;filename&gt;` field BEFORE the file part
+SHA=$(sha256sum ./report.pdf | cut -d&#39; &#39; -f1)
+curl -s -X POST -H &quot;Authorization: Bearer $KEY&quot; \
+  $BASE/api/v1/files/upload \
+  -F &quot;projectId=$PROJECT_ID&quot; \
+  -F &quot;parentPath=/workspace/my-app/uploads&quot; \
+  -F &quot;sha256:report.pdf=$SHA&quot; \
+  -F &quot;files=@./report.pdf&quot;
+# { files: [{ path, size, sha256 }] }
+</code></pre>
+<p>Server hashes the received bytes and rejects with 422
+<code>checksum_mismatch</code> if your hash doesn&#39;t match. Per-file cap 500 MB,
+aggregate 2 GB, max 16 files.</p>
+<h3>Download (file or folder-as-tar.gz)</h3>
+<pre><code class="language-bash"># File: streams the bytes
+curl -s -OJ -H &quot;Authorization: Bearer $KEY&quot; \
+  &quot;$BASE/api/v1/files/download?projectId=$PROJECT_ID&amp;path=/workspace/my-app/src/index.ts&quot;
+
+# Folder: gzipped tar (Content-Disposition includes the .tar.gz filename)
+curl -s -OJ -H &quot;Authorization: Bearer $KEY&quot; \
+  &quot;$BASE/api/v1/files/download?projectId=$PROJECT_ID&amp;path=/workspace/my-app/src&quot;
+
+# Whole project (omit path)
+curl -s -OJ -H &quot;Authorization: Bearer $KEY&quot; \
+  &quot;$BASE/api/v1/files/download?projectId=$PROJECT_ID&quot;
+</code></pre>
+<p>The folder/project tar.gz omits the same noise dirs as the file tree
+(<code>node_modules</code>, <code>.git</code>, <code>dist</code>, <code>build</code>, etc.).</p>
+<h2>Git operations</h2>
+<pre><code class="language-bash"># Status
+curl -s -H &quot;Authorization: Bearer $KEY&quot; \
+  &quot;$BASE/api/v1/git/status?projectId=$PROJECT_ID&quot;
+
+# Diff (unstaged)
+curl -s -H &quot;Authorization: Bearer $KEY&quot; \
+  &quot;$BASE/api/v1/git/diff?projectId=$PROJECT_ID&quot;
+
+# Diff a single file
+curl -s -H &quot;Authorization: Bearer $KEY&quot; \
+  &quot;$BASE/api/v1/git/diff/file?projectId=$PROJECT_ID&amp;path=/workspace/my-app/src/index.ts&amp;staged=1&quot;
+
+# Log
+curl -s -H &quot;Authorization: Bearer $KEY&quot; \
+  &quot;$BASE/api/v1/git/log?projectId=$PROJECT_ID&amp;limit=50&quot;
+
+# Stage / unstage / revert
+curl -s -X POST -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/git/stage \
+  -d &#39;{&quot;projectId&quot;:&quot;...&quot;,&quot;paths&quot;:[&quot;/workspace/my-app/src/index.ts&quot;]}&#39;
+
+# Commit
+curl -s -X POST -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/git/commit \
+  -d &#39;{&quot;projectId&quot;:&quot;...&quot;,&quot;message&quot;:&quot;feat: ship the thing&quot;}&#39;
+
+# Branch management
+curl -s -H &quot;Authorization: Bearer $KEY&quot; &quot;$BASE/api/v1/git/branches?projectId=$PROJECT_ID&quot;
+curl -s -X POST -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/git/branch/create \
+  -d &#39;{&quot;projectId&quot;:&quot;...&quot;,&quot;name&quot;:&quot;feat/x&quot;,&quot;checkout&quot;:true}&#39;
+
+# Remotes
+curl -s -H &quot;Authorization: Bearer $KEY&quot; &quot;$BASE/api/v1/git/remotes?projectId=$PROJECT_ID&quot;
+curl -s -X POST -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/git/remote/add \
+  -d &#39;{&quot;projectId&quot;:&quot;...&quot;,&quot;name&quot;:&quot;origin&quot;,&quot;url&quot;:&quot;git@github.com:you/repo.git&quot;}&#39;
+
+# Push / pull / fetch
+curl -s -X POST -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/git/push \
+  -d &#39;{&quot;projectId&quot;:&quot;...&quot;,&quot;remote&quot;:&quot;origin&quot;,&quot;branch&quot;:&quot;main&quot;,&quot;setUpstream&quot;:true}&#39;
+</code></pre>
+<h2>Configuration</h2>
+<h3>List providers (presence-only auth)</h3>
+<pre><code class="language-bash">curl -s -H &quot;Authorization: Bearer $KEY&quot; $BASE/api/v1/config/providers
+curl -s -H &quot;Authorization: Bearer $KEY&quot; $BASE/api/v1/config/auth
+# Returns presence: { providers: { anthropic: { configured: true, source: &quot;auth.json&quot; }, ... } }
+# Key VALUES are never returned.
+</code></pre>
+<h3>Set / remove an API key</h3>
+<pre><code class="language-bash">curl -s -X PUT -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/config/auth/anthropic \
+  -d &#39;{&quot;apiKey&quot;:&quot;sk-ant-...&quot;}&#39;
+
+curl -s -X DELETE -H &quot;Authorization: Bearer $KEY&quot; \
+  $BASE/api/v1/config/auth/anthropic
+</code></pre>
+<h3>Read / write agent settings</h3>
+<pre><code class="language-bash">curl -s -H &quot;Authorization: Bearer $KEY&quot; $BASE/api/v1/config/settings
+
+curl -s -X PUT -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/config/settings \
+  -d &#39;{&quot;defaultThinkingLevel&quot;:&quot;high&quot;}&#39;
+# Patch is shallow-merged; pass null to delete a key.
+</code></pre>
+<h3>Read / write models.json (custom providers)</h3>
+<pre><code class="language-bash"># GET returns the file with `apiKey` / `apiKeyCommand` REPLACED by
+# &quot;***REDACTED***&quot; so the raw secret never leaves the server. The
+# persisted file is unchanged; PUT takes the actual values.
+curl -s -H &quot;Authorization: Bearer $KEY&quot; $BASE/api/v1/config/models
+
+curl -s -X PUT -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/config/models \
+  -d &#39;{&quot;providers&quot;:{&quot;vllm-local&quot;:{&quot;api&quot;:&quot;openai-completions&quot;,&quot;url&quot;:&quot;http://localhost:8000/v1&quot;,&quot;models&quot;:[...]}}}&#39;
+</code></pre>
+<h3>List / toggle skills</h3>
+<pre><code class="language-bash"># List the merged skills (global from ~/.pi/agent/skills/ + project-local
+# from &lt;project&gt;/.pi/skills/) with per-skill enabled state for the
+# given workspace.
+curl -s -G -H &quot;Authorization: Bearer $KEY&quot; \
+  --data-urlencode &quot;workspacePath=/workspace/my-project&quot; \
+  $BASE/api/v1/config/skills
+# { skills: [{ name, description, source: &quot;global&quot;|&quot;project&quot;, filePath, enabled, disableModelInvocation }] }
+
+# Enable / disable a skill for the current workspace. Toggles persist in
+# settings.json (skills array) — disabling a skill doesn&#39;t touch the
+# skill .md file itself.
+curl -s -X PUT -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  &quot;$BASE/api/v1/config/skills/&lt;skill-name&gt;/enabled&quot; \
+  -d &#39;{&quot;enabled&quot;:true,&quot;workspacePath&quot;:&quot;/workspace/my-project&quot;}&#39;
+</code></pre>
+<h2>UI config (public, no auth)</h2>
+<pre><code class="language-bash">curl -s $BASE/api/v1/ui-config
+# { minimal: false, workspaceRoot: &quot;/workspace&quot; }
+</code></pre>
+<p>Used by the React client at boot to know which surfaces to render.</p>
+<h2>Auth</h2>
+<pre><code class="language-bash"># Whether auth is enabled at all
+curl -s $BASE/api/v1/auth/status
+# { authEnabled: true | false }
+
+# Login (when UI_PASSWORD is set)
+curl -s -X POST -H &quot;Content-Type: application/json&quot; \
+  $BASE/api/v1/auth/login \
+  -d &#39;{&quot;password&quot;:&quot;your-ui-password&quot;}&#39;
+# { token, expiresAt }
+
+# Logout (client-side; server stateless — just discard the token)
+</code></pre>
+<p>JWT tokens default to 7-day expiry; the response&#39;s <code>expiresAt</code> is an ISO
+timestamp. Refresh by logging in again before expiry.</p>
+<h2>Putting it together: a script that opens a session, runs a prompt, and exits when done</h2>
+<pre><code class="language-python">#!/usr/bin/env python3
+&quot;&quot;&quot;Send a one-shot prompt to a pi-workbench session and print the response.&quot;&quot;&quot;
+import json
+import sys
+import httpx
+
+BASE = &quot;http://localhost:3000&quot;
+KEY = &quot;&lt;your API_KEY&gt;&quot;
+H = {&quot;Authorization&quot;: f&quot;Bearer {KEY}&quot;}
+
+if len(sys.argv) != 3:
+    print(&quot;usage: send.py &lt;projectId&gt; &#39;&lt;prompt&gt;&#39;&quot;)
+    sys.exit(1)
+
+project_id, prompt = sys.argv[1], sys.argv[2]
+
+# Create a session
+session = httpx.post(f&quot;{BASE}/api/v1/sessions&quot;, headers=H, json={&quot;projectId&quot;: project_id}).json()
+sid = session[&quot;sessionId&quot;]
+
+# Send the prompt
+httpx.post(f&quot;{BASE}/api/v1/sessions/{sid}/prompt&quot;, headers=H, json={&quot;text&quot;: prompt})
+
+# Stream until agent_end
+with httpx.stream(
+    &quot;GET&quot;,
+    f&quot;{BASE}/api/v1/sessions/{sid}/stream&quot;,
+    headers={**H, &quot;Accept&quot;: &quot;text/event-stream&quot;},
+    timeout=None,
+) as r:
+    buffer = &quot;&quot;
+    for chunk in r.iter_text():
+        buffer += chunk
+        while &quot;\n\n&quot; in buffer:
+            event, buffer = buffer.split(&quot;\n\n&quot;, 1)
+            for line in event.splitlines():
+                if not line.startswith(&quot;data: &quot;):
+                    continue
+                p = json.loads(line[6:])
+                if p[&quot;type&quot;] == &quot;message_update&quot;:
+                    e = p.get(&quot;assistantMessageEvent&quot;) or {}
+                    if e.get(&quot;type&quot;) == &quot;text_delta&quot;:
+                        print(e[&quot;delta&quot;], end=&quot;&quot;, flush=True)
+                elif p[&quot;type&quot;] == &quot;agent_end&quot;:
+                    print(&quot;\n&quot;)
+                    sys.exit(0)
+</code></pre>
+<p>Save as <code>send.py</code>, make executable, and use as <code>./send.py &lt;projectId&gt; &quot;add a docstring to the auth module&quot;</code>.</p>
+<h2>See also</h2>
+<ul>
+<li><a href="http://localhost:3000/api/docs" target="_blank" rel="noopener noreferrer"><code>/api/docs</code></a> (live in your deploy) —
+Swagger UI with every route&#39;s full schema, try-it-out included</li>
+<li><a href="./sse-events.md"><code>docs/sse-events.md</code></a> — full SSE event catalogue +
+reconnect patterns</li>
+<li><a href="./architecture.md"><code>docs/architecture.md</code></a> — request lifecycles +
+module map</li>
+<li><a href="../packages/client/src/lib/api-client.ts"><code>packages/client/src/lib/api-client.ts</code></a> —
+reference TypeScript client (the React UI uses it; same API surface)</li>
+</ul>
+
+    </main>
+  </div>
+
+  <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">&#9776;</button>
+
+  <script>
+    document.getElementById('mobileToggle').addEventListener('click', () => {
+      document.getElementById('navLinks').classList.toggle('open');
+    });
+    document.getElementById('sidebarToggle').addEventListener('click', () => {
+      document.getElementById('docsSidebar').classList.toggle('open');
+    });
+  </script>
+</body>
+</html>

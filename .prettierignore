@@ -5,6 +5,10 @@ node_modules
 package-lock.json
 *.md
 
+# Generated GitHub Pages output — emitted by `npm run build:site`
+# (scripts/build-site.mjs). Hand-edit the script, not the output.
+docs/site/
+
 # User data — written at runtime, not source.
 workspace
 workbench
