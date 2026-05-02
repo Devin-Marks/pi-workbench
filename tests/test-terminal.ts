@@ -34,6 +34,17 @@ const __dirname = dirname(__filename);
 const repoRoot = resolve(__dirname, "..");
 const serverEntry = resolve(repoRoot, "packages/server/dist/index.js");
 
+/**
+ * Detached-PTY reap window for both spawned servers in this test.
+ * Production default is 10 minutes (production code wants reattach
+ * across a page-refresh / VPN blip / laptop-sleep to Just Work);
+ * we override to 200 ms here so the post-close assertions actually
+ * complete within the test budget. The wait constant below adds a
+ * generous timer-jitter buffer on top.
+ */
+const REAP_MS = 200;
+const REAP_WAIT_MS = REAP_MS + 800;
+
 let failures = 0;
 function assert(label: string, ok: boolean, detail?: string): void {
   if (ok) console.log(`  PASS  ${label}`);
@@ -187,6 +198,11 @@ async function main(): Promise<void> {
       UI_PASSWORD: undefined,
       JWT_SECRET: undefined,
       SERVE_CLIENT: "false",
+      // Shrink the detached-PTY reap window so the "activePtys returns
+      // to 0 after close" assertion exercises the real reap path within
+      // the test budget instead of waiting the 10-minute production
+      // default. 200 ms is comfortably above any timer-scheduling jitter.
+      PTY_IDLE_REAP_MS: String(REAP_MS),
       // Predictable PS1 so the prompt doesn't drown the test output.
       PS1: "$ ",
     },
@@ -341,7 +357,16 @@ async function main(): Promise<void> {
         t.ws.close(1000, "test_done");
         await closed;
       }
-      assert("activePtys returns to 0 after close", (await waitForPtyCount(base, 0)) === 0);
+      // PTYs are kept alive on WS close so a reattach can pick them
+      // back up; cleanup happens via the idle reaper (PTY_IDLE_REAP_MS,
+      // pinned to REAP_MS for this test). Wait the reap window plus a
+      // buffer, then assert the count drains. waitForPtyCount polls so
+      // we don't actually have to wait the full window unless the
+      // reaper is genuinely slow.
+      assert(
+        "activePtys returns to 0 after idle reap",
+        (await waitForPtyCount(base, 0, REAP_WAIT_MS)) === 0,
+      );
     }
   } finally {
     for (const t of opened) {

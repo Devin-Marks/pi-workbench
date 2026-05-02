@@ -91,12 +91,19 @@ async function main(): Promise<void> {
     createSession: (projectId: string, workspacePath: string) => Promise<TestLive>;
     getSession: (id: string) => TestLive | undefined;
     listSessions: (projectId?: string) => TestLive[];
-    disposeSession: (id: string) => boolean;
+    // Async because dispose now awaits an in-flight LLM-call abort
+    // before tearing down (session-registry.ts: ABORT_TIMEOUT_MS).
+    disposeSession: (id: string) => Promise<boolean>;
     resumeSession: (id: string, projectId: string, workspacePath: string) => Promise<TestLive>;
     discoverSessionsOnDisk: (projectId: string, workspacePath: string) => Promise<TestDiscovered[]>;
     sessionCount: () => number;
     disposeAllSessions: () => void;
   }
+  // The dispose path lays down a 1500 ms "tombstone" on the
+  // sessionId so a polling SSE client can't re-resume the session
+  // before the disk delete completes. Tests that dispose then
+  // immediately resume the same id need to wait this out.
+  const TOMBSTONE_MS = 1500;
   const registry = (await import(
     resolve(repoRoot, "packages/server/dist/session-registry.js")
   )) as unknown as TestRegistry;
@@ -210,7 +217,7 @@ async function main(): Promise<void> {
     );
 
     // 5. dispose removes from registry, leaves JSONL on disk
-    assert("disposeSession returns true", registry.disposeSession(live.sessionId) === true);
+    assert("disposeSession returns true", (await registry.disposeSession(live.sessionId)) === true);
     assert("registry.sessionCount() === 0 after dispose", registry.sessionCount() === 0);
     assert(
       "getSession returns undefined after dispose",
@@ -223,10 +230,14 @@ async function main(): Promise<void> {
     );
     assert(
       "disposeSession on unknown id returns false",
-      registry.disposeSession("does-not-exist") === false,
+      (await registry.disposeSession("does-not-exist")) === false,
     );
 
-    // 6. resume — same id comes back, name persists
+    // 6. resume — same id comes back, name persists.
+    // Wait out the tombstone first; dispose-then-immediate-resume
+    // would otherwise hit SessionTombstonedError (the design exists
+    // to defeat polling SSE clients during a hard-delete race).
+    await new Promise((r) => setTimeout(r, TOMBSTONE_MS + 100));
     const resumed = await registry.resumeSession(live.sessionId, projectId, workspacePath);
     assert("resumeSession returns same sessionId", resumed.sessionId === live.sessionId);
     assert("registry.sessionCount() === 1 after resume", registry.sessionCount() === 1);
@@ -237,7 +248,7 @@ async function main(): Promise<void> {
       rediscovered[0]?.name === "phase-4-test",
       `got ${rediscovered[0]?.name}`,
     );
-    registry.disposeSession(resumed.sessionId);
+    await registry.disposeSession(resumed.sessionId);
 
     // 6b. Multi-client fan-out: in a fresh session (so it doesn't disturb
     // the resume-name assertion above), inject two stub SSEClients and
@@ -294,7 +305,7 @@ async function main(): Promise<void> {
       assert("misbehaving client was removed from the set", !fanSession.clients.has(stubBad));
       assert("healthy client kept receiving events", fanGood.length > 0);
     } finally {
-      registry.disposeSession(fanSession.sessionId);
+      await registry.disposeSession(fanSession.sessionId);
     }
 
     // 7. resumeSession on an unknown id throws SessionNotFoundError
@@ -333,7 +344,7 @@ async function main(): Promise<void> {
         `got ${body.activeSessions}`,
       );
       assert("health.activePtys is still 0 (Phase 11)", body.activePtys === 0);
-      registry.disposeSession(probe.sessionId);
+      await registry.disposeSession(probe.sessionId);
       const res2 = await fetch(`${listenAddr}/api/v1/health`);
       const body2 = (await res2.json()) as { activeSessions: number };
       assert("health updates after dispose to 0", body2.activeSessions === 0);
@@ -362,7 +373,7 @@ async function main(): Promise<void> {
         );
       } finally {
         unsubPrompt();
-        registry.disposeSession(liveForPrompt.sessionId);
+        await registry.disposeSession(liveForPrompt.sessionId);
       }
     } else {
       console.log("\n[test-session] (skipped live-prompt — set PI_TEST_LIVE_PROMPT=1 to run)");

@@ -57,8 +57,14 @@ export interface ManagedPty {
 
 /** Rolling output buffer cap per PTY (in bytes). 256 KB ≈ ~3000 lines of typical shell output. */
 const OUTPUT_BUFFER_BYTES = 256 * 1024;
-/** Time a detached PTY (no WS attached) is held alive before being reaped. */
-const IDLE_REAP_MS = 10 * 60 * 1000;
+/**
+ * Time a detached PTY (no WS attached) is held alive before being reaped.
+ * Sourced from `config.terminalIdleReapMs` so operators in resource-
+ * constrained deployments can shorten the window, AND so the integration
+ * test can pin it down to ~200 ms to actually exercise the reap path
+ * within a test budget.
+ */
+const IDLE_REAP_MS = config.terminalIdleReapMs;
 
 interface Entry {
   managed: ManagedPty;
