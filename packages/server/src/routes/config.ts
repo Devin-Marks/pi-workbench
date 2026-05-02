@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync, FastifyReply } from "fastify";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import {
   AuthProviderNotFoundError,
   liveProvidersListing,
@@ -15,6 +15,7 @@ import {
   writeModelsJson,
   type ModelsJson,
 } from "../config-manager.js";
+import { buildExportTar, importConfigFromBuffer, MAX_IMPORT_BYTES } from "../config-export.js";
 import { getProject } from "../project-manager.js";
 import { errorSchema } from "./_schemas.js";
 
@@ -543,6 +544,124 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
         if (err instanceof SkillNotFoundError) {
           return reply.code(404).send({ error: "skill_not_found" });
         }
+        return internalError(reply, err);
+      }
+    },
+  );
+
+  // ---------------------- export / import ----------------------
+  // Two routes that round-trip the workbench's portable config
+  // (mcp.json + settings.json + models.json — see config-export.ts
+  // header for what's in and what's out).
+  fastify.get(
+    "/config/export",
+    {
+      schema: {
+        description:
+          "Stream a `.tar.gz` of the portable workbench config: " +
+          "`mcp.json`, `settings.json`, and `models.json`. Excludes " +
+          "`auth.json` (provider keys / OAuth tokens) and any " +
+          "installation-bound files (jwt-secret, password-hash). " +
+          "The header `X-Pi-Workbench-Files` lists the names actually " +
+          "included so a client can warn when a file was missing on " +
+          "disk and therefore omitted from the export.",
+        tags: ["config"],
+        response: {
+          200: {
+            description: "gzip-compressed tar of the included files",
+            type: "string",
+            format: "binary",
+          },
+          500: errorSchema,
+        },
+      },
+    },
+    async (_req, reply) => {
+      try {
+        const { files, stream } = await buildExportTar();
+        const ts = new Date().toISOString().replace(/[:.]/g, "-");
+        reply
+          .header("Content-Type", "application/gzip")
+          .header("Content-Disposition", `attachment; filename="pi-workbench-config-${ts}.tar.gz"`)
+          .header("X-Pi-Workbench-Files", files.join(","));
+        return reply.send(stream);
+      } catch (err) {
+        return internalError(reply, err);
+      }
+    },
+  );
+
+  fastify.post(
+    "/config/import",
+    {
+      schema: {
+        description:
+          "Restore a `.tar.gz` previously produced by `/config/export`. " +
+          "The archive must contain only the three top-level files " +
+          "`mcp.json`, `settings.json`, `models.json` — anything else " +
+          "is reported in `skipped`. Each accepted file is parsed as " +
+          "JSON; ALL files must validate before ANY are written. " +
+          "Imported files land atomically (`.tmp` + rename). " +
+          "**Provider auth is NOT included in exports** — re-authenticate " +
+          "providers via the Auth settings page after import.",
+        tags: ["config"],
+        consumes: ["multipart/form-data"],
+        response: {
+          200: {
+            type: "object",
+            required: ["imported", "skipped", "errors"],
+            properties: {
+              imported: { type: "array", items: { type: "string" } },
+              skipped: { type: "array", items: { type: "string" } },
+              errors: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["file", "reason"],
+                  properties: {
+                    file: { type: "string" },
+                    reason: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          400: errorSchema,
+          413: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req: FastifyRequest, reply) => {
+      // Single multipart file expected. Anything beyond the first is
+      // ignored — the import contract is "one tar.gz per request."
+      let buf: Buffer;
+      try {
+        const file = await req.file({ limits: { fileSize: MAX_IMPORT_BYTES } });
+        if (file === undefined) {
+          return reply.code(400).send({ error: "no_file" });
+        }
+        buf = await file.toBuffer();
+        // toBuffer caps silently at the size limit; detect via the
+        // `truncated` flag the multipart stream sets, otherwise the
+        // user gets a confused "tar parse error" instead of the right
+        // 413 with a clear message.
+        if (file.file.truncated) {
+          return reply.code(413).send({
+            error: "file_too_large",
+            message: `import archive exceeds ${MAX_IMPORT_BYTES} bytes`,
+          });
+        }
+      } catch (err) {
+        return reply.code(400).send({
+          error: "invalid_multipart",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      try {
+        const summary = await importConfigFromBuffer(buf);
+        return summary;
+      } catch (err) {
         return internalError(reply, err);
       }
     },

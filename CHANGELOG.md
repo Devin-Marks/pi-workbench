@@ -14,6 +14,17 @@ the README for the support window policy.
 
 ### Added
 
+- **Config export / import as `.tar.gz`.** New `Settings → Backup`
+  tab and matching API routes — `GET /api/v1/config/export` streams a
+  flat tar with `mcp.json`, `settings.json`, and `models.json`;
+  `POST /api/v1/config/import` accepts a multipart upload and writes
+  each file atomically (`.tmp` + rename). Import is all-or-nothing:
+  every accepted file must parse as JSON before any rename runs, so a
+  corrupted entry can't half-restore. **Provider auth is NOT included
+  in exports** (`auth.json` — API keys / OAuth tokens) — the UI
+  reminds operators to re-authenticate providers after restoring on a
+  new install. Installation-bound files (`jwt-secret`, `password-hash`,
+  `projects.json`) are also excluded.
 - **Terminal venv auto-activation.** When a new terminal tab is opened
   in a project containing a Python virtualenv at `.venv/`, `venv/`, or
   `env/`, the workbench automatically runs `source <dir>/bin/activate`

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   ApiError,
@@ -14,7 +14,7 @@ import { useUiConfigStore } from "../store/ui-config-store";
 import { EMPTY_STATUS, useMcpStore } from "../store/mcp-store";
 import { THEME_DEFS, useThemeStore, type ThemeId } from "../lib/theme";
 
-type Tab = "providers" | "agent" | "mcp" | "skills" | "appearance";
+type Tab = "providers" | "agent" | "mcp" | "skills" | "appearance" | "backup";
 
 interface Props {
   onClose: () => void;
@@ -54,8 +54,8 @@ export function SettingsPanel({ onClose, initialTab }: Props) {
   const visibleTabs = useMemo<readonly Tab[]>(
     () =>
       minimal
-        ? (["skills", "appearance"] as const)
-        : (["providers", "agent", "mcp", "skills", "appearance"] as const),
+        ? (["skills", "appearance", "backup"] as const)
+        : (["providers", "agent", "mcp", "skills", "appearance", "backup"] as const),
     [minimal],
   );
   const [tab, setTab] = useState<Tab>(initialTab ?? (minimal ? "skills" : "providers"));
@@ -104,7 +104,9 @@ export function SettingsPanel({ onClose, initialTab }: Props) {
                       ? "MCP"
                       : t === "skills"
                         ? "Skills"
-                        : "Appearance"}
+                        : t === "appearance"
+                          ? "Appearance"
+                          : "Backup"}
               </button>
             ))}
           </div>
@@ -129,6 +131,7 @@ export function SettingsPanel({ onClose, initialTab }: Props) {
           {tab === "mcp" && <McpTab onError={setError} />}
           {tab === "skills" && <SkillsTab onError={setError} />}
           {tab === "appearance" && <AppearanceTab />}
+          {tab === "backup" && <BackupTab onError={setError} />}
         </div>
       </div>
     </div>
@@ -1105,6 +1108,165 @@ function ThemeSwatch({ id }: { id: ThemeId }) {
       <div className="w-4 bg-neutral-800" />
       <div className="w-4 bg-neutral-500" />
       <div className="w-4 bg-neutral-200" />
+    </div>
+  );
+}
+
+// ---------------- Backup tab ----------------
+
+/**
+ * Export / import the workbench's portable config as a `.tar.gz`.
+ *
+ * Export bundles `mcp.json` + `settings.json` + `models.json`. Auth
+ * is deliberately excluded (provider keys / OAuth tokens), and the
+ * UI calls that out so a user planning a migration knows to re-auth
+ * providers afterwards.
+ *
+ * Import is one-shot: the user picks a file, we POST it as multipart,
+ * the server validates ALL files before any disk write, and we
+ * surface the per-file summary. On success the user is reminded that
+ * a fresh agent session is needed for the new config to take effect
+ * (existing live sessions hold their settings/skills snapshot from
+ * `createAgentSession` time — same caveat as every other settings
+ * edit).
+ */
+function BackupTab({ onError }: { onError: (msg: string | undefined) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [lastExport, setLastExport] = useState<{ filename: string; files: string[] } | undefined>(
+    undefined,
+  );
+  const [lastImport, setLastImport] = useState<
+    | {
+        imported: string[];
+        skipped: string[];
+        errors: { file: string; reason: string }[];
+      }
+    | undefined
+  >(undefined);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const onExport = async (): Promise<void> => {
+    onError(undefined);
+    setBusy(true);
+    setLastImport(undefined);
+    try {
+      const { blob, filename, files } = await api.exportConfig();
+      // Trigger the browser download via a synthetic anchor click.
+      // createObjectURL + revoke on the next animation frame avoids the
+      // race where revoking inside the same task can cancel the
+      // download in some browsers.
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      requestAnimationFrame(() => URL.revokeObjectURL(url));
+      setLastExport({ filename, files });
+    } catch (err) {
+      onError(`Export failed: ${errorCode(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onImport = async (file: File): Promise<void> => {
+    onError(undefined);
+    setBusy(true);
+    setLastExport(undefined);
+    try {
+      const summary = await api.importConfig(file);
+      setLastImport(summary);
+    } catch (err) {
+      onError(`Import failed: ${errorCode(err)}`);
+    } finally {
+      setBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <section>
+        <h3 className="mb-2 text-sm font-medium text-neutral-100">Export config</h3>
+        <p className="mb-3 text-xs text-neutral-400">
+          Downloads a <code className="font-mono">.tar.gz</code> with{" "}
+          <code className="font-mono">mcp.json</code>,{" "}
+          <code className="font-mono">settings.json</code>, and{" "}
+          <code className="font-mono">models.json</code>. Provider auth (
+          <code className="font-mono">auth.json</code> — API keys, OAuth tokens) is{" "}
+          <strong>not</strong> included; re-authenticate providers after restoring on a new install.
+        </p>
+        <button
+          onClick={() => void onExport()}
+          disabled={busy}
+          className="rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-100 hover:border-neutral-500 disabled:opacity-50"
+        >
+          {busy ? "Exporting…" : "Download config archive"}
+        </button>
+        {lastExport !== undefined && (
+          <p className="mt-2 text-xs text-emerald-400">
+            Exported <code className="font-mono">{lastExport.filename}</code> (
+            {lastExport.files.length === 0
+              ? "no files were on disk"
+              : `included: ${lastExport.files.join(", ")}`}
+            )
+          </p>
+        )}
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-sm font-medium text-neutral-100">Import config</h3>
+        <p className="mb-3 text-xs text-neutral-400">
+          Restores a previously-exported archive. Each file is parsed before any disk write — if any
+          file fails validation, <strong>nothing</strong> is imported. Existing live agent sessions
+          keep their original settings until restarted.
+        </p>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".gz,.tgz,application/gzip,application/x-gzip"
+          disabled={busy}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file !== undefined) void onImport(file);
+          }}
+          className="block text-xs text-neutral-300 file:mr-3 file:rounded file:border file:border-neutral-700 file:bg-neutral-900 file:px-3 file:py-1.5 file:text-xs file:text-neutral-100 hover:file:border-neutral-500 disabled:opacity-50"
+        />
+        {lastImport !== undefined && (
+          <div className="mt-3 space-y-1 text-xs">
+            {lastImport.imported.length > 0 && (
+              <p className="text-emerald-400">
+                Imported: <code className="font-mono">{lastImport.imported.join(", ")}</code>
+              </p>
+            )}
+            {lastImport.skipped.length > 0 && (
+              <p className="text-amber-400">
+                Skipped (not in allow-list):{" "}
+                <code className="font-mono">{lastImport.skipped.join(", ")}</code>
+              </p>
+            )}
+            {lastImport.errors.length > 0 && (
+              <div className="text-red-400">
+                <p>Errors — nothing was written:</p>
+                <ul className="ml-4 list-disc">
+                  {lastImport.errors.map((e) => (
+                    <li key={e.file}>
+                      <code className="font-mono">{e.file}</code>: {e.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {lastImport.imported.length === 0 &&
+              lastImport.errors.length === 0 &&
+              lastImport.skipped.length === 0 && (
+                <p className="italic text-neutral-500">Archive was empty.</p>
+              )}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

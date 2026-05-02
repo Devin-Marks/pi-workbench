@@ -415,6 +415,18 @@ mounts at the same host path on purpose).
 first read to move it into `WORKBENCH_DATA_DIR` if the new location
 is empty.
 
+**Export / import** (`config-export.ts`, `Settings → Backup` tab):
+`GET /api/v1/config/export` streams a flat `.tar.gz` containing
+`mcp.json`, `settings.json`, and `models.json`. `POST /api/v1/config/
+import` accepts a multipart upload of the same shape and writes each
+file atomically. Three deliberate exclusions: `auth.json` (provider
+keys / OAuth tokens — sensitive enough that bundling them into a
+download the user might forward by accident is the wrong default),
+`projects.json` (paths are installation-bound), and the auto-
+generated `jwt-secret` / `password-hash` (also installation-bound).
+Import is all-or-nothing: every accepted file must parse as JSON
+before any rename runs, so a corrupted entry can't half-restore.
+
 ---
 
 ## Project Data Model
