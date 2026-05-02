@@ -13,6 +13,8 @@ import { config } from "./config.js";
 import { makeDedupe, makeLock } from "./concurrency.js";
 import { effectiveSkillsForProject } from "./config-manager.js";
 import { readProjects } from "./project-manager.js";
+import { filterEnabledTools, readToolOverrides } from "./tool-overrides.js";
+import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import {
   customToolsForProject as mcpCustomToolsForProject,
   ensureProjectLoaded as mcpEnsureProjectLoaded,
@@ -115,6 +117,59 @@ export class EntryNotFoundError extends Error {
 }
 
 const registry = new Map<string, LiveSession>();
+
+/**
+ * Built-in pi tools we activate on every session. Pi's SDK ships
+ * seven `read | bash | edit | write | grep | find | ls` (see
+ * `node_modules/@mariozechner/pi-coding-agent/dist/core/tools/index.d.ts`),
+ * but only the first four are activated when `tools` is left
+ * undefined. We enable all seven so the agent gets first-class
+ * filesystem-read affordances (grep / find / ls) instead of
+ * shelling out via bash for every directory listing or content
+ * search — same UX the pi TUI ships with.
+ *
+ * Passing `tools: [...]` to `createAgentSession` ALSO filters
+ * customTools (MCP) by name (see agent-session.js
+ * `_refreshToolRegistry`), so each callsite below extends this
+ * list with the names of its MCP customTools before passing it
+ * through. Without that union, enabling the read-only set would
+ * silently disable MCP.
+ */
+export const BUILTIN_TOOL_NAMES: readonly string[] = [
+  "read",
+  "bash",
+  "edit",
+  "write",
+  "grep",
+  "find",
+  "ls",
+];
+
+/**
+ * Build the `tools` allowlist passed to `createAgentSession` for this
+ * session, applying both global and per-project overrides from
+ * `${WORKBENCH_DATA_DIR}/tool-overrides.json`. Allow-by-default: a
+ * tool is enabled unless either the global disabled set OR the
+ * project's tri-state override says otherwise (project explicit
+ * enable / disable wins; absent = inherit global).
+ *
+ * The overrides file is read FRESH per session create (not cached)
+ * so toggling a tool in Settings takes effect on the next new
+ * session without a server restart. Live sessions keep the tool
+ * list they were created with — same caveat as every settings
+ * change today.
+ */
+async function buildToolsAllowlist(
+  customTools: readonly ToolDefinition[],
+  projectId: string,
+): Promise<string[]> {
+  const overrides = await readToolOverrides();
+  const candidates = [
+    ...BUILTIN_TOOL_NAMES.map((name) => ({ family: "builtin" as const, name })),
+    ...customTools.map((t) => ({ family: "mcp" as const, name: t.name })),
+  ];
+  return filterEnabledTools(overrides, projectId, candidates);
+}
 
 /** Match the project-manager UUID shape; defends against ad-hoc project IDs. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -325,6 +380,7 @@ export async function createSession(
     resourceLoader,
     agentDir: config.piConfigDir,
     customTools,
+    tools: await buildToolsAllowlist(customTools, projectId),
   });
 
   const now = new Date();
@@ -476,6 +532,7 @@ export async function resumeSession(
       resourceLoader,
       agentDir: config.piConfigDir,
       customTools,
+      tools: await buildToolsAllowlist(customTools, projectId),
     });
 
     const now = new Date();
@@ -848,6 +905,7 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
     resourceLoader,
     agentDir: config.piConfigDir,
     customTools,
+    tools: await buildToolsAllowlist(customTools, source.projectId),
   });
 
   const now = new Date();
@@ -896,6 +954,7 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
         resourceLoader: restoredResourceLoader,
         agentDir: config.piConfigDir,
         customTools: restoredCustomTools,
+        tools: await buildToolsAllowlist(restoredCustomTools, source.projectId),
       });
       // Mutate the existing LiveSession in place rather than
       // replacing the registry entry — any SSE client holding a

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import {
   api,
   ApiError,
@@ -8,13 +9,14 @@ import {
   type McpTransport,
   type ProvidersListing,
   type SkillSummary,
+  type ToolListing,
 } from "../lib/api-client";
 import { useActiveProject, useProjectStore } from "../store/project-store";
 import { useUiConfigStore } from "../store/ui-config-store";
 import { EMPTY_STATUS, useMcpStore } from "../store/mcp-store";
 import { THEME_DEFS, useThemeStore, type ThemeId } from "../lib/theme";
 
-type Tab = "providers" | "agent" | "mcp" | "skills" | "appearance" | "backup";
+type Tab = "providers" | "agent" | "mcp" | "tools" | "skills" | "appearance" | "backup";
 
 interface Props {
   onClose: () => void;
@@ -54,8 +56,12 @@ export function SettingsPanel({ onClose, initialTab }: Props) {
   const visibleTabs = useMemo<readonly Tab[]>(
     () =>
       minimal
-        ? (["skills", "appearance", "backup"] as const)
-        : (["providers", "agent", "mcp", "skills", "appearance", "backup"] as const),
+        ? // Tools stays visible in minimal — operators in locked-down
+          // deployments often want to disable bash/edit/write at the
+          // tool level, regardless of what providers / agent settings
+          // are exposed.
+          (["skills", "tools", "appearance", "backup"] as const)
+        : (["providers", "agent", "mcp", "tools", "skills", "appearance", "backup"] as const),
     [minimal],
   );
   const [tab, setTab] = useState<Tab>(initialTab ?? (minimal ? "skills" : "providers"));
@@ -102,11 +108,13 @@ export function SettingsPanel({ onClose, initialTab }: Props) {
                     ? "Agent"
                     : t === "mcp"
                       ? "MCP"
-                      : t === "skills"
-                        ? "Skills"
-                        : t === "appearance"
-                          ? "Appearance"
-                          : "Backup"}
+                      : t === "tools"
+                        ? "Tools"
+                        : t === "skills"
+                          ? "Skills"
+                          : t === "appearance"
+                            ? "Appearance"
+                            : "Backup"}
               </button>
             ))}
           </div>
@@ -129,6 +137,7 @@ export function SettingsPanel({ onClose, initialTab }: Props) {
           {tab === "providers" && <ProvidersTab onError={setError} />}
           {tab === "agent" && <AgentTab onError={setError} />}
           {tab === "mcp" && <McpTab onError={setError} />}
+          {tab === "tools" && <ToolsTab onError={setError} />}
           {tab === "skills" && <SkillsTab onError={setError} />}
           {tab === "appearance" && <AppearanceTab />}
           {tab === "backup" && <BackupTab onError={setError} />}
@@ -1054,6 +1063,282 @@ function AddOverrideDropdown({
   );
 }
 
+// ---------------- Tools tab ----------------
+
+/**
+ * Per-tool enable / disable view for pi's seven built-in tools
+ * (read / bash / edit / write / grep / find / ls). Each row is a
+ * single toggle.
+ *
+ * MCP per-tool toggles live on the MCP tab as a cascade under each
+ * server — keeping them next to the server's connection status,
+ * URL, and master enable flag. Splitting the views lets each tab
+ * focus: Tools = "what coding affordances does the agent have,"
+ * MCP = "what external services is it connected to and which of
+ * their tools are exposed."
+ *
+ * Allow-by-default. Disabling a tool removes it from the
+ * `tools: [...]` allowlist passed to the next `createAgentSession`
+ * — live sessions keep the tool set they booted with (same caveat
+ * as every settings change today).
+ */
+function ToolsTab({ onError }: { onError: (msg: string | undefined) => void }) {
+  const projects = useProjectStore((s) => s.projects);
+  const [listing, setListing] = useState<ToolListing | undefined>(undefined);
+  const [allOverrides, setAllOverrides] = useState<
+    Record<
+      string,
+      {
+        builtin: { enable: string[]; disable: string[] };
+        mcp: { enable: string[]; disable: string[] };
+      }
+    >
+  >({});
+  const [busy, setBusy] = useState(false);
+
+  const refresh = async (): Promise<void> => {
+    onError(undefined);
+    try {
+      // Listing here is global-only — the per-project state is
+      // surfaced via the cascade panel inside each row, so we don't
+      // need to re-fetch the listing on project switch.
+      const [list, overrides] = await Promise.all([api.listTools(), api.listToolOverrides()]);
+      setListing(list);
+      setAllOverrides(overrides.projects);
+    } catch (err) {
+      onError(`Failed to load tools: ${errorCode(err)}`);
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const toggleGlobal = async (
+    family: "builtin" | "mcp",
+    name: string,
+    nextEnabled: boolean,
+  ): Promise<void> => {
+    setBusy(true);
+    try {
+      await api.setToolEnabled(family, name, nextEnabled, "global");
+      await refresh();
+    } catch (err) {
+      onError(`Toggle failed: ${errorCode(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setProjectOverride = async (
+    family: "builtin" | "mcp",
+    targetProjectId: string,
+    name: string,
+    state: "enabled" | "disabled" | undefined,
+  ): Promise<void> => {
+    setBusy(true);
+    try {
+      if (state === undefined) {
+        await api.clearToolProjectOverride(family, name, targetProjectId);
+      } else {
+        await api.setToolEnabled(family, name, state === "enabled", "project", targetProjectId);
+      }
+      await refresh();
+    } catch (err) {
+      onError(`Override write failed: ${errorCode(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (listing === undefined) {
+    return <p className="text-xs italic text-neutral-500">Loading tools…</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-neutral-500">
+        Toggle individual built-in tools the agent can call. The global toggle on the right is the
+        default for every project. Use <strong>Overrides</strong> to enable/disable a tool per
+        project — explicit project overrides win over the global default. Changes apply to the next
+        session — already-running sessions keep the tool set they started with. MCP server tools
+        live under their respective server in the <strong>MCP</strong> tab.
+      </p>
+
+      <section>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+          Built-in tools
+        </h3>
+        <div className="space-y-2">
+          {listing.builtin.map((t) => (
+            <ToolCascadeRow
+              key={`builtin:${t.name}`}
+              family="builtin"
+              name={t.name}
+              fqn={t.name}
+              description={t.description}
+              globalEnabled={t.globalEnabled}
+              projects={projects}
+              allOverrides={allOverrides}
+              busy={busy}
+              onToggleGlobal={(next) => void toggleGlobal("builtin", t.name, next)}
+              onSetProjectOverride={(projectId, state) =>
+                void setProjectOverride("builtin", projectId, t.name, state)
+              }
+            />
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/**
+ * One tool row with a global toggle + an "Overrides" expand button
+ * that reveals the per-project cascade panel (tri-state picker for
+ * each project that already has an override + an "Add override
+ * for…" dropdown for projects that don't). Mirrors the Skills tab's
+ * per-skill row exactly so the two tabs feel consistent.
+ */
+function ToolCascadeRow({
+  family,
+  name,
+  fqn,
+  description,
+  globalEnabled,
+  projects,
+  allOverrides,
+  busy,
+  onToggleGlobal,
+  onSetProjectOverride,
+}: {
+  family: "builtin" | "mcp";
+  /** Display name (short for MCP, bare for builtins). */
+  name: string;
+  /** Wire/storage name. For MCP this is the bridged
+   *  `<server>__<tool>`; for builtins it equals `name`. */
+  fqn: string;
+  description: string;
+  globalEnabled: boolean;
+  projects: { id: string; name: string; path: string }[];
+  allOverrides: Record<
+    string,
+    {
+      builtin: { enable: string[]; disable: string[] };
+      mcp: { enable: string[]; disable: string[] };
+    }
+  >;
+  busy: boolean;
+  onToggleGlobal: (next: boolean) => void;
+  onSetProjectOverride: (projectId: string, state: "enabled" | "disabled" | undefined) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const overrideStateFor = (projectId: string): "enabled" | "disabled" | undefined => {
+    const entry = allOverrides[projectId];
+    if (entry === undefined) return undefined;
+    const fam = family === "builtin" ? entry.builtin : entry.mcp;
+    if (fam.enable.includes(fqn)) return "enabled";
+    if (fam.disable.includes(fqn)) return "disabled";
+    return undefined;
+  };
+  const overrideRows = projects
+    .map((p) => ({ project: p, state: overrideStateFor(p.id) }))
+    .filter((r) => r.state !== undefined);
+  const projectsWithoutOverride = projects.filter((p) => overrideStateFor(p.id) === undefined);
+
+  return (
+    <div className="rounded border border-neutral-800 bg-neutral-900/40">
+      <div className="flex items-start gap-3 p-3">
+        <span
+          className={`mt-1.5 inline-block h-2.5 w-2.5 rounded-full ${
+            globalEnabled ? "bg-emerald-500" : "bg-neutral-700"
+          }`}
+          title={`Global default: ${globalEnabled ? "enabled" : "disabled"}`}
+        />
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="font-mono text-neutral-100">{name}</span>
+            {fqn !== name && (
+              <span
+                className="font-mono text-[10px] text-neutral-500"
+                title="Bridged tool name pi sees on the wire"
+              >
+                {fqn}
+              </span>
+            )}
+          </div>
+          {description.length > 0 && (
+            <p className="line-clamp-2 text-[11px] text-neutral-500" title={description}>
+              {description}
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1 text-xs">
+          <button
+            onClick={() => onToggleGlobal(!globalEnabled)}
+            disabled={busy}
+            className={`rounded border px-2 py-0.5 disabled:opacity-50 ${
+              globalEnabled
+                ? "border-emerald-700/50 bg-emerald-900/20 text-emerald-300"
+                : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+            }`}
+            title="Global default for every project that doesn't override"
+          >
+            Global: {globalEnabled ? "enabled" : "disabled"}
+          </button>
+          <button
+            onClick={() => setExpanded((e) => !e)}
+            className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-300 hover:border-neutral-500"
+            title="Show per-project overrides"
+          >
+            {expanded ? "▾ Overrides" : `▸ Overrides (${overrideRows.length})`}
+          </button>
+        </div>
+      </div>
+      {expanded && (
+        <div className="border-t border-neutral-800 px-3 py-2">
+          {overrideRows.length === 0 ? (
+            <p className="mb-2 text-[11px] italic text-neutral-500">
+              No project overrides yet — every project inherits the global state.
+            </p>
+          ) : (
+            <div className="mb-2 space-y-1">
+              {overrideRows.map(({ project: p, state }) => (
+                <div
+                  key={p.id}
+                  className="flex items-center justify-between gap-2 rounded bg-neutral-900/60 px-2 py-1 text-xs"
+                >
+                  <span className="truncate text-neutral-200" title={p.path}>
+                    {p.name}
+                  </span>
+                  <TriStatePicker
+                    value={state}
+                    disabled={busy}
+                    onChange={(next) => onSetProjectOverride(p.id, next)}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+          {projectsWithoutOverride.length > 0 && (
+            <AddOverrideDropdown
+              projects={projectsWithoutOverride}
+              disabled={busy}
+              onAdd={(targetProjectId, state) => onSetProjectOverride(targetProjectId, state)}
+            />
+          )}
+          {projects.length === 0 && (
+            <p className="text-[11px] italic text-neutral-500">
+              No projects exist yet. Create a project first to add per-project overrides.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------- Appearance tab ----------------
 
 function AppearanceTab() {
@@ -1296,6 +1581,7 @@ function emptyDraft(): McpDraft {
 
 function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
   const project = useActiveProject();
+  const projects = useProjectStore((s) => s.projects);
   // All polled state lives in mcp-store now (single 30s ticker shared
   // with the header badge). The tab does its own one-shot per-project
   // refresh on mount + project switch so the row list reflects the
@@ -1320,10 +1606,49 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
   const [busy, setBusy] = useState(false);
   const [probing, setProbing] = useState<string | undefined>(undefined);
 
+  // Per-tool listing fetched alongside the server config so each
+  // server row can cascade its tools (each tool gets its own
+  // ToolCascadeRow with the same per-project override pattern as
+  // the Tools tab). Keyed by `<scope>:<server>` to dodge global-vs-
+  // project name collisions. Cascade overrides come in via the
+  // separate `allOverrides` fetch so a project switch doesn't have
+  // to re-query the listing.
+  const [toolsByServer, setToolsByServer] = useState<Map<string, McpToolRow[]>>(new Map());
+  const [allOverrides, setAllOverrides] = useState<
+    Record<
+      string,
+      {
+        builtin: { enable: string[]; disable: string[] };
+        mcp: { enable: string[]; disable: string[] };
+      }
+    >
+  >({});
+  const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set());
+
+  const refreshTools = async (): Promise<void> => {
+    try {
+      const [listing, overrides] = await Promise.all([
+        api.listTools(project?.id),
+        api.listToolOverrides(),
+      ]);
+      const next = new Map<string, McpToolRow[]>();
+      for (const srv of listing.mcp) {
+        next.set(`${srv.scope}:${srv.server}`, srv.tools);
+      }
+      setToolsByServer(next);
+      setAllOverrides(overrides.projects);
+    } catch (err) {
+      // Tools listing is best-effort — failure shouldn't block the
+      // server config UI from rendering. Surface but don't block.
+      onError(`Failed to load tool listing: ${errorCode(err)}`);
+    }
+  };
+
   useEffect(() => {
     void refreshProject(project?.id).catch((err: unknown) => {
       onError(`Failed to load MCP config: ${errorCode(err)}`);
     });
+    void refreshTools();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id]);
 
@@ -1421,11 +1746,55 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
     try {
       await probeServerStore(name, scope === "project" ? project?.id : undefined);
       onError(undefined);
+      // After a probe the tool list may have changed (newly-connected
+      // server populates its tools). Refresh in the background.
+      void refreshTools();
     } catch (err) {
       onError(`Probe failed for '${name}': ${errorCode(err)}`);
     } finally {
       setProbing(undefined);
     }
+  };
+
+  const toggleToolGlobal = async (fqn: string, nextEnabled: boolean): Promise<void> => {
+    setBusy(true);
+    try {
+      await api.setToolEnabled("mcp", fqn, nextEnabled, "global");
+      await refreshTools();
+    } catch (err) {
+      onError(`Toggle failed: ${errorCode(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setProjectToolOverride = async (
+    targetProjectId: string,
+    fqn: string,
+    state: "enabled" | "disabled" | undefined,
+  ): Promise<void> => {
+    setBusy(true);
+    try {
+      if (state === undefined) {
+        await api.clearToolProjectOverride("mcp", fqn, targetProjectId);
+      } else {
+        await api.setToolEnabled("mcp", fqn, state === "enabled", "project", targetProjectId);
+      }
+      await refreshTools();
+    } catch (err) {
+      onError(`Override write failed: ${errorCode(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleServerExpanded = (serverKey: string): void => {
+    setExpandedServers((cur) => {
+      const next = new Set(cur);
+      if (next.has(serverKey)) next.delete(serverKey);
+      else next.add(serverKey);
+      return next;
+    });
   };
 
   if (settings === undefined) {
@@ -1472,6 +1841,16 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
         editable
         editingName={editingName ?? null}
         probingName={probing ?? null}
+        toolsByServer={toolsByServer}
+        expandedServers={expandedServers}
+        allOverrides={allOverrides}
+        projects={projects}
+        busy={busy}
+        onToggleExpanded={toggleServerExpanded}
+        onToggleToolGlobal={(fqn, next) => void toggleToolGlobal(fqn, next)}
+        onSetProjectToolOverride={(projectId, fqn, next) =>
+          void setProjectToolOverride(projectId, fqn, next)
+        }
         onToggle={(name, next) => void toggleServer(name, next)}
         onProbe={(name) => void probeServer(name, "global")}
         onEdit={startEdit}
@@ -1492,6 +1871,16 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
           servers={projectStatus.map((s) => ({ status: s, config: undefined }))}
           editable={false}
           probingName={probing ?? null}
+          toolsByServer={toolsByServer}
+          expandedServers={expandedServers}
+          allOverrides={allOverrides}
+          projects={projects}
+          busy={busy}
+          onToggleExpanded={toggleServerExpanded}
+          onToggleToolGlobal={(fqn, next) => void toggleToolGlobal(fqn, next)}
+          onSetProjectToolOverride={(projectId, fqn, next) =>
+            void setProjectToolOverride(projectId, fqn, next)
+          }
           onProbe={(name) => void probeServer(name, "project")}
         />
       )}
@@ -1525,6 +1914,19 @@ interface ServerRowEntry {
   config: McpServerConfig | undefined;
 }
 
+interface McpToolRow {
+  name: string;
+  shortName: string;
+  description: string;
+  /** Effective state for the active project (or global when no project active). */
+  enabled: boolean;
+  /** Underlying global state regardless of project override — used to label
+   *  the global toggle button when a project tri-state is in play. */
+  globalEnabled: boolean;
+  /** Active project's tri-state position, absent = inherit. */
+  projectOverride?: "enabled" | "disabled";
+}
+
 function McpServerList(props: {
   title: string;
   emptyHint: React.ReactNode;
@@ -1535,6 +1937,31 @@ function McpServerList(props: {
    *  being assigned to an optional prop typed as `string`. */
   editingName?: string | null;
   probingName?: string | null;
+  /** Per-server tool listing keyed by `<scope>:<server>` so the cascade
+   *  can disambiguate global vs project servers with the same name. */
+  toolsByServer: Map<string, McpToolRow[]>;
+  /** Same `<scope>:<server>` keys for the expand state. */
+  expandedServers: Set<string>;
+  /** Cascade payload: every project's per-tool override map. Used by
+   *  the inline ToolCascadeRow under each server's expanded panel. */
+  allOverrides: Record<
+    string,
+    {
+      builtin: { enable: string[]; disable: string[] };
+      mcp: { enable: string[]; disable: string[] };
+    }
+  >;
+  projects: { id: string; name: string; path: string }[];
+  busy: boolean;
+  onToggleExpanded: (serverKey: string) => void;
+  /** Toggle a tool's GLOBAL default. */
+  onToggleToolGlobal: (fqn: string, nextEnabled: boolean) => void;
+  /** Set or clear a per-project tri-state override for a tool. */
+  onSetProjectToolOverride: (
+    projectId: string,
+    fqn: string,
+    next: "enabled" | "disabled" | undefined,
+  ) => void;
   onToggle?: (name: string, enabled: boolean) => void;
   onProbe: (name: string) => void;
   onEdit?: (name: string) => void;
@@ -1553,69 +1980,120 @@ function McpServerList(props: {
             const s = entry.status;
             const isEditing = props.editingName === s.name;
             const isProbing = props.probingName === s.name;
+            const serverKey = `${s.scope}:${s.name}`;
+            const tools = props.toolsByServer.get(serverKey) ?? [];
+            const expanded = props.expandedServers.has(serverKey);
+            const canExpand = tools.length > 0;
             return (
               <div
-                key={`${s.scope}:${s.name}`}
-                className={`rounded border p-3 ${
+                key={serverKey}
+                className={`rounded border ${
                   isEditing
                     ? "border-neutral-500 bg-neutral-900"
                     : "border-neutral-800 bg-neutral-900/40"
                 }`}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <McpStateDot state={s.state} />
-                    <span className="font-mono text-sm text-neutral-100">{s.name}</span>
-                    <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400">
-                      {s.transport ?? "auto"}
-                    </span>
-                    <span className="text-[11px] text-neutral-500">{s.toolCount} tools</span>
+                <div className="p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      {/* Cascade caret. Lucide icon (vs unicode arrow)
+                          for visual contrast — the arrows were too
+                          dim against the neutral background to read
+                          as a clickable affordance. */}
+                      <button
+                        type="button"
+                        onClick={() => canExpand && props.onToggleExpanded(serverKey)}
+                        disabled={!canExpand}
+                        className="flex h-5 w-5 items-center justify-center rounded text-neutral-300 hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-30"
+                        title={
+                          canExpand
+                            ? expanded
+                              ? "Hide tools"
+                              : "Show tools"
+                            : "No tools to show (server not connected or empty)"
+                        }
+                      >
+                        {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      </button>
+                      <McpStateDot state={s.state} />
+                      <span className="font-mono text-sm text-neutral-100">{s.name}</span>
+                      <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400">
+                        {s.transport ?? "auto"}
+                      </span>
+                      <span className="text-[11px] text-neutral-500">{s.toolCount} tools</span>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1 text-xs">
+                      {props.editable && props.onToggle !== undefined && (
+                        <button
+                          onClick={() => props.onToggle?.(s.name, !s.enabled)}
+                          className={`rounded border px-2 py-0.5 ${
+                            s.enabled
+                              ? "border-emerald-700/50 bg-emerald-900/20 text-emerald-300"
+                              : "border-neutral-700 text-neutral-400 hover:border-neutral-500"
+                          }`}
+                        >
+                          {s.enabled ? "Enabled" : "Disabled"}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => props.onProbe(s.name)}
+                        disabled={isProbing}
+                        className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-300 hover:border-neutral-500 disabled:opacity-50"
+                        title="Reconnect and refresh tool list"
+                      >
+                        {isProbing ? "Probing…" : "Probe"}
+                      </button>
+                      {props.editable && props.onEdit !== undefined && (
+                        <button
+                          onClick={() => props.onEdit?.(s.name)}
+                          className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-300 hover:border-neutral-500"
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {props.editable && props.onRemove !== undefined && (
+                        <button
+                          onClick={() => props.onRemove?.(s.name)}
+                          className="rounded border border-red-700/50 px-2 py-0.5 text-red-300 hover:bg-red-900/20"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1 text-xs">
-                    {props.editable && props.onToggle !== undefined && (
-                      <button
-                        onClick={() => props.onToggle?.(s.name, !s.enabled)}
-                        className={`rounded border px-2 py-0.5 ${
-                          s.enabled
-                            ? "border-emerald-700/50 bg-emerald-900/20 text-emerald-300"
-                            : "border-neutral-700 text-neutral-400 hover:border-neutral-500"
-                        }`}
-                      >
-                        {s.enabled ? "Enabled" : "Disabled"}
-                      </button>
-                    )}
-                    <button
-                      onClick={() => props.onProbe(s.name)}
-                      disabled={isProbing}
-                      className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-300 hover:border-neutral-500 disabled:opacity-50"
-                      title="Reconnect and refresh tool list"
-                    >
-                      {isProbing ? "Probing…" : "Probe"}
-                    </button>
-                    {props.editable && props.onEdit !== undefined && (
-                      <button
-                        onClick={() => props.onEdit?.(s.name)}
-                        className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-300 hover:border-neutral-500"
-                      >
-                        Edit
-                      </button>
-                    )}
-                    {props.editable && props.onRemove !== undefined && (
-                      <button
-                        onClick={() => props.onRemove?.(s.name)}
-                        className="rounded border border-red-700/50 px-2 py-0.5 text-red-300 hover:bg-red-900/20"
-                      >
-                        Remove
-                      </button>
-                    )}
+                  <div className="mt-1 truncate text-[11px] text-neutral-500" title={s.url}>
+                    {s.url}
                   </div>
+                  {s.lastError !== undefined && (
+                    <div className="mt-1 truncate text-[11px] text-red-300" title={s.lastError}>
+                      {s.lastError}
+                    </div>
+                  )}
                 </div>
-                <div className="mt-1 truncate text-[11px] text-neutral-500" title={s.url}>
-                  {s.url}
-                </div>
-                {s.lastError !== undefined && (
-                  <div className="mt-1 truncate text-[11px] text-red-300" title={s.lastError}>
-                    {s.lastError}
+                {expanded && canExpand && (
+                  <div className="space-y-2 border-t border-neutral-800 bg-neutral-950/40 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-wider text-neutral-500">
+                      Tools
+                    </div>
+                    <div className="space-y-2">
+                      {tools.map((t) => (
+                        <ToolCascadeRow
+                          key={`mcp:${t.name}`}
+                          family="mcp"
+                          name={t.shortName}
+                          fqn={t.name}
+                          description={t.description}
+                          globalEnabled={t.globalEnabled}
+                          projects={props.projects}
+                          allOverrides={props.allOverrides}
+                          busy={props.busy}
+                          onToggleGlobal={(next) => props.onToggleToolGlobal(t.name, next)}
+                          onSetProjectOverride={(projectId, state) =>
+                            props.onSetProjectToolOverride(projectId, t.name, state)
+                          }
+                        />
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

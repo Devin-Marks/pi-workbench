@@ -161,6 +161,65 @@ export interface SkillOverridesResponse {
   projects: Record<string, { enable: string[]; disable: string[] }>;
 }
 
+/**
+ * Unified tool listing returned by `GET /api/v1/config/tools`.
+ * Two families:
+ *   - `builtin` — pi's seven shipped coding tools (read, bash, edit,
+ *     write, grep, find, ls). Names are bare.
+ *   - `mcp` — one entry per connected MCP server, each with the tools
+ *     it exposes. The tool `name` is the bridged form pi sees on the
+ *     wire (`<server>__<tool>`); `shortName` is the unprefixed name
+ *     the MCP server itself reports.
+ *
+ * Per-tool fields:
+ *   - `enabled` is the EFFECTIVE state for the active project (or
+ *     global state when no `projectId` was passed in the query).
+ *   - `globalEnabled` is the underlying global state regardless of
+ *     any project override — surfaces the "Global: enabled" label
+ *     in the UI alongside the per-project tri-state.
+ *   - `projectOverride` is the active project's tri-state position:
+ *     `"enabled"` (project explicitly enables), `"disabled"`
+ *     (project explicitly disables), or absent (inherit global).
+ *     Only present when the request included `?projectId=`.
+ */
+export interface ToolListingItem {
+  name: string;
+  description: string;
+  enabled: boolean;
+  globalEnabled: boolean;
+  projectOverride?: "enabled" | "disabled";
+}
+export interface ToolListing {
+  builtin: ToolListingItem[];
+  mcp: {
+    server: string;
+    scope: "global" | "project";
+    projectId?: string;
+    /** The MCP server's own master enable flag (from mcp.json). */
+    enabled: boolean;
+    state: McpConnectionState;
+    lastError?: string;
+    tools: (ToolListingItem & { shortName: string })[];
+  }[];
+}
+
+/**
+ * Cascade view returned by `GET /api/v1/config/tools/overrides`.
+ * Maps projectId → that project's per-family explicit overrides.
+ * Same shape as `SkillOverridesResponse` but split per family.
+ * Mostly consumed by the Settings UI's per-tool expand-and-show-
+ * all-projects affordance.
+ */
+export interface ToolOverridesResponse {
+  projects: Record<
+    string,
+    {
+      builtin: { enable: string[]; disable: string[] };
+      mcp: { enable: string[]; disable: string[] };
+    }
+  >;
+}
+
 export interface ProviderModelEntry {
   id: string;
   name: string;

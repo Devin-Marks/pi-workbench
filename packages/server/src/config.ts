@@ -191,6 +191,16 @@ export const config = Object.freeze({
    */
   skillOverridesFile: join(WORKBENCH_DATA_DIR, "skills-overrides.json"),
   /**
+   * Path to the workbench-private per-tool override file. Captures
+   * "user has explicitly disabled this builtin tool" and "user has
+   * explicitly disabled this MCP tool" — both as flat allow-by-default
+   * sets. Lives in the data dir (workbench-owned; pi's SDK has no
+   * native concept of per-tool toggles, this is purely a workbench
+   * filter applied to the `tools` allowlist passed to
+   * createAgentSession).
+   */
+  toolOverridesFile: join(WORKBENCH_DATA_DIR, "tool-overrides.json"),
+  /**
    * Whether `/api/docs` (Swagger UI + OpenAPI JSON spec) is reachable.
    * Defaults to true so Docker / production deploys keep working without
    * extra config (the README quickstart documents `/api/docs`). When
