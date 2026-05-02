@@ -151,6 +151,30 @@ async function waitForOutput(
   return false;
 }
 
+/**
+ * Block until the spawned shell has flushed its first chunk to the
+ * WebSocket — the signal that bash has finished sourcing its rc
+ * files, set up readline, and is now waiting on stdin. Without this,
+ * sending input immediately on WS-open races shell startup on slow
+ * Linux CI: the keystrokes hit the PTY before bash has wired its
+ * read loop, get dropped on the floor, and the test sees the
+ * subsequent "echo <sentinel>" never appear in output. macOS and PR
+ * runs happen to win the race; main runs sometimes lose it.
+ *
+ * Returns true when ANY output has arrived (a prompt, a title escape,
+ * a `[?2004h` bracketed-paste mode toggle, anything). False on timeout
+ * — caller should treat that as "shell never came up" and let the
+ * downstream assertion fail with the captured output for diagnosis.
+ */
+async function waitForShellReady(state: OpenedSocket, timeoutMs = 5_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (state.output.length > 0) return true;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return false;
+}
+
 async function getActivePtys(base: string): Promise<number> {
   const res = await fetch(`${base}/api/v1/health`);
   const body = (await res.json()) as { activePtys: number };
@@ -279,6 +303,12 @@ async function main(): Promise<void> {
       assert("WS opened", term.ws.readyState === WebSocket.OPEN);
       assert("activePtys === 1 after open", (await waitForPtyCount(base, 1)) === 1);
 
+      // Wait for the shell to flush its first chunk before sending
+      // any input. Without this, slow Linux CI runners drop the
+      // initial keystrokes on the floor — see waitForShellReady.
+      const ready = await waitForShellReady(term);
+      assert("shell flushed initial output", ready, `output: ${term.output.slice(-200)}`);
+
       // Use a unique sentinel to avoid matching the user's PS1 echo.
       const sentinel = "pi-workbench-marker-" + randomBytes(4).toString("hex");
       send(term.ws, { type: "input", data: `echo ${sentinel}\n` });
@@ -337,6 +367,12 @@ async function main(): Promise<void> {
       const term2 = await openTerminal(base, { projectId: project.id, token: apiKey });
       opened.push(term2);
       assert("activePtys === 2 with two terminals", (await waitForPtyCount(base, 2)) === 2);
+
+      // Same shell-startup race as above — wait for term2 to flush
+      // its first chunk before sending input. term already passed
+      // the readiness check earlier in the test; only term2 is new.
+      const ready2 = await waitForShellReady(term2);
+      assert("term2 shell flushed initial output", ready2, `output: ${term2.output.slice(-200)}`);
 
       const m1 = "term1-" + randomBytes(4).toString("hex");
       const m2 = "term2-" + randomBytes(4).toString("hex");
