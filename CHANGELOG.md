@@ -14,6 +14,24 @@ the README for the support window policy.
 
 ### Changed
 
+- **Markdown + syntax-highlighted code in chat messages.** User
+  text bubbles, assistant text blocks, and the streaming preview
+  now render through `react-markdown` + `remark-gfm` +
+  `remark-breaks` — headings, bold / italic, lists, tables,
+  blockquotes, links, fenced code blocks, and chat-style single-
+  newline preservation (so the line breaks the user typed survive
+  the round-trip; CommonMark default would have folded them into
+  whitespace). Fenced code blocks get prism-react-renderer syntax
+  highlighting (same library DiffBlock and ContextInspectorPanel
+  already use, so the dark surfaces stay visually consistent).
+  Inline `` `code` `` gets a styled monospace span. Raw HTML in
+  message content is ignored (no `rehype-raw`); links open in a
+  new tab with `noopener noreferrer`. Each user / assistant message
+  has a small `raw` / `rendered` toggle in the corner so the
+  underlying text (literal `**`, backticks, exact whitespace)
+  stays one click away. Tool calls, file-reference badges, bash
+  exec messages, and image attachments still use their dedicated
+  renderers — markdown is for prose only.
 - **Tool calls render as one collapsed entry per call.** Previously
   the assistant-side `toolCall` block and its matching `toolResult`
   message rendered as two separate boxes in the chat — one showing

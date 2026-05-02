@@ -1,0 +1,195 @@
+/**
+ * Markdown renderer for chat messages — assistant text blocks, user
+ * text bubbles, and the streaming preview.
+ *
+ * Uses `react-markdown` + `remark-gfm` (already in package.json from
+ * the v1 install but never wired) for the markdown / GFM dialect, and
+ * `prism-react-renderer` for syntax-highlighted fenced code blocks
+ * (same library DiffBlock and ContextInspectorPanel use, so themes
+ * stay consistent across the dark surfaces).
+ *
+ * Design choices that aren't obvious from the diff:
+ *
+ * - **No raw HTML.** react-markdown ignores HTML tags by default,
+ *   which is the right posture for assistant output that may
+ *   round-trip user-controlled content; we don't add the
+ *   `rehype-raw` plugin.
+ * - **Heading scale is dampened.** Default `<h1>`/`<h2>` are
+ *   document-sized (1.5rem+); inside a chat bubble they drown the
+ *   prose. Mapped to text-base / text-sm.
+ * - **Links open in a new tab.** `target="_blank"` + `rel="noopener
+ *   noreferrer"` so a click doesn't navigate away from the
+ *   conversation, and `noopener` defeats `window.opener` reach-back.
+ * - **Code blocks unwrap from their `<pre>`.** react-markdown nests
+ *   `<code>` inside `<pre>` for fenced blocks; we replace `<pre>`
+ *   with a fragment and let the code-renderer below own the
+ *   `<pre>` layout — otherwise the prism-themed `<pre>` ends up
+ *   inside the markdown library's bare `<pre>`, doubling the
+ *   background and padding.
+ * - **Inline code keeps the same monospace look across the app.**
+ *   We mirror the badge style used in SettingsPanel
+ *   (`code.font-mono`) so a `like-this` token reads the same
+ *   whether it appears in chat, in a settings hint, or in a tool
+ *   preview header.
+ * - **Streaming-friendly.** react-markdown handles unfinished input
+ *   gracefully — an open code fence renders as a code block until
+ *   it's closed by the next token. The streaming preview is the
+ *   primary user of that behavior; no special-case handling needed
+ *   here.
+ */
+import { Highlight, themes as prismThemes } from "prism-react-renderer";
+import type { HTMLAttributes, ReactNode } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
+
+interface Props {
+  text: string;
+  /**
+   * Smaller text variant used by inline contexts (assistant
+   * (streaming) preview, anywhere bubble whitespace is tight). The
+   * default matches the assistant text block (text-sm).
+   */
+  size?: "sm" | "xs";
+}
+
+/**
+ * react-markdown 10 dropped the `inline` prop on the code component.
+ * The convention now: fenced blocks come through with a
+ * `className="language-foo"` from the fence's lang hint; inline
+ * code (single backticks) has no className. We branch on that to
+ * pick the inline-styled span vs the prism-highlighted block.
+ */
+const CodeRenderer = ({ className, children, ...rest }: HTMLAttributes<HTMLElement>): ReactNode => {
+  const langMatch = /language-([\w-]+)/.exec(className ?? "");
+  if (langMatch === null) {
+    return (
+      <code
+        className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[0.9em] text-neutral-100"
+        {...rest}
+      >
+        {children}
+      </code>
+    );
+  }
+  const language = langMatch[1] ?? "text";
+  // children is the code text. Coerce to string and strip a single
+  // trailing newline that `react-markdown` reliably adds — leaving
+  // it produces an awkward blank last line in the highlight.
+  const code = String(children ?? "").replace(/\n$/, "");
+
+  return (
+    <Highlight code={code} language={language} theme={prismThemes.vsDark}>
+      {({ style, tokens, getLineProps, getTokenProps }) => (
+        <pre
+          className="overflow-x-auto rounded border border-neutral-800 p-2 font-mono text-[12px]"
+          style={{ ...style, background: "#0d0d0d" }}
+        >
+          {tokens.map((line, i) => {
+            const lineProps = getLineProps({ line });
+            return (
+              <div key={i} {...lineProps}>
+                {line.map((token, key) => {
+                  const tokenProps = getTokenProps({ token });
+                  return <span key={key} {...tokenProps} />;
+                })}
+              </div>
+            );
+          })}
+        </pre>
+      )}
+    </Highlight>
+  );
+};
+
+const components: Components = {
+  // Heading scale — see header comment for why we shrink.
+  h1: ({ children }) => (
+    <h1 className="mb-1 mt-3 text-base font-semibold first:mt-0">{children}</h1>
+  ),
+  h2: ({ children }) => <h2 className="mb-1 mt-3 text-sm font-semibold first:mt-0">{children}</h2>,
+  h3: ({ children }) => <h3 className="mb-1 mt-2 text-sm font-semibold first:mt-0">{children}</h3>,
+  h4: ({ children }) => <h4 className="mb-1 mt-2 text-xs font-semibold first:mt-0">{children}</h4>,
+  h5: ({ children }) => <h5 className="mb-1 mt-2 text-xs font-semibold first:mt-0">{children}</h5>,
+  h6: ({ children }) => <h6 className="mb-1 mt-2 text-xs font-semibold first:mt-0">{children}</h6>,
+
+  // Paragraph + lists — tight spacing inside a bubble; the bubble
+  // already provides outer padding.
+  p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
+  ul: ({ children }) => <ul className="my-2 ml-5 list-disc space-y-1 first:mt-0">{children}</ul>,
+  ol: ({ children }) => <ol className="my-2 ml-5 list-decimal space-y-1 first:mt-0">{children}</ol>,
+  li: ({ children }) => <li className="leading-snug">{children}</li>,
+
+  // Blockquote: subtle left border, dimmer text.
+  blockquote: ({ children }) => (
+    <blockquote className="my-2 border-l-2 border-neutral-700 pl-3 text-neutral-400">
+      {children}
+    </blockquote>
+  ),
+
+  // Tables (GFM): scrollable wrapper to handle wide columns inside
+  // a fixed-width bubble.
+  table: ({ children }) => (
+    <div className="my-2 overflow-x-auto">
+      <table className="min-w-full border-collapse text-xs">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th className="border border-neutral-800 px-2 py-1 text-left font-semibold">{children}</th>
+  ),
+  td: ({ children }) => (
+    <td className="border border-neutral-800 px-2 py-1 align-top">{children}</td>
+  ),
+
+  // Links → new tab + safe rel. Keep the text unchanged.
+  a: ({ children, href }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-blue-400 underline hover:text-blue-300"
+    >
+      {children}
+    </a>
+  ),
+
+  // Horizontal rule — match neutral border palette.
+  hr: () => <hr className="my-3 border-neutral-800" />,
+
+  // Strong / em — defaults are fine; explicit so we own the look.
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+
+  // Code — see CodeRenderer header for the inline / fenced split.
+  code: CodeRenderer,
+  // Unwrap react-markdown's bare <pre> — CodeRenderer owns the
+  // <pre>, so the parent fragment keeps the layout single-bubble.
+  pre: ({ children }) => <>{children}</>,
+};
+
+export function ChatMarkdown({ text, size = "sm" }: Props) {
+  // The outer container holds the typography scale + breaks long
+  // unbroken tokens (URLs, identifiers, base64 dumps) so a single
+  // gigantic word can't blow out the bubble width. Tailwind's
+  // `break-words` covers the common case; `[overflow-wrap:anywhere]`
+  // catches the rare hostile-input case (very long unbroken hex
+  // strings, etc.).
+  //
+  // remark-breaks: standard CommonMark folds a single `\n` into
+  // whitespace, so "line one\nline two" would join on one line.
+  // That defies what users expect from a chat surface (Slack,
+  // Discord, GitHub comments all preserve single newlines).
+  // remark-breaks rewrites the AST so each lone newline becomes a
+  // hard break — without changing the dialect for the rest
+  // (paragraph breaks at blank lines, fenced blocks unaffected,
+  // etc.). Applied alongside remark-gfm so tables / strikethrough
+  // / autolinks still work.
+  const sizeClass = size === "xs" ? "text-xs" : "text-sm";
+  return (
+    <div className={`${sizeClass} break-words [overflow-wrap:anywhere]`}>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
