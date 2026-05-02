@@ -167,10 +167,15 @@ async function main(): Promise<void> {
       await new Promise((r) => setTimeout(r, 20));
       assert("session.prompt was called once", calls.length === 1);
       const call = calls[0];
+      // Fence format: `${fence}${lang} file: ${name}\n${content}\n${fence}`.
+      // The language hint + "file: " prefix is shared with `@<path>`
+      // references so the chat bubble can render both as badges
+      // uniformly (see file-references.ts#expandFileReferences and
+      // routes/prompt.ts#composePromptText).
       const expectedFence =
-        "```snippet.ts\nexport const x = 1;\nexport const y = 2;\n\n```\n\nreview this";
+        "```ts file: snippet.ts\nexport const x = 1;\nexport const y = 2;\n\n```\n\nreview this";
       assert(
-        "prompt text contains fenced block + filename + content",
+        "prompt text contains fenced block with lang hint + filename + content",
         call?.text === expectedFence,
         `got: ${JSON.stringify(call?.text ?? "")}`,
       );
@@ -184,7 +189,10 @@ async function main(): Promise<void> {
     // ---- 3. Oversize file → 400 BEFORE prompt() invoked ----
     {
       calls.length = 0;
-      const oversize = Buffer.alloc(11 * 1024 * 1024, 0x41); // 11 MB of 'A'
+      // MAX_FILE_BYTES is 20 MB (routes/prompt.ts); send 21 MB to trip
+      // the per-file cap. The cap was raised from 10 MB to 20 MB to
+      // accommodate moderate image / converted-document attachments.
+      const oversize = Buffer.alloc(21 * 1024 * 1024, 0x41);
       const fd = new FormData();
       fd.append("text", "ignore");
       fd.append("attachments", new Blob([oversize], { type: "text/plain" }), "big.txt");

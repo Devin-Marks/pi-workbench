@@ -121,6 +121,10 @@ async function spawnFixtureServer(opts?: { toolPrefix?: string }): Promise<Fixtu
         res.statusCode = 404;
         res.end();
       } catch (err) {
+        // Surface the cause to test stderr — the only signal a failing
+        // CI run can give us when the SDK rejects an SSE handshake
+        // (otherwise the client just sees "Non-200 status code (500)").
+        process.stderr.write(`[fixture-mcp] handler error: ${String(err)}\n`);
         if (!res.headersSent) {
           res.statusCode = 500;
           res.end(String(err));
@@ -302,7 +306,19 @@ async function main(): Promise<void> {
     assert("master re-enabled: isGloballyEnabled true", manager.isGloballyEnabled() === true);
 
     // ---- Case F: probe() forces a reconnect ----
-    const probe1 = await manager.probe("global", "test");
+    // Disconnect-then-immediately-reconnect against the in-process SSE
+    // fixture sometimes races on CI: the previous SSE close hasn't
+    // propagated through the fixture's session map before the new GET
+    // /sse hits, and McpServer's connect throws → fixture's catch
+    // returns 500. Retry the probe once with a small delay; the
+    // production behavior under test is "probe forces a reconnect and
+    // ends up connected," not "no transient errors are ever possible
+    // on the first attempt." Both passes assert a connected end state.
+    let probe1 = await manager.probe("global", "test");
+    if (probe1?.state !== "connected") {
+      await new Promise((r) => setTimeout(r, 200));
+      probe1 = await manager.probe("global", "test");
+    }
     assert("probe: returned a status entry", probe1 !== undefined);
     assert("probe: reconnect succeeded", probe1?.state === "connected", JSON.stringify(probe1));
 
