@@ -16,6 +16,7 @@ import {
   type AgentMessageLike,
 } from "../store/session-store";
 import { useActiveProject } from "../store/project-store";
+import { ChatMarkdown } from "./ChatMarkdown";
 import { DiffBlock } from "./DiffBlock";
 import { SessionTreePanel } from "./SessionTreePanel";
 
@@ -59,9 +60,12 @@ interface Props {
  * detection lives at the renderer boundary rather than in the store so we
  * don't couple the bundle to SDK type internals.
  *
- * Markdown rendering is deliberately rough (paragraphs only). `react-markdown`
- * + `remark-gfm` are installed; wiring full markdown is a polish step that
- * can land alongside the diff viewer (Phase 12).
+ * Markdown rendering for user text, assistant text blocks, and the
+ * streaming preview goes through `ChatMarkdown` — `react-markdown` +
+ * `remark-gfm` with prism-highlighted fenced code blocks. Tool calls,
+ * file-reference badges, bash exec messages, and image attachments
+ * still render as their dedicated components (markdown is for prose
+ * only).
  */
 export function ChatView({ sessionId }: Props) {
   // EMPTY_* fallbacks are stable module-level constants — using `?? []` here
@@ -201,10 +205,10 @@ export function ChatView({ sessionId }: Props) {
                 <div className="mb-1 text-[10px] uppercase tracking-wider text-neutral-500">
                   assistant (streaming)
                 </div>
-                <pre className="whitespace-pre-wrap break-words font-sans text-sm text-neutral-100">
-                  {streamingText}
-                  <span className="ml-1 inline-block h-3 w-1.5 animate-pulse bg-neutral-300" />
-                </pre>
+                <div className="text-neutral-100">
+                  <ChatMarkdown text={streamingText} />
+                  <span className="ml-1 inline-block h-3 w-1.5 animate-pulse bg-neutral-300 align-text-bottom" />
+                </div>
               </div>
             )}
             {isStreaming && streamingText.length === 0 && (
@@ -495,9 +499,9 @@ function Message({
       <div className="rounded-lg bg-neutral-800 px-4 py-3">
         <div className="mb-1 text-[10px] uppercase tracking-wider text-neutral-400">you</div>
         {text.length > 0 && (
-          <pre className="whitespace-pre-wrap break-words font-sans text-sm text-neutral-100">
-            {text}
-          </pre>
+          <div className="text-neutral-100">
+            <ChatMarkdown text={text} />
+          </div>
         )}
         {fileRefs.length > 0 && (
           <div className="mt-2 flex flex-col gap-1">
@@ -604,7 +608,7 @@ function AssistantBlock({
   const type = block.type;
 
   if (type === "text" && typeof block.text === "string") {
-    return <pre className="whitespace-pre-wrap break-words font-sans">{block.text}</pre>;
+    return <ChatMarkdown text={block.text} />;
   }
 
   if (type === "thinking" && typeof block.thinking === "string") {
