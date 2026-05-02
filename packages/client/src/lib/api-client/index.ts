@@ -1175,6 +1175,80 @@ export const api = {
       { method: "DELETE" },
     ),
 
+  // ---------------- config export / import ----------------
+  /**
+   * Download a `.tar.gz` of the workbench's portable config (mcp.json,
+   * settings.json, models.json — auth.json deliberately excluded).
+   * Returns a blob plus the filename the server suggested via
+   * Content-Disposition AND the names actually packed (from the
+   * `X-Pi-Workbench-Files` header). The caller is responsible for
+   * triggering the browser download (createObjectURL + anchor click).
+   */
+  exportConfig: async (): Promise<{ blob: Blob; filename: string; files: string[] }> => {
+    const headers: Record<string, string> = {};
+    const stored = getStoredToken();
+    if (stored !== undefined) headers.Authorization = `Bearer ${stored.token}`;
+    const res = await fetch("/api/v1/config/export", { headers });
+    if (res.status === 401) {
+      clearStoredToken();
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+      throw new ApiError(401, "unauthorized");
+    }
+    if (!res.ok) {
+      let code = "request_failed";
+      try {
+        const body = (await res.json()) as { error?: unknown };
+        if (typeof body.error === "string") code = body.error;
+      } catch {
+        // body wasn't JSON — keep generic code
+      }
+      throw new ApiError(res.status, code);
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") ?? "";
+    const filename = parseContentDispositionFilename(cd) ?? "pi-workbench-config.tar.gz";
+    const filesHeader = res.headers.get("X-Pi-Workbench-Files") ?? "";
+    const files = filesHeader.split(",").filter((s) => s.length > 0);
+    return { blob, filename, files };
+  },
+
+  /**
+   * Upload a previously-exported `.tar.gz` and apply it to disk on the
+   * server. Returns the per-file summary so the UI can surface what
+   * landed and what was skipped or failed validation. The whole import
+   * is atomic per-file: any validation error means NOTHING is written
+   * (`imported` will be empty, `errors` populated).
+   */
+  importConfig: (
+    file: File,
+  ): Promise<{
+    imported: string[];
+    skipped: string[];
+    errors: { file: string; reason: string }[];
+  }> => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    return request(
+      "/api/v1/config/import",
+      (v) => {
+        if (
+          !isObject(v) ||
+          !Array.isArray(v.imported) ||
+          !Array.isArray(v.skipped) ||
+          !Array.isArray(v.errors)
+        ) {
+          throw new ApiError(0, "invalid_response_body");
+        }
+        return v as {
+          imported: string[];
+          skipped: string[];
+          errors: { file: string; reason: string }[];
+        };
+      },
+      { method: "POST", body: fd },
+    );
+  },
+
   // ---------------- files ----------------
   filesTree: (projectId: string, maxDepth?: number) => {
     const qs = new URLSearchParams({ projectId });
