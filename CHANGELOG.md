@@ -20,6 +20,22 @@ the README for the support window policy.
   in the freshly-spawned shell. Reattach to an existing PTY does not
   re-source so manually-switched venvs are preserved.
 
+### Security
+
+- **Terminal env-var allowlist.** The integrated terminal and the `!`
+  exec route now start from an allowlist of harmless system vars
+  (`PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `LANG`/`LC_*`, `TZ`, …)
+  instead of inheriting the workbench process's full env minus a
+  named denylist. Workbench secrets, provider API keys, cloud
+  credentials, and any other host-env var are dropped before spawn,
+  so `printenv` / `echo $X` returns nothing for them. Operators who
+  need a specific var in-shell opt it back in via the new
+  `TERMINAL_PASSTHROUGH_ENV` env (comma- or whitespace-separated).
+  Closes the previous fail-open denylist that leaked any
+  newly-named secret variable until added to the list. See
+  [SECURITY.md](./SECURITY.md) for the full rationale and a note on
+  the unrelated terminal-can-read-pi-config-files limitation.
+
 ### Build & release
 
 - **Release tooling.** New `scripts/bump-version.sh <new-version>` that

@@ -19,6 +19,18 @@ function readInt(key: string, fallback: number): number {
   return n;
 }
 
+function readStringList(key: string): string[] {
+  const v = readEnv(key);
+  if (v === undefined) return [];
+  // Comma- or whitespace-separated; either is natural in shell, k8s
+  // env, and docker-compose `environment:` lists. Drop empties so
+  // trailing commas don't produce ghost entries.
+  return v
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 function readBool(key: string, fallback: boolean): boolean {
   const v = readEnv(key)?.toLowerCase();
   if (v === undefined) return fallback;
@@ -240,6 +252,26 @@ export const config = Object.freeze({
     pushWindowMs: readInt("RATE_LIMIT_PUSH_WINDOW_MS", 60_000),
   }),
   corsOrigin: CORS_ORIGIN,
+  /**
+   * Extra env-var names the operator wants the integrated terminal
+   * (and the `!` exec route) to inherit from the workbench process.
+   *
+   * The terminal env starts from a small allowlist of harmless system
+   * vars (PATH, HOME, USER, SHELL, TERM, locales — see
+   * `pty-manager.ts#TERMINAL_ENV_ALLOWLIST`). Everything else is
+   * dropped — including provider API keys (`OPENAI_API_KEY`,
+   * `AWS_ACCESS_KEY_ID`, etc.) the operator may have in their host
+   * shell that would otherwise be inherited by every spawn. This
+   * defaults to fail-safe: any new sensitive var the operator sets
+   * is hidden from the shell unless they explicitly pass it through.
+   *
+   * Add specific vars here when the shell genuinely needs them
+   * (e.g. `KUBECONFIG`, `EDITOR`, `OPENAI_BASE_URL` for an internal
+   * proxy). Format: comma- or whitespace-separated.
+   *
+   * Example: `TERMINAL_PASSTHROUGH_ENV=KUBECONFIG,EDITOR,NODE_ENV`
+   */
+  terminalPassthroughEnv: Object.freeze(readStringList("TERMINAL_PASSTHROUGH_ENV")),
 } as const);
 
 export function authEnabled(): boolean {

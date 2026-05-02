@@ -62,6 +62,39 @@ workspace root. The threat model assumes:
   attachment path uses fenced-code-block insertion with a fence longer than
   the longest backtick-run in the file contents. A hostile attached file
   can't escape the fence to inject instructions to the LLM.
+- **Host env-var inheritance into the spawned shell**. The integrated
+  terminal and the `!` exec route start from a small allowlist of harmless
+  system vars (`PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `LANG`/`LC_*`, `TZ`,
+  …). Everything else — workbench secrets (`JWT_SECRET`, `API_KEY`,
+  `UI_PASSWORD`), provider keys (`*_API_KEY`), cloud credentials (`AWS_*`,
+  `KUBECONFIG`, `GH_TOKEN`, …), or any other host-env var — is dropped
+  before spawn so an authenticated user can't `printenv` / `echo $X` to read
+  them. Operators who legitimately need a specific var in-shell opt it back
+  in via `TERMINAL_PASSTHROUGH_ENV` (comma- or whitespace-separated). The
+  list lives in `packages/server/src/pty-manager.ts#TERMINAL_ENV_ALLOWLIST`.
+
+## Known limitations
+
+These are documented gaps, not bugs — they reflect deliberate scope
+choices that operators should know about when planning a deployment.
+
+- **Terminal can read pi config files.** The integrated terminal runs as a
+  real shell with the workbench process's filesystem access. The pi-coding-
+  agent SDK requires the workbench process to read its own config dir
+  (`PI_CONFIG_DIR`, default `~/.pi/agent`: `auth.json`, `models.json`,
+  `settings.json`), so a shell running under the same UID can also read
+  them — meaning an authenticated user can `cat ~/.pi/agent/auth.json` and
+  see any persisted provider API keys / OAuth tokens. Path-based blocking
+  inside the shell is trivially bypassable (`cat $(echo ~)/.pi/...`,
+  `python -c "print(open('...').read())"`, `dd if=...`) and would offer
+  false confidence. The actual mitigation is OS-level: run the workbench
+  process and the shell as **separate UIDs**, with `auth.json` mode 600
+  owned by the workbench UID. This is achievable in custom Docker
+  deployments today; pi-workbench's stock image runs both as the same
+  user. If your threat model includes "an authenticated workbench user
+  must not be able to read provider credentials," prefer OAuth (where
+  losing a token costs you a re-auth, not a key rotation) and rotate API
+  keys whenever you suspect terminal access has been abused.
 
 ## What is explicitly out of scope
 

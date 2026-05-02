@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as nodePty from "node-pty";
+import { config } from "./config.js";
 
 /**
  * Per-project PTY tracking with reattach support.
@@ -338,39 +339,76 @@ export function installPtyExitHandler(): void {
 }
 
 /**
- * Workbench secrets that the PTY shell MUST NOT inherit. Without this
- * scrub, an authenticated user can `echo $JWT_SECRET` to read the
- * server's JWT signing key — turning a 7-day browser token into a
- * permanent backdoor (they can mint new tokens with arbitrary `exp`)
- * AND defeating any future JWT_SECRET rotation (re-sign with the new
- * secret they read from env). API_KEY and UI_PASSWORD have similar
- * privilege-escalation shapes.
+ * Allowlist of env-var names the PTY shell (and the `!` exec route)
+ * may inherit from the workbench process. Everything else is dropped.
  *
- * Provider keys (ANTHROPIC_API_KEY etc.) are also scrubbed when set
- * via env — operators should use `auth.json` for those, and the agent's
- * own LLM calls don't need them at the shell level. If an operator
- * relies on env-injected provider keys for a CLI tool they invoke FROM
- * the terminal, they need to re-export in their shell rc.
+ * Allowlist instead of denylist because the threat model is "any
+ * secret an operator has in their host env leaks into the shell." A
+ * denylist of named secrets is fail-open — every newly-named provider
+ * key (`SOMEPROVIDER_API_KEY`), kube credential, cloud token, etc.
+ * leaks until we add it by name. An allowlist is fail-safe: anything
+ * not on this list is hidden by default; operators with a legitimate
+ * need pass specific vars through via `TERMINAL_PASSTHROUGH_ENV`.
+ *
+ * What's on the list and why:
+ *   PATH, HOME, USER, LOGNAME, SHELL — required for a usable shell
+ *   PWD                              — the shell sets it but inheriting
+ *                                      avoids a transient empty value
+ *   TERM, COLORTERM                  — xterm rendering / 256-color
+ *   TERMINFO                         — fallback terminfo lookup
+ *   LANG, LC_*                       — locale (UTF-8, sorting, dates)
+ *   TZ                               — timezone-aware tools (`date`)
+ *   HOSTNAME                         — prompt customization (`\h` in PS1)
+ *   EDITOR, PAGER, VISUAL            — interactive defaults (git
+ *                                      commit, less, etc.)
+ *
+ * Conspicuously NOT on the list (must be opt-in via
+ * `TERMINAL_PASSTHROUGH_ENV` if the operator wants them in-shell):
+ *   - Workbench secrets: JWT_SECRET, API_KEY, UI_PASSWORD
+ *   - Provider keys:     ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.
+ *   - Cloud credentials: AWS_*, GOOGLE_APPLICATION_CREDENTIALS,
+ *                        GH_TOKEN, GITHUB_TOKEN, KUBECONFIG, ...
+ *   - Anything else      — assume it's sensitive until proven harmless.
  */
-const SCRUB_ENV_VARS: ReadonlySet<string> = new Set([
-  "JWT_SECRET",
-  "API_KEY",
-  "UI_PASSWORD",
-  "ANTHROPIC_API_KEY",
-  "OPENAI_API_KEY",
-  "GROQ_API_KEY",
-  "GOOGLE_API_KEY",
-  "MISTRAL_API_KEY",
-  "OPENROUTER_API_KEY",
-  "DEEPSEEK_API_KEY",
-  "XAI_API_KEY",
+const TERMINAL_ENV_ALLOWLIST: ReadonlySet<string> = new Set([
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "PWD",
+  "TERM",
+  "COLORTERM",
+  "TERMINFO",
+  "LANG",
+  "TZ",
+  "HOSTNAME",
+  "EDITOR",
+  "PAGER",
+  "VISUAL",
 ]);
 
+/**
+ * Variable names matching this prefix-style pattern are also allowed
+ * — covers the locale family (`LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, …)
+ * without enumerating every variant.
+ */
+const TERMINAL_ENV_ALLOWLIST_PREFIXES: readonly string[] = ["LC_"];
+
+function isAllowedByDefault(name: string): boolean {
+  if (TERMINAL_ENV_ALLOWLIST.has(name)) return true;
+  for (const prefix of TERMINAL_ENV_ALLOWLIST_PREFIXES) {
+    if (name.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
 function filterEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  const passthrough = new Set(config.terminalPassthroughEnv);
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) {
     if (typeof v !== "string") continue;
-    if (SCRUB_ENV_VARS.has(k)) continue;
+    if (!isAllowedByDefault(k) && !passthrough.has(k)) continue;
     out[k] = v;
   }
   return out;
@@ -378,9 +416,10 @@ function filterEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 
 /**
  * Re-export so non-PTY callers (the user-bash `!` exec route) get the
- * same secret-scrubbing posture without having to re-state the secret
- * list. The PTY and the one-shot user-bash share an identical threat
- * model: an authenticated browser user must not be able to `echo
- * $JWT_SECRET` from a shell the workbench spawned on their behalf.
+ * same env allowlist without having to re-implement it. The PTY and
+ * the one-shot user-bash share an identical threat model: an
+ * authenticated browser user must not be able to `echo
+ * $JWT_SECRET` (or any other host-env secret) from a shell the
+ * workbench spawned on their behalf.
  */
 export const scrubbedEnv = (): Record<string, string> => filterEnv(process.env);
