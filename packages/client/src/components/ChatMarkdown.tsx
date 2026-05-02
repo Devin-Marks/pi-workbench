@@ -40,6 +40,7 @@
 import { Highlight, themes as prismThemes } from "prism-react-renderer";
 import type { HTMLAttributes, ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
 interface Props {
@@ -173,10 +174,20 @@ export function ChatMarkdown({ text, size = "sm" }: Props) {
   // `break-words` covers the common case; `[overflow-wrap:anywhere]`
   // catches the rare hostile-input case (very long unbroken hex
   // strings, etc.).
+  //
+  // remark-breaks: standard CommonMark folds a single `\n` into
+  // whitespace, so "line one\nline two" would join on one line.
+  // That defies what users expect from a chat surface (Slack,
+  // Discord, GitHub comments all preserve single newlines).
+  // remark-breaks rewrites the AST so each lone newline becomes a
+  // hard break — without changing the dialect for the rest
+  // (paragraph breaks at blank lines, fenced blocks unaffected,
+  // etc.). Applied alongside remark-gfm so tables / strikethrough
+  // / autolinks still work.
   const sizeClass = size === "xs" ? "text-xs" : "text-sm";
   return (
     <div className={`${sizeClass} break-words [overflow-wrap:anywhere]`}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
         {text}
       </ReactMarkdown>
     </div>

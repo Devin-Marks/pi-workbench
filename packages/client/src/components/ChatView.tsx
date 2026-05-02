@@ -467,6 +467,13 @@ function Message({
   message: AgentMessageLike;
   toolResultsById?: Map<string, AgentMessageLike>;
 }) {
+  // Per-message toggle: rendered markdown (default) ↔ raw plaintext.
+  // Useful when the user wants to copy a literal `**bold**` or see
+  // exactly what whitespace the assistant emitted. State lives at
+  // the message level so all text blocks within an assistant message
+  // flip together (one click, not one per block).
+  const [showRaw, setShowRaw] = useState(false);
+
   // User text messages — may include image + file attachments per
   // Phase 14. Optimistic shape uses a blob URL on the image block;
   // canonical refetched shape uses raw base64 with a mimeType, which
@@ -497,10 +504,13 @@ function Message({
     }
     return (
       <div className="rounded-lg bg-neutral-800 px-4 py-3">
-        <div className="mb-1 text-[10px] uppercase tracking-wider text-neutral-400">you</div>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-[10px] uppercase tracking-wider text-neutral-400">you</span>
+          {text.length > 0 && <RawToggle showRaw={showRaw} onToggle={setShowRaw} />}
+        </div>
         {text.length > 0 && (
           <div className="text-neutral-100">
-            <ChatMarkdown text={text} />
+            {showRaw ? <RawText text={text} /> : <ChatMarkdown text={text} />}
           </div>
         )}
         {fileRefs.length > 0 && (
@@ -551,15 +561,23 @@ function Message({
   // Assistant messages — content is an array of TextContent / ThinkingContent / ToolCall.
   if (message.role === "assistant") {
     const content = Array.isArray(message.content) ? message.content : [];
+    // Show the raw toggle only when the message has at least one
+    // text block — toolCall and thinking blocks aren't markdown and
+    // the toggle would do nothing useful for them.
+    const hasTextBlock = content.some((b) => (b as Record<string, unknown>).type === "text");
     return (
       <div className="rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3">
-        <div className="mb-1 text-[10px] uppercase tracking-wider text-neutral-500">assistant</div>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-[10px] uppercase tracking-wider text-neutral-500">assistant</span>
+          {hasTextBlock && <RawToggle showRaw={showRaw} onToggle={setShowRaw} />}
+        </div>
         <div className="space-y-2 text-sm text-neutral-100">
           {content.map((block, i) => {
             const blockProps: {
               block: Record<string, unknown>;
               toolResultsById?: Map<string, AgentMessageLike>;
-            } = { block: block as Record<string, unknown> };
+              showRaw?: boolean;
+            } = { block: block as Record<string, unknown>, showRaw };
             if (toolResultsById !== undefined) blockProps.toolResultsById = toolResultsById;
             return <AssistantBlock key={i} {...blockProps} />;
           })}
@@ -601,14 +619,17 @@ function Message({
 function AssistantBlock({
   block,
   toolResultsById,
+  showRaw = false,
 }: {
   block: Record<string, unknown>;
   toolResultsById?: Map<string, AgentMessageLike>;
+  /** When true, render text blocks as plain `<pre>` instead of markdown. */
+  showRaw?: boolean;
 }) {
   const type = block.type;
 
   if (type === "text" && typeof block.text === "string") {
-    return <ChatMarkdown text={block.text} />;
+    return showRaw ? <RawText text={block.text} /> : <ChatMarkdown text={block.text} />;
   }
 
   if (type === "thinking" && typeof block.thinking === "string") {
@@ -916,6 +937,43 @@ function BashExecution({ message }: { message: AgentMessageLike }) {
         </pre>
       )}
     </div>
+  );
+}
+
+/**
+ * Tiny header-corner button to flip a message between rendered
+ * markdown and raw plaintext. Owned by the parent `Message`
+ * component (state lives there so all text blocks within one
+ * assistant message flip together).
+ *
+ * Sits in the same row as the role label (`you` / `assistant`).
+ * Defaults to "rendered" — click flips to raw, click again flips
+ * back. Per-session, per-message; not persisted.
+ */
+function RawToggle({ showRaw, onToggle }: { showRaw: boolean; onToggle: (next: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(!showRaw)}
+      className="rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-500 hover:bg-neutral-700/40 hover:text-neutral-300"
+      title={showRaw ? "Show rendered markdown" : "Show raw text"}
+    >
+      {showRaw ? "rendered" : "raw"}
+    </button>
+  );
+}
+
+/**
+ * Plain-text counterpart to ChatMarkdown — used when the user has
+ * flipped a message to raw view. Preserves whitespace verbatim
+ * (including the literal `**` and backticks the user typed) and
+ * keeps long-token wrapping consistent with the rendered view.
+ */
+function RawText({ text }: { text: string }) {
+  return (
+    <pre className="whitespace-pre-wrap break-words font-sans text-sm text-neutral-100 [overflow-wrap:anywhere]">
+      {text}
+    </pre>
   );
 }
 
