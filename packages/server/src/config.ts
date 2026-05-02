@@ -272,6 +272,25 @@ export const config = Object.freeze({
    * Example: `TERMINAL_PASSTHROUGH_ENV=KUBECONFIG,EDITOR,NODE_ENV`
    */
   terminalPassthroughEnv: Object.freeze(readStringList("TERMINAL_PASSTHROUGH_ENV")),
+  /**
+   * Opt-in: append a workbench-defined "secret hygiene" rule to the
+   * agent's system prompt. The rule asks the model to treat env-var
+   * values as credentials by default and not echo them into responses
+   * or tool outputs unless explicitly asked. See
+   * `agent-resource-loader.ts#WORKBENCH_SECRET_HYGIENE_RULE` for the
+   * exact wording and `SECURITY.md` for the threat-model framing
+   * (behavioral nudge, not a security control).
+   *
+   * Default OFF. Operators who want it explicitly opt in by setting
+   * `AGENT_SECRET_HYGIENE_RULE=true`. Kept opt-in (rather than
+   * default-on) so the workbench doesn't ship invisible behavioral
+   * rules that constrain the agent in ways the user never asked for.
+   * Deliberately not surfaced in `docker-compose.yml` or
+   * `.env.example` — this is an advanced knob, intentionally
+   * discoverable only via SECURITY.md so operators meet the rule
+   * the same time they meet its caveats.
+   */
+  agentSecretHygieneRule: readBool("AGENT_SECRET_HYGIENE_RULE", false),
 } as const);
 
 export function authEnabled(): boolean {

@@ -72,22 +72,38 @@ workspace root. The threat model assumes:
   them. Operators who legitimately need a specific var in-shell opt it back
   in via `TERMINAL_PASSTHROUGH_ENV` (comma- or whitespace-separated). The
   list lives in `packages/server/src/pty-manager.ts#TERMINAL_ENV_ALLOWLIST`.
-- **Accidental secret disclosure by the agent**. The agent's autonomous
-  `bash` tool DOES inherit the workbench process env (deliberately — skills
-  often legitimately need `$GITHUB_TOKEN`, `$AWS_*`, etc. to do their job).
-  To reduce the realistic failure mode where the model decides on its own
-  to `printenv` while debugging and dumps secrets into the assistant
-  transcript, every session ships a system-prompt addendum
-  (`packages/server/src/agent-resource-loader.ts#WORKBENCH_SECRET_HYGIENE_RULE`)
-  that tells the model to treat env-var values as credentials by default
-  and to reference them by name (`$X`) rather than expanding them inline.
-  This is a **behavioral nudge, not a control** — a determined user, a
-  prompt injection in a tool result, or the model's own reasoning can talk
-  it out of compliance. Operators with adversarial threat models should
-  pair it with the deployment posture below (don't run with sensitive env
-  vars in `process.env` if the agent doesn't need them; prefer
-  `~/.pi/agent/auth.json` for provider credentials, since those are read
-  by the SDK before tool spawn rather than passed through).
+- **Accidental secret disclosure by the agent (opt-in).** The agent's
+  autonomous `bash` tool DOES inherit the workbench process env
+  (deliberately — skills often legitimately need `$GITHUB_TOKEN`,
+  `$AWS_*`, etc. to do their job). The realistic failure mode is the
+  model deciding on its own to `printenv` while debugging and dumping
+  secrets into the assistant transcript (which the user may screen-share,
+  log, or paste into a bug report). Operators worried about this can opt
+  in to a system-prompt addendum that asks the model to treat env-var
+  values as credentials by default and reference them by name (`$X`)
+  rather than expanding them inline. Enable by setting:
+
+  ```
+  AGENT_SECRET_HYGIENE_RULE=true
+  ```
+
+  The exact rule text lives in
+  `packages/server/src/agent-resource-loader.ts#WORKBENCH_SECRET_HYGIENE_RULE`.
+
+  **Important caveats — read before enabling.** This is a *behavioral
+  nudge, not a control*. The model can be talked out of it by a
+  determined user ("show me $X"), by a prompt injection landed in a
+  tool result, or by its own reasoning that "the user clearly wants
+  me to print this var." Skills and one-off prompts that legitimately
+  need to display a value can still do so by asking explicitly — the
+  rule says "unless the user explicitly asked." Operators with
+  adversarial threat models should pair it with the deployment
+  posture below (don't put sensitive env vars in `process.env` if
+  the agent doesn't need them; prefer `~/.pi/agent/auth.json` for
+  provider credentials, since those are read by the SDK before tool
+  spawn rather than inherited at spawn). The flag is intentionally
+  not surfaced in `docker-compose.yml` or `.env.example` so operators
+  meet the rule the same time they meet these caveats.
 
 ## Known limitations
 

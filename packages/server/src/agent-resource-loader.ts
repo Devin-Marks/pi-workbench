@@ -3,13 +3,20 @@
  *
  * Why this exists: pi's `DefaultResourceLoader` accepts an
  * `appendSystemPrompt: string[]` that gets concatenated onto the
- * agent's base system prompt. We use this hook to inject one
- * workbench-specific behavioral rule about secret hygiene — a soft
- * safeguard that tells the model to treat env-var values as
+ * agent's base system prompt. We optionally use this hook to inject
+ * one workbench-specific behavioral rule about secret hygiene — a
+ * soft safeguard that tells the model to treat env-var values as
  * credentials by default and not echo them back into responses /
  * tool output.
  *
- * **What this is and is not.**
+ * **Opt-in.** Default behavior matches stock pi (no addendum). The
+ * rule is appended only when the operator sets
+ * `AGENT_SECRET_HYGIENE_RULE=true`. Kept opt-in so we don't ship
+ * invisible behavioral rules that constrain the agent in ways the
+ * user never asked for. See `SECURITY.md` for the discoverable
+ * documentation and the threat-model framing.
+ *
+ * **What this is and is not (when enabled).**
  *
  * - It IS a behavioral nudge that catches the realistic failure
  *   mode: the agent decides on its own to `printenv` or `echo $X`
@@ -38,6 +45,7 @@ import {
   type ResourceLoader,
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
+import { config } from "./config.js";
 
 export const WORKBENCH_SECRET_HYGIENE_RULE = `
 When running shell commands on behalf of the user, treat the contents of \
@@ -56,21 +64,28 @@ pasted into bug reports.
 `.trim();
 
 /**
- * Build a ResourceLoader pre-loaded with the workbench's
+ * Build a ResourceLoader pre-loaded with the workbench's optional
  * `appendSystemPrompt` addendum. Mirrors the SDK's own internal
  * construction at sdk.js:87 (instantiate + await reload()), so the
  * loader is ready to hand to `createAgentSession` as-is.
+ *
+ * When `config.agentSecretHygieneRule` is false (the default), the
+ * loader is built with no addendum and behaves identically to the
+ * SDK's own default loader — opt-in only, see the file header.
  */
 export async function buildWorkbenchResourceLoader(
   cwd: string,
   agentDir: string,
   settingsManager: SettingsManager,
 ): Promise<ResourceLoader> {
+  const appendSystemPrompt = config.agentSecretHygieneRule
+    ? [WORKBENCH_SECRET_HYGIENE_RULE]
+    : [];
   const loader = new DefaultResourceLoader({
     cwd,
     agentDir,
     settingsManager,
-    appendSystemPrompt: [WORKBENCH_SECRET_HYGIENE_RULE],
+    appendSystemPrompt,
   });
   await loader.reload();
   return loader;
