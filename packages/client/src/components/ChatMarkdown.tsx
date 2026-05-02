@@ -40,7 +40,6 @@
 import { Highlight, themes as prismThemes } from "prism-react-renderer";
 import type { HTMLAttributes, ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
 interface Props {
@@ -175,19 +174,21 @@ export function ChatMarkdown({ text, size = "sm" }: Props) {
   // catches the rare hostile-input case (very long unbroken hex
   // strings, etc.).
   //
-  // remark-breaks: standard CommonMark folds a single `\n` into
-  // whitespace, so "line one\nline two" would join on one line.
-  // That defies what users expect from a chat surface (Slack,
-  // Discord, GitHub comments all preserve single newlines).
-  // remark-breaks rewrites the AST so each lone newline becomes a
-  // hard break — without changing the dialect for the rest
-  // (paragraph breaks at blank lines, fenced blocks unaffected,
-  // etc.). Applied alongside remark-gfm so tables / strikethrough
-  // / autolinks still work.
+  // We use standard CommonMark line-break behavior — single `\n`
+  // folds into whitespace, blank line starts a new paragraph, two
+  // trailing spaces before a `\n` are a hard break. Same dialect
+  // GitHub issue comments use. Earlier we tried `remark-breaks`
+  // for chat-style single-newline-as-`<br>` behavior, but it
+  // mangles other multi-line constructs in real-world usage
+  // (specifically GFM tables came out one-word-per-line on user-
+  // typed table input). The ergonomic loss for chat-style breaks
+  // is real but less bad than tables breaking — users who want a
+  // visible newline can hit Enter twice or end the line with two
+  // spaces.
   const sizeClass = size === "xs" ? "text-xs" : "text-sm";
   return (
     <div className={`${sizeClass} break-words [overflow-wrap:anywhere]`}>
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {text}
       </ReactMarkdown>
     </div>

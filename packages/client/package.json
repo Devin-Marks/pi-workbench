@@ -33,7 +33,6 @@
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
     "refractor": "^5.0.0",
-    "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "zustand": "^5.0.3"
   },
