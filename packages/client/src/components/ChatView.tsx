@@ -663,6 +663,23 @@ function ToolCallEntry({
 
   const isError = result?.isError === true;
   const resultContent = Array.isArray(result?.content) ? result?.content : [];
+
+  // One-line header preview so the entry is scannable without
+  // expanding it. Pulled from the tool's args by name:
+  //   bash         → command (most informative single line)
+  //   read/write   → file path / filename
+  //   edit         → file path (the +/- counts live on the Output row)
+  //   anything else → no preview (the Input row carries it)
+  // Long values are truncated visually via CSS; the full text lives
+  // in the Input row anyway.
+  const argsObj = isObjectShape(args) ? args : undefined;
+  const preview =
+    name === "bash" && typeof argsObj?.command === "string"
+      ? argsObj.command
+      : (name === "read" || name === "write" || name === "edit") &&
+          typeof argsObj?.path === "string"
+        ? argsObj.path
+        : undefined;
   const outputText = resultContent
     .filter((c): c is { type: "text"; text: string } => {
       const o = c as { type?: unknown; text?: unknown };
@@ -697,9 +714,14 @@ function ToolCallEntry({
   return (
     <div className={`rounded border ${borderClass} bg-neutral-950 text-xs`}>
       <div className="flex items-center justify-between px-3 py-2 text-neutral-300">
-        <div className="min-w-0 truncate">
+        <div className="min-w-0 flex-1 truncate">
           <span className="text-neutral-500">→ </span>
           <span className="font-mono">{name}</span>
+          {preview !== undefined && (
+            <span className="ml-2 truncate font-mono text-neutral-400" title={preview}>
+              {preview}
+            </span>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {result === undefined && (
@@ -891,6 +913,10 @@ function BashExecution({ message }: { message: AgentMessageLike }) {
       )}
     </div>
   );
+}
+
+function isObjectShape(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function extractText(message: AgentMessageLike): string {
