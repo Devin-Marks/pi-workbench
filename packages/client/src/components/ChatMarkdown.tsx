@@ -40,6 +40,7 @@
 import { Highlight, themes as prismThemes } from "prism-react-renderer";
 import type { HTMLAttributes, ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
 interface Props {
@@ -50,6 +51,27 @@ interface Props {
    * default matches the assistant text block (text-sm).
    */
   size?: "sm" | "xs";
+  /**
+   * Enable chat-style hard breaks (single `\n` → `<br>`) via
+   * `remark-breaks`. Default `false`.
+   *
+   * User messages set this to `true` because chat input is typed
+   * as prose with line breaks the user expects to see — the
+   * Slack / Discord / GitHub-comments dialect. The user's primary
+   * use is "paste a list of items separated by newlines and have
+   * each on its own line."
+   *
+   * Trade-off knowingly accepted: GFM tables in user input that
+   * AREN'T preceded by a blank line can render with each row as
+   * a `<br>`-separated paragraph instead of a real table (the
+   * table parser fails when the table runs on from a preceding
+   * paragraph; remark-breaks then renders the failed parse as
+   * line-broken text). Workaround: leave a blank line above the
+   * table. Assistant output keeps standard CommonMark behavior
+   * because the model emits real markdown structure that depends
+   * on the standard line-break semantics.
+   */
+  chatStyleBreaks?: boolean;
 }
 
 /**
@@ -178,7 +200,7 @@ const components: Components = {
   pre: ({ children }) => <>{children}</>,
 };
 
-export function ChatMarkdown({ text, size = "sm" }: Props) {
+export function ChatMarkdown({ text, size = "sm", chatStyleBreaks = false }: Props) {
   // The outer container holds the typography scale + breaks long
   // unbroken tokens (URLs, identifiers, base64 dumps) so a single
   // gigantic word can't blow out the bubble width. Tailwind's
@@ -186,21 +208,19 @@ export function ChatMarkdown({ text, size = "sm" }: Props) {
   // catches the rare hostile-input case (very long unbroken hex
   // strings, etc.).
   //
-  // We use standard CommonMark line-break behavior — single `\n`
-  // folds into whitespace, blank line starts a new paragraph, two
-  // trailing spaces before a `\n` are a hard break. Same dialect
-  // GitHub issue comments use. Earlier we tried `remark-breaks`
-  // for chat-style single-newline-as-`<br>` behavior, but it
-  // mangles other multi-line constructs in real-world usage
-  // (specifically GFM tables came out one-word-per-line on user-
-  // typed table input). The ergonomic loss for chat-style breaks
-  // is real but less bad than tables breaking — users who want a
-  // visible newline can hit Enter twice or end the line with two
-  // spaces.
+  // Line-break dialect is controlled by `chatStyleBreaks` (default
+  // off, on for user messages). Off = standard CommonMark — single
+  // `\n` folds into whitespace, blank line starts a new paragraph,
+  // two trailing spaces before `\n` are a hard break (same dialect
+  // GitHub issue comments use). On = remark-breaks rewrites each
+  // `\n` to a hard break — chat-style, what users expect from
+  // pasted lists. See the prop docstring for the trade-off and why
+  // it's user-only.
   const sizeClass = size === "xs" ? "text-xs" : "text-sm";
+  const plugins = chatStyleBreaks ? [remarkGfm, remarkBreaks] : [remarkGfm];
   return (
     <div className={`${sizeClass} break-words [overflow-wrap:anywhere]`}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={plugins} components={components}>
         {text}
       </ReactMarkdown>
     </div>
