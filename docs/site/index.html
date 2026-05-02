@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pi-workbench — Browser workbench for the pi coding agent</title>
+  <meta name="description" content="A self-hosted browser workbench for the pi coding agent. Chat with the agent against your code, browse files, run a terminal, review diffs — all from one tab.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="index.html" class="logo">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="#0d0d10"/>
+  <path d="M9 11 L6 16 L9 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M23 11 L26 16 L23 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M12 13 H20 M14 13 V21 M18 13 V21" stroke="#e6e7eb" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
+        pi-workbench
+      </a>
+      <nav class="nav-links" id="navLinks">
+        <a href="#features">Features</a>
+        <a href="#quickstart">Quick Start</a>
+        <a href="docs/architecture.html">Docs</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench" class="nav-cta">GitHub</a>
+      </nav>
+      <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">&#9776;</button>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="hero-badge">
+      <span>Open Source</span> &middot; Self-Hosted &middot; Single-Tenant
+    </div>
+    <h1>
+      The pi coding agent,<br>
+      <span class="gradient-text">in your browser</span>
+    </h1>
+    <p>
+      A self-hosted browser workbench for the
+      <a href="https://github.com/badlogic/pi-mono" target="_blank" rel="noopener noreferrer">pi coding agent</a>.
+      Chat with the agent against your code, browse files, run a terminal,
+      review diffs — all from one tab. Your container, your provider keys,
+      your data.
+    </p>
+    <div class="hero-buttons">
+      <a href="#quickstart" class="btn-primary">Get Started &darr;</a>
+      <a href="https://github.com/Devin-Marks/pi-workbench" class="btn-secondary" target="_blank" rel="noopener noreferrer">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        View on GitHub
+      </a>
+    </div>
+  </section>
+
+  <div class="demo-section">
+    <div class="demo-window">
+      <div class="demo-titlebar">
+        <div class="demo-dot red"></div>
+        <div class="demo-dot yellow"></div>
+        <div class="demo-dot green"></div>
+      </div>
+      <div class="demo-content">
+        <p style="padding: 60px;">Screenshot or demo GIF goes here &mdash; drop a recording as <code>docs/site/demo.gif</code> (or screenshot as <code>docs/site/hero.png</code>) and replace this placeholder.</p>
+      </div>
+    </div>
+  </div>
+
+  <section class="section" id="features">
+    <div class="section-label">Features</div>
+    <h2>Everything you need to drive the agent from a browser</h2>
+    <p>The workbench wraps the pi SDK with the affordances most coding workflows want — and keeps every surface scriptable behind the same REST + SSE API the UI calls.</p>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-icon">&#128172;</div>
+        <h3>Streaming chat</h3>
+        <p>Token-by-token rendering over SSE. Tool calls and their results materialize in the transcript as they happen — no waiting until the end of a turn.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#127807;</div>
+        <h3>Branchable session tree</h3>
+        <p>Fork at any prior turn, navigate the resulting tree, bookmark abandoned branches, summarize-on-navigate to keep context bounded.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#128221;</div>
+        <h3>Per-turn diff panel</h3>
+        <p>Every file the agent touched in the last turn, aggregated into one reviewable changeset. Inline edit results and project-wide diffs share one renderer.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#128193;</div>
+        <h3>File browser + editor</h3>
+        <p>Tree view, tabbed CodeMirror with syntax highlighting and autosave, ripgrep-backed workspace search, path-traversal protection on every operation.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#128187;</div>
+        <h3>Integrated terminal</h3>
+        <p>node-pty over WebSocket, persistent across page refresh and project switch. Per-tab scrollback, multi-tab, env-allowlist for the spawned shell.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#127760;</div>
+        <h3>Git panel</h3>
+        <p>Status, unified or split diff, stage / unstage per file, commit, push, fetch, pull, branch checkout / create / delete, log with ref decorations.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#128279;</div>
+        <h3>MCP integration</h3>
+        <p>Connect remote Model Context Protocol servers over StreamableHTTP or SSE. Per-project overrides, master kill-switch, header status badge.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#128640;</div>
+        <h3>Provider freedom</h3>
+        <p>Built-in Anthropic / OpenAI / Google / OpenRouter plus any OpenAI-compatible endpoint (vLLM, LiteLLM, Ollama, internal gateways) via models.json.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#128202;</div>
+        <h3>Context inspector</h3>
+        <p>Token + cost breakdown per turn, lifetime spend, raw message inspector with syntax highlighting, search across long conversations.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#128274;</div>
+        <h3>Auth that fits ops</h3>
+        <p>Browser password + JWT (auto-generated signing key, force-change first login) and a separate static API key for scripts and CI. Both can be on at once.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#128295;</div>
+        <h3>OpenAPI spec</h3>
+        <p>Every route auto-documented at /api/docs (Swagger UI) and /api/docs/json. The same routes the React UI calls — no shadow surface.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">&#128241;</div>
+        <h3>Installable PWA</h3>
+        <p>Proper manifest with raster + maskable icons, offline page when the server is unreachable, "Add to Home Screen" on desktop and mobile.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="quickstart">
+    <div class="section-label">Quick Start</div>
+    <h2>Up and running in minutes</h2>
+    <p>All you need is Docker and a provider API key (or OAuth credentials).</p>
+
+    <div class="quickstart-steps">
+      <div class="qs-step">
+        <div class="qs-number">1</div>
+        <div class="qs-content">
+          <h3>Clone the repo</h3>
+          <pre><span class="code-cmd">git</span> clone https://github.com/Devin-Marks/pi-workbench.git
+<span class="code-cmd">cd</span> pi-workbench</pre>
+        </div>
+      </div>
+
+      <div class="qs-step">
+        <div class="qs-number">2</div>
+        <div class="qs-content">
+          <h3>Set deployment env</h3>
+          <pre><span class="code-cmd">cp</span> docker/.env.example docker/.env
+<span class="code-comment"># edit docker/.env to set UI_PASSWORD or API_KEY,</span>
+<span class="code-comment"># and adjust workspace / data dir paths if you want.</span></pre>
+        </div>
+      </div>
+
+      <div class="qs-step">
+        <div class="qs-number">3</div>
+        <div class="qs-content">
+          <h3>Build and start</h3>
+          <pre><span class="code-cmd">cd</span> docker
+docker compose up -d --build</pre>
+        </div>
+      </div>
+
+      <div class="qs-step">
+        <div class="qs-number">4</div>
+        <div class="qs-content">
+          <h3>Add your provider key</h3>
+          <p>Open <code>http://&lt;host&gt;:3000</code>, go to <strong>Settings &rarr; Providers</strong>, and paste an Anthropic / OpenAI / etc. API key. Or set keys directly in <code>~/.pi/agent/auth.json</code> and bind-mount it into the container.</p>
+        </div>
+      </div>
+
+      <div class="qs-step">
+        <div class="qs-number">5</div>
+        <div class="qs-content">
+          <h3>Add a project and start chatting</h3>
+          <p>Click <strong>+ Project</strong>, point at any folder under <code>WORKSPACE_PATH</code> (or its bind-mount). The project's files become the agent's working tree; chat opens in the same view.</p>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 32px;">
+      <p style="color: var(--text-secondary); font-size: 14px;">
+        For Kubernetes, OpenShift, reverse-proxy + TLS, and other production deployments, see
+        <a href="docs/deployment.html">Deployment</a> and
+        <a href="docs/configuration.html">Configuration</a>.
+      </p>
+    </div>
+  </section>
+
+  <section class="section" id="api">
+    <div class="section-label">Programmatic API</div>
+    <h2>Same routes the UI calls</h2>
+    <p>Every browser interaction is a documented REST or SSE call. Scripts, CI pipelines, and the React UI all hit the same endpoints — no shadow surface, no separate "API mode."</p>
+
+    <pre><span class="code-comment"># Authenticate with the API_KEY you set in env</span>
+<span class="code-cmd">BASE</span>=http://localhost:3000
+<span class="code-cmd">KEY</span>=your-api-key
+
+<span class="code-comment"># Create a session under a project</span>
+<span class="code-cmd">SESSION</span>=$(curl -s -X POST $BASE/api/v1/sessions \
+  -H <span class="code-string">"Authorization: Bearer $KEY"</span> \
+  -H <span class="code-string">"Content-Type: application/json"</span> \
+  -d <span class="code-string">'{"projectId":"&lt;projectId&gt;"}'</span> | jq -r .sessionId)
+
+<span class="code-comment"># Send a prompt (fire-and-forget; response streams over SSE)</span>
+curl -s -X POST $BASE/api/v1/sessions/$SESSION/prompt \
+  -H <span class="code-string">"Authorization: Bearer $KEY"</span> \
+  -H <span class="code-string">"Content-Type: application/json"</span> \
+  -d <span class="code-string">'{"text":"Write a test for the auth module"}'</span>
+
+<span class="code-comment"># Stream the response</span>
+curl -N -H <span class="code-string">"Authorization: Bearer $KEY"</span> \
+  $BASE/api/v1/sessions/$SESSION/stream</pre>
+
+    <p style="margin-top: 16px; color: var(--text-secondary); font-size: 14px;">
+      Full recipes (multipart attachments, branch / fork, abort, model switch, MCP wiring): see
+      <a href="docs/api.html">API Examples</a>.
+      Live OpenAPI spec at <code>/api/docs</code> on a running deploy.
+    </p>
+  </section>
+
+  <section class="section" id="why">
+    <div class="section-label">Why pi-workbench</div>
+    <h2>Self-hosted, single-tenant, scriptable</h2>
+
+    <div class="comparison-grid">
+      <div class="comparison-col">
+        <h3 class="comparison-header comparison-before">What it isn't</h3>
+        <ul class="comparison-list">
+          <li>A SaaS product — no cloud, no analytics, no telemetry</li>
+          <li>A reimplementation of pi's agent loop (it embeds the SDK)</li>
+          <li>A multi-tenant platform — one container, one user, one workspace</li>
+          <li>A code editor replacement — point it at your existing repos</li>
+          <li>Certified for safety-critical or regulated-data workloads</li>
+        </ul>
+      </div>
+      <div class="comparison-col">
+        <h3 class="comparison-header comparison-after">What it is</h3>
+        <ul class="comparison-list">
+          <li>An HTTP / SSE bridge over the pi SDK with a React chat UI on top</li>
+          <li>Container-native: Docker Compose, Kubernetes, OpenShift manifests included</li>
+          <li>Provider-agnostic: built-in providers plus any OpenAI-compatible endpoint</li>
+          <li>API-first: every UI action is a documented REST call</li>
+          <li>Open under MIT, no warranty, no support obligation</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" style="text-align: center;">
+    <h2>Ready to dig in?</h2>
+    <p style="margin-left: auto; margin-right: auto;">The architecture, configuration, and API references all live in the docs. The full source is on GitHub.</p>
+    <div class="hero-buttons" style="margin-top: 32px;">
+      <a href="docs/architecture.html" class="btn-primary">Read the Docs &rarr;</a>
+      <a href="https://github.com/Devin-Marks/pi-workbench" class="btn-secondary" target="_blank" rel="noopener noreferrer">
+        View Source
+      </a>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <p>pi-workbench &mdash; MIT licensed, no warranty.</p>
+      <div class="footer-links">
+        <a href="docs/architecture.html">Docs</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench/issues">Issues</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/CHANGELOG.md">Changelog</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    document.getElementById('mobileToggle').addEventListener('click', () => {
+      document.getElementById('navLinks').classList.toggle('open');
+    });
+  </script>
+</body>
+</html>

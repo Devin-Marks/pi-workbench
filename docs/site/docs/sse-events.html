@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SSE Events — pi-workbench</title>
+  <meta name="description" content="The agent event stream: every event type, payload, and UI affordance.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="../index.html" class="logo">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="#0d0d10"/>
+  <path d="M9 11 L6 16 L9 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M23 11 L26 16 L23 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M12 13 H20 M14 13 V21 M18 13 V21" stroke="#e6e7eb" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
+        pi-workbench
+      </a>
+      <nav class="nav-links" id="navLinks">
+        <a href="../index.html#features">Features</a>
+        <a href="../index.html#quickstart">Quick Start</a>
+        <a href="architecture.html">Docs</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench" class="nav-cta">GitHub</a>
+      </nav>
+      <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">&#9776;</button>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docsSidebar">
+      <div class="sidebar-section">
+        <h4>Documentation</h4>
+        <a href="architecture.html">Architecture</a>
+        <a href="configuration.html">Configuration</a>
+        <a href="containers.html">Containers</a>
+        <a href="deployment.html">Deployment</a>
+        <a href="api.html">API Examples</a>
+        <a href="mcp.html">MCP Servers</a>
+        <a href="sse-events.html" class="active">SSE Events</a>
+      </div>
+      <div class="sidebar-section">
+        <h4>Project</h4>
+        <a href="https://github.com/Devin-Marks/pi-workbench">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/SECURITY.md">Security</a>
+      </div>
+    </aside>
+
+    <main class="docs-main">
+      <h1>SSE Events</h1>
+      <p class="docs-subtitle">The agent event stream: every event type, payload, and UI affordance.</p>
+<p>Server-Sent Events stream from <code>GET /api/v1/sessions/:id/stream</code>. Every
+client (the React UI, your scripts, your dashboards) consumes the same
+stream. This document catalogues every event type, full example payloads,
+ordering guarantees, and how to consume the stream from Python and Node.</p>
+<h2>Wire format</h2>
+<p>Standard SSE: each event is one <code>data:</code> line with a JSON-serialized
+payload, followed by a blank line.</p>
+<pre><code>data: {&quot;type&quot;:&quot;agent_start&quot;,&quot;sessionId&quot;:&quot;...&quot;}
+
+data: {&quot;type&quot;:&quot;message_update&quot;,&quot;assistantMessageEvent&quot;:{&quot;type&quot;:&quot;text_delta&quot;,&quot;delta&quot;:&quot;Hello&quot;}}
+
+data: {&quot;type&quot;:&quot;agent_end&quot;,&quot;sessionId&quot;:&quot;...&quot;}
+</code></pre>
+<p>The endpoint sets <code>Content-Type: text/event-stream</code> and <code>Cache-Control: no-cache, no-transform</code>. Reverse proxies must NOT buffer (<code>X-Accel-Buffering: no</code> is set by the server, plus Caddy&#39;s <code>flush_interval -1</code>, plus nginx&#39;s
+<code>proxy_buffering off</code> — see <a href="./deployment.md"><code>docs/deployment.md</code></a>).</p>
+<h2>Connection lifecycle</h2>
+<pre><code>Client                                                    Server
+  │                                                          │
+  ├── GET /api/v1/sessions/:id/stream ─────────────────────▶ │
+  │   Authorization: Bearer &lt;token&gt;                          │
+  │                                                          │
+  │                                              getSession(id)
+  │                                              or lazy resumeSession
+  │                                                          │
+  ◀── data: {&quot;type&quot;:&quot;snapshot&quot;,...} ──────────────────────── │
+  │   (always first; hydrates client state)                  │
+  │                                                          │
+  │   (live events as they arrive)                           │
+  ◀── data: {&quot;type&quot;:&quot;agent_start&quot;,...} ─────────────────────│
+  ◀── data: {&quot;type&quot;:&quot;message_update&quot;,...} ─────────────────│
+  ◀── data: {&quot;type&quot;:&quot;agent_end&quot;,...} ──────────────────────│
+  │                                                          │
+  │   (idle — connection stays open; next agent activity     │
+  │    flows straight through)                               │
+</code></pre>
+<p>The server holds the connection open indefinitely. The client closes by
+disconnecting; the server cleans up the <code>LiveSession.clients</code> Set entry
+on <code>req.raw.on(&quot;close&quot;)</code>. There is no server-side keepalive/heartbeat
+event today — long idle periods on aggressive proxies may need a
+keepalive comment line; track that as a polish item if it bites.</p>
+<h2>Always-first event: <code>snapshot</code></h2>
+<p>Every new SSE connection receives a <code>snapshot</code> as its first event. This
+hydrates a freshly-connected client&#39;s view without requiring a separate
+HTTP call.</p>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;snapshot&quot;,
+  &quot;sessionId&quot;: &quot;01J7...&quot;,
+  &quot;projectId&quot;: &quot;proj_abc...&quot;,
+  &quot;messages&quot;: [
+    { &quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Refactor utils.ts&quot;, &quot;timestamp&quot;: 1714398000000 },
+    { &quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: [{ &quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;Reading the file...&quot; }], &quot;usage&quot;: { ... }, ... }
+  ],
+  &quot;isStreaming&quot;: false
+}
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>sessionId</code></td>
+<td>string</td>
+<td>Echoes the session id from the URL</td>
+</tr>
+<tr>
+<td><code>projectId</code></td>
+<td>string</td>
+<td>The project this session belongs to</td>
+</tr>
+<tr>
+<td><code>messages</code></td>
+<td><code>AgentMessage[]</code></td>
+<td>Full message history as the LLM sees it (post-compaction). Same shape as <code>GET /sessions/:id/messages</code>.</td>
+</tr>
+<tr>
+<td><code>isStreaming</code></td>
+<td>boolean</td>
+<td>True if the agent is mid-run when you connect</td>
+</tr>
+</tbody></table>
+<p>If <code>isStreaming: true</code>, expect <code>agent_end</code> (and possibly more
+<code>message_update</code> deltas + tool events) shortly. Otherwise the next
+events will arrive only when something happens (a <code>POST /prompt</code> or
+<code>POST /steer</code> call).</p>
+<h2>Agent lifecycle events</h2>
+<h3><code>agent_start</code></h3>
+<p>The agent has begun processing a turn. Fired before any
+<code>message_start</code> / <code>message_update</code> / tool events for that turn.</p>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;agent_start&quot;,
+  &quot;sessionId&quot;: &quot;01J7...&quot;,
+  &quot;timestamp&quot;: 1714398100000
+}
+</code></pre>
+<p>UI action: show &quot;thinking&quot; indicator, disable input or change Send to
+&quot;Steer.&quot; <code>lastAgentStartIndex</code> is captured server-side at this moment to
+bound &quot;the latest turn&quot; for the turn-diff route.</p>
+<h3><code>agent_end</code></h3>
+<p>The agent has finished. Use this to refresh derived state (turn diff,
+git status, context inspector, session tree).</p>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;agent_end&quot;,
+  &quot;sessionId&quot;: &quot;01J7...&quot;,
+  &quot;timestamp&quot;: 1714398150000
+}
+</code></pre>
+<p>UI action: hide thinking indicator, re-enable input, re-fetch
+<code>/turn-diff</code>, refresh file tree, increment <code>agentEndCountBySession[id]</code>.</p>
+<p>The session-store&#39;s <code>agentEndCount</code> is the canonical &quot;the agent just
+finished&quot; trigger — components that need to react to agent completion
+subscribe to this counter rather than the raw event.</p>
+<h2>Message events</h2>
+<p>The agent&#39;s response streams as a sequence of <code>message_start</code> →
+<code>message_update</code> → <code>message_end</code>. Multiple messages can flow per turn
+(e.g., assistant text → tool call → tool result → assistant text again).</p>
+<h3><code>message_start</code></h3>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;message_start&quot;,
+  &quot;sessionId&quot;: &quot;01J7...&quot;,
+  &quot;messageRole&quot;: &quot;assistant&quot;
+}
+</code></pre>
+<h3><code>message_update</code></h3>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;message_update&quot;,
+  &quot;sessionId&quot;: &quot;01J7...&quot;,
+  &quot;assistantMessageEvent&quot;: {
+    &quot;type&quot;: &quot;text_delta&quot;,
+    &quot;delta&quot;: &quot;Hello&quot;
+  }
+}
+</code></pre>
+<p>The <code>assistantMessageEvent</code> shape is from pi-ai&#39;s
+<code>AssistantMessageEventStream</code>. Common variants:</p>
+<table>
+<thead>
+<tr>
+<th><code>assistantMessageEvent.type</code></th>
+<th>Payload</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>text_delta</code></td>
+<td><code>{ type: &quot;text_delta&quot;, delta: &quot;...&quot; }</code> — append to streaming text</td>
+</tr>
+<tr>
+<td><code>thinking_delta</code></td>
+<td><code>{ type: &quot;thinking_delta&quot;, delta: &quot;...&quot; }</code> — thinking-block token</td>
+</tr>
+<tr>
+<td><code>tool_use_start</code></td>
+<td><code>{ type: &quot;tool_use_start&quot;, toolCallId, name, input: {} }</code> — tool call begins</td>
+</tr>
+<tr>
+<td><code>tool_use_input_delta</code></td>
+<td><code>{ type: &quot;tool_use_input_delta&quot;, toolCallId, partialInput: &quot;...&quot; }</code> — JSON args streaming</td>
+</tr>
+<tr>
+<td><code>usage</code></td>
+<td><code>{ type: &quot;usage&quot;, usage: { input, output, cacheRead, cacheWrite, ... } }</code> — token + cost update</td>
+</tr>
+</tbody></table>
+<p>The UI renders streaming text by accumulating <code>text_delta</code> deltas into
+<code>streamingTextBySession[id]</code> (see <code>session-store.ts</code>).</p>
+<h3><code>message_end</code></h3>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;message_end&quot;, &quot;sessionId&quot;: &quot;01J7...&quot; }
+</code></pre>
+<h3><code>tool_call</code></h3>
+<p>Pre-execution event. The agent has decided to invoke a tool.</p>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;tool_call&quot;,
+  &quot;sessionId&quot;: &quot;01J7...&quot;,
+  &quot;toolCallId&quot;: &quot;call_abc...&quot;,
+  &quot;toolName&quot;: &quot;read&quot;,
+  &quot;input&quot;: { &quot;path&quot;: &quot;src/utils.ts&quot; }
+}
+</code></pre>
+<p>Useful for permission-style UIs (not implemented in v1 — pi runs all
+tool calls without per-call confirmation).</p>
+<h3><code>tool_execution_start</code> / <code>tool_execution_update</code> / <code>tool_execution_end</code></h3>
+<p>Tool runner lifecycle. <code>*_update</code> carries streaming output (e.g. bash
+stdout).</p>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;tool_execution_start&quot;,
+  &quot;sessionId&quot;: &quot;01J7...&quot;,
+  &quot;toolCallId&quot;: &quot;call_abc...&quot;,
+  &quot;toolName&quot;: &quot;bash&quot;
+}
+</code></pre>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;tool_execution_update&quot;,
+  &quot;sessionId&quot;: &quot;01J7...&quot;,
+  &quot;toolCallId&quot;: &quot;call_abc...&quot;,
+  &quot;outputDelta&quot;: &quot;Compiling utils.ts...\n&quot;
+}
+</code></pre>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;tool_execution_end&quot;,
+  &quot;sessionId&quot;: &quot;01J7...&quot;,
+  &quot;toolCallId&quot;: &quot;call_abc...&quot;,
+  &quot;exitCode&quot;: 0
+}
+</code></pre>
+<h3><code>tool_result</code></h3>
+<p>The tool&#39;s result message has been added to the session.</p>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;tool_result&quot;,
+  &quot;sessionId&quot;: &quot;01J7...&quot;,
+  &quot;message&quot;: {
+    &quot;role&quot;: &quot;toolResult&quot;,
+    &quot;toolCallId&quot;: &quot;call_abc...&quot;,
+    &quot;toolName&quot;: &quot;read&quot;,
+    &quot;content&quot;: [{ &quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;&lt;file contents&gt;&quot; }],
+    &quot;details&quot;: { &quot;path&quot;: &quot;src/utils.ts&quot; },
+    &quot;isError&quot;: false
+  }
+}
+</code></pre>
+<p><code>details</code> is tool-specific. For <code>edit</code> tools it includes a unified diff
+string under a tool-specific field — the workbench&#39;s
+<code>turn-diff-builder.ts</code> extracts these for the Last Turn pane.</p>
+<h2>Steering / queue events</h2>
+<h3><code>queue_update</code></h3>
+<p>The pending steer / followUp queue changed. Pi clears delivered queue
+items by emitting a smaller <code>queue_update</code>; the client doesn&#39;t pop locally.</p>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;queue_update&quot;,
+  &quot;sessionId&quot;: &quot;01J7...&quot;,
+  &quot;queued&quot;: {
+    &quot;steering&quot;: [&quot;Try a different approach&quot;],
+    &quot;followUp&quot;: [&quot;Run the tests when done&quot;]
+  }
+}
+</code></pre>
+<p>UI action: render the queued-messages badge in <code>ChatView</code>.</p>
+<h2>Compaction events</h2>
+<p>When the agent runs <code>compact</code> to free context-window space:</p>
+<h3><code>compaction_start</code></h3>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;compaction_start&quot;, &quot;sessionId&quot;: &quot;01J7...&quot; }
+</code></pre>
+<p>UI action: show &quot;Compacting context…&quot; banner.</p>
+<h3><code>compaction_end</code></h3>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;compaction_end&quot;,
+  &quot;sessionId&quot;: &quot;01J7...&quot;,
+  &quot;summary&quot;: &quot;...&quot;,
+  &quot;tokensBefore&quot;: 95000
+}
+</code></pre>
+<p>The session&#39;s <code>messages</code> array now contains a <code>compactionSummary</code>-role
+message at the position of the compaction; UI should refresh.</p>
+<h2>Auto-retry events</h2>
+<p>Provider-side rate-limit / transient-error backoff:</p>
+<h3><code>auto_retry_start</code></h3>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;auto_retry_start&quot;,
+  &quot;sessionId&quot;: &quot;01J7...&quot;,
+  &quot;attempt&quot;: 2,
+  &quot;delayMs&quot;: 4000,
+  &quot;reason&quot;: &quot;rate_limit&quot;
+}
+</code></pre>
+<p>UI action: show &quot;Retrying in 4s...&quot; banner with a countdown.</p>
+<h3><code>auto_retry_end</code></h3>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;auto_retry_end&quot;, &quot;sessionId&quot;: &quot;01J7...&quot; }
+</code></pre>
+<p>UI action: hide retry banner.</p>
+<h2>Ordering guarantees</h2>
+<p>Within a single SSE connection:</p>
+<ol>
+<li><code>snapshot</code> is <strong>always first</strong>.</li>
+<li>For a single agent turn:<ul>
+<li><code>agent_start</code> precedes everything in that turn.</li>
+<li>For each message in the turn: <code>message_start</code> → 1+ <code>message_update</code>
+→ <code>message_end</code>.</li>
+<li>For each tool call: <code>tool_call</code> → <code>tool_execution_start</code> → 0+
+<code>tool_execution_update</code> → <code>tool_execution_end</code> → <code>tool_result</code>.</li>
+<li><code>agent_end</code> is <strong>last</strong> for that turn.</li>
+</ul>
+</li>
+<li><code>queue_update</code>, <code>compaction_start</code> / <code>_end</code>, and <code>auto_retry_*</code> may
+appear at any point.</li>
+</ol>
+<p>Across multiple concurrent SSE clients on the same session: every client
+sees the same event stream in the same order. Reconnects start with a
+fresh <code>snapshot</code>; events that fired during the disconnect window are
+<strong>not replayed</strong> — the snapshot is authoritative.</p>
+<h2>Forwards-compatibility</h2>
+<p>The server filters events through <code>sse-bridge.ts</code> before forwarding —
+unknown event types from the SDK are not currently passed through.
+Clients should still <strong>silently ignore unknown event types</strong> to be
+forwards-compatible with future SDK additions.</p>
+<p>The <code>assistantMessageEvent.type</code> enum may grow as pi-ai adds streaming
+shapes (e.g., new content-block types). Use a switch with a default
+that no-ops, not a typed exhaustiveness check that throws.</p>
+<h2>Reconnection</h2>
+<p>The shipped client (<code>packages/client/src/lib/sse-client.ts</code>) reconnects
+on disconnect with exponential backoff: 1 → 2 → 4 → 8 → 16 → 30 s,
+capped at 30 s. On reconnect it gets a fresh <code>snapshot</code> and resumes.</p>
+<p>For a programmatic client, mirror this pattern:</p>
+<ul>
+<li>Track <code>reconnectAttempt</code>. Reset to 0 on successful open.</li>
+<li>On socket close (any code), schedule reconnect with
+<code>reconnectDelayMs(attempt++)</code>.</li>
+<li>On 401, drop the connection and prompt re-login (don&#39;t retry — the
+token is dead).</li>
+</ul>
+<h2>Auth on the SSE route</h2>
+<p>The <code>/stream</code> route goes through the same JWT/API-key check as every
+other authenticated route. Pass the token via <code>Authorization: Bearer &lt;token&gt;</code> header. Browsers can&#39;t do this with the built-in <code>EventSource</code>
+API (it doesn&#39;t support custom headers), so the browser client uses a
+<code>fetch</code> + <code>ReadableStream</code> reader instead. Programmatic clients should
+do the same (Python <code>httpx</code>, Node <code>fetch</code>).</p>
+<h2>Consuming SSE programmatically</h2>
+<h3>Python (httpx)</h3>
+<pre><code class="language-python">import json
+import time
+import httpx
+
+API_BASE = &quot;http://localhost:3000&quot;
+TOKEN = &quot;&lt;your bearer token&gt;&quot;
+
+def stream_session(session_id: str):
+    &quot;&quot;&quot;Connect to a session&#39;s SSE stream and yield each event.&quot;&quot;&quot;
+    headers = {&quot;Authorization&quot;: f&quot;Bearer {TOKEN}&quot;, &quot;Accept&quot;: &quot;text/event-stream&quot;}
+    url = f&quot;{API_BASE}/api/v1/sessions/{session_id}/stream&quot;
+
+    with httpx.stream(&quot;GET&quot;, url, headers=headers, timeout=None) as r:
+        r.raise_for_status()
+        buffer = &quot;&quot;
+        for chunk in r.iter_text():
+            buffer += chunk
+            while &quot;\n\n&quot; in buffer:
+                event, buffer = buffer.split(&quot;\n\n&quot;, 1)
+                for line in event.splitlines():
+                    if line.startswith(&quot;data: &quot;):
+                        payload = json.loads(line[6:])
+                        yield payload
+
+# Usage with backoff
+def stream_with_reconnect(session_id: str):
+    delays = [1, 2, 4, 8, 16, 30]
+    attempt = 0
+    while True:
+        try:
+            for event in stream_session(session_id):
+                attempt = 0  # reset on first successful event
+                yield event
+        except httpx.HTTPError as e:
+            if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 401:
+                raise  # auth dead, don&#39;t retry
+            delay = delays[min(attempt, len(delays) - 1)]
+            print(f&quot;[reconnect in {delay}s] {e}&quot;)
+            time.sleep(delay)
+            attempt += 1
+
+# Run
+for event in stream_with_reconnect(&quot;01J7...&quot;):
+    if event[&quot;type&quot;] == &quot;agent_end&quot;:
+        print(&quot;Turn complete&quot;)
+        break
+</code></pre>
+<h3>Node (fetch + ReadableStream)</h3>
+<pre><code class="language-javascript">const API_BASE = &quot;http://localhost:3000&quot;;
+const TOKEN = &quot;&lt;your bearer token&gt;&quot;;
+
+async function* streamSession(sessionId) {
+  const url = `${API_BASE}/api/v1/sessions/${sessionId}/stream`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      Accept: &quot;text/event-stream&quot;,
+    },
+  });
+  if (!res.ok) throw new Error(`SSE connect failed: ${res.status}`);
+
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = &quot;&quot;;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buffer += value;
+    let idx;
+    while ((idx = buffer.indexOf(&quot;\n\n&quot;)) !== -1) {
+      const event = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      for (const line of event.split(&quot;\n&quot;)) {
+        if (line.startsWith(&quot;data: &quot;)) {
+          yield JSON.parse(line.slice(6));
+        }
+      }
+    }
+  }
+}
+
+// Usage with backoff
+async function streamWithReconnect(sessionId, onEvent) {
+  const delays = [1, 2, 4, 8, 16, 30];
+  let attempt = 0;
+  while (true) {
+    try {
+      for await (const event of streamSession(sessionId)) {
+        attempt = 0;
+        await onEvent(event);
+      }
+    } catch (err) {
+      if (err.message.includes(&quot;401&quot;)) throw err;  // auth dead
+      const delay = delays[Math.min(attempt, delays.length - 1)] * 1000;
+      console.warn(`[reconnect in ${delay}ms]`, err.message);
+      await new Promise((r) =&gt; setTimeout(r, delay));
+      attempt++;
+    }
+  }
+}
+
+// Run
+streamWithReconnect(&quot;01J7...&quot;, (event) =&gt; {
+  if (event.type === &quot;agent_end&quot;) console.log(&quot;Turn complete&quot;);
+});
+</code></pre>
+<h3>curl (one-shot, for debugging)</h3>
+<pre><code class="language-bash">curl -N -H &quot;Authorization: Bearer $TOKEN&quot; \
+  http://localhost:3000/api/v1/sessions/$SESSION_ID/stream
+</code></pre>
+<p><code>-N</code> disables curl&#39;s output buffering so events appear as they arrive.
+Press Ctrl+C to disconnect.</p>
+<h2>Building it yourself</h2>
+<p>The reference client implementation is <code>packages/client/src/lib/sse-client.ts</code>
+in this repo. ~150 lines of TypeScript, MIT-licensed, free to port.</p>
+<h2>See also</h2>
+<ul>
+<li><a href="./api-examples.md"><code>docs/api-examples.md</code></a> — REST + SSE end-to-end
+examples (create session → prompt → stream → abort)</li>
+<li><a href="./architecture.md"><code>docs/architecture.md</code></a> — request lifecycles
+including SSE</li>
+<li><code>/api/docs</code> (live OpenAPI in your deploy) — every route&#39;s schema</li>
+</ul>
+
+    </main>
+  </div>
+
+  <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">&#9776;</button>
+
+  <script>
+    document.getElementById('mobileToggle').addEventListener('click', () => {
+      document.getElementById('navLinks').classList.toggle('open');
+    });
+    document.getElementById('sidebarToggle').addEventListener('click', () => {
+      document.getElementById('docsSidebar').classList.toggle('open');
+    });
+  </script>
+</body>
+</html>

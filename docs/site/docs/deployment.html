@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Deployment — pi-workbench</title>
+  <meta name="description" content="Getting the workbench running in production: TLS, auth, reverse proxies.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="../index.html" class="logo">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="#0d0d10"/>
+  <path d="M9 11 L6 16 L9 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M23 11 L26 16 L23 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M12 13 H20 M14 13 V21 M18 13 V21" stroke="#e6e7eb" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
+        pi-workbench
+      </a>
+      <nav class="nav-links" id="navLinks">
+        <a href="../index.html#features">Features</a>
+        <a href="../index.html#quickstart">Quick Start</a>
+        <a href="architecture.html">Docs</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench" class="nav-cta">GitHub</a>
+      </nav>
+      <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">&#9776;</button>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docsSidebar">
+      <div class="sidebar-section">
+        <h4>Documentation</h4>
+        <a href="architecture.html">Architecture</a>
+        <a href="configuration.html">Configuration</a>
+        <a href="containers.html">Containers</a>
+        <a href="deployment.html" class="active">Deployment</a>
+        <a href="api.html">API Examples</a>
+        <a href="mcp.html">MCP Servers</a>
+        <a href="sse-events.html">SSE Events</a>
+      </div>
+      <div class="sidebar-section">
+        <h4>Project</h4>
+        <a href="https://github.com/Devin-Marks/pi-workbench">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/SECURITY.md">Security</a>
+      </div>
+    </aside>
+
+    <main class="docs-main">
+      <h1>Deployment</h1>
+      <p class="docs-subtitle">Getting the workbench running in production: TLS, auth, reverse proxies.</p>
+<p>This document covers production deployment of pi-workbench: TLS termination,
+reverse-proxy configuration, auth setup, and the per-environment-variable
+guidance for going from &quot;works on localhost&quot; to &quot;works on a public domain
+with no surprises.&quot;</p>
+<p>For the container itself (image, volumes, resources, troubleshooting) see
+<a href="./CONTAINERS.md"><code>docs/CONTAINERS.md</code></a>. For Kubernetes and OpenShift, see
+<a href="../kubernetes/DEPLOY.md"><code>kubernetes/DEPLOY.md</code></a>.</p>
+<h2>Before you deploy</h2>
+<p>A short checklist that catches the common foot-guns:</p>
+<ul>
+<li><input disabled="" type="checkbox"> <code>UI_PASSWORD</code> set, OR <code>API_KEY</code> set, OR both — never run a
+network-exposed deploy with both unset. <code>JWT_SECRET</code> is
+auto-generated and persisted to <code>${WORKBENCH_DATA_DIR}/jwt-secret</code>
+on first boot (override by setting <code>JWT_SECRET</code> env explicitly).</li>
+<li><input disabled="" type="checkbox"> <code>JWT_SECRET</code> either auto-generated (recommended; the persisted
+file is mode 0600 inside your already-mounted data dir) or, if
+overriding, from <code>openssl rand -hex 32</code> — not a memorable string.
+Rotating (delete the file or change the env) invalidates all
+sessions immediately, which is what you want after a key leak.</li>
+<li><input disabled="" type="checkbox"> Reverse proxy (Caddy / nginx / Traefik) terminates TLS in front of
+the workbench. Plain HTTP is fine on <code>127.0.0.1</code>; never on a routable
+interface.</li>
+<li><input disabled="" type="checkbox"> <code>TRUST_PROXY=true</code> so the login rate-limit applies per real client
+IP rather than per proxy hop.</li>
+<li><input disabled="" type="checkbox"> <code>CORS_ORIGIN</code> pinned to your actual domain (e.g.
+<code>https://pi.example.com</code>) — do not leave it reflecting whatever
+the request claims.</li>
+<li><input disabled="" type="checkbox"> Workspace + pi config + workbench data on backed-up storage. The
+container is replaceable; your sessions and provider keys are not.</li>
+<li><input disabled="" type="checkbox"> LLM provider account has a spending limit set. The workbench
+surfaces token + cost telemetry in the Context Inspector but does
+not enforce caps.</li>
+</ul>
+<h2>Recommended topology</h2>
+<pre><code>┌──────────────┐       HTTPS        ┌──────────────┐
+│   Browser    │  ─────────────────▶│   Caddy /    │
+│              │                    │  nginx /     │
+└──────────────┘                    │  Traefik     │
+                                    │  (TLS, auth  │
+                                    │   header     │
+                                    │   forwarding) │
+                                    └──────┬───────┘
+                                           │ HTTP, loopback
+                                           │ or private network
+                                           ▼
+                                    ┌──────────────┐
+                                    │ pi-workbench │
+                                    │  container   │
+                                    │   :3000      │
+                                    └──────────────┘
+                                           │
+                                           ▼
+                                    Bind-mounted volumes
+                                    (workspace, config)
+</code></pre>
+<p>The proxy handles TLS, HSTS, and (optionally) request logging. The
+workbench handles app-level auth. Bind the container&#39;s port 3000 to
+<code>127.0.0.1</code> only on the host so nothing besides the proxy can reach it.</p>
+<h2>Reverse-proxy snippets</h2>
+<h3>Caddy (recommended for simplicity)</h3>
+<pre><code class="language-caddy">pi.example.com {
+    # SSE needs flush-passthrough + a generous read timeout for long
+    # agent runs. The transport block lifts read_timeout from the default
+    # 30s to 30 minutes; flush_interval -1 disables Caddy&#39;s response
+    # buffering so each SSE event reaches the browser immediately.
+    reverse_proxy localhost:3000 {
+        flush_interval -1
+        transport http {
+            read_timeout 30m
+        }
+    }
+
+    # Optional: stricter HSTS than Caddy&#39;s default
+    header {
+        Strict-Transport-Security &quot;max-age=31536000; includeSubDomains&quot;
+        # Tighten if you control all the assets — pi-workbench has no
+        # external script deps post-build, so a strict CSP is feasible
+        # Content-Security-Policy &quot;default-src &#39;self&#39;; img-src &#39;self&#39; data:; ...&quot;
+    }
+
+    # Optional: log to file
+    log {
+        output file /var/log/caddy/pi-workbench.log
+    }
+}
+</code></pre>
+<p>Then: <code>caddy reload --config /etc/caddy/Caddyfile</code>. Caddy auto-provisions
+TLS certificates from Let&#39;s Encrypt — no manual cert handling.</p>
+<h3>nginx</h3>
+<pre><code class="language-nginx">server {
+    listen 443 ssl http2;
+    server_name pi.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/pi.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/pi.example.com/privkey.pem;
+
+    # SSE: disable buffering, allow long-lived connections
+    location / {
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+
+        # Forwarded headers — TRUST_PROXY=true on the workbench reads these
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket upgrade (terminal route)
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $http_connection;
+
+        # SSE + long agent runs
+        proxy_buffering    off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+
+        # File upload cap matches the workbench&#39;s 50 MB per-file
+        client_max_body_size 100M;
+    }
+}
+
+map $http_upgrade $http_connection {
+    default upgrade;
+    &quot;&quot;      &quot;&quot;;
+}
+
+# HTTP → HTTPS redirect
+server {
+    listen 80;
+    server_name pi.example.com;
+    return 301 https://$host$request_uri;
+}
+</code></pre>
+<p>Reload: <code>nginx -t &amp;&amp; nginx -s reload</code>. Use <code>certbot --nginx</code> for cert
+auto-provisioning.</p>
+<h3>Traefik (Docker labels)</h3>
+<pre><code class="language-yaml"># docker/docker-compose.yml additions for Traefik
+services:
+  pi-workbench:
+    labels:
+      - &quot;traefik.enable=true&quot;
+      - &quot;traefik.http.routers.pi-workbench.rule=Host(`pi.example.com`)&quot;
+      - &quot;traefik.http.routers.pi-workbench.entrypoints=websecure&quot;
+      - &quot;traefik.http.routers.pi-workbench.tls.certresolver=letsencrypt&quot;
+      - &quot;traefik.http.services.pi-workbench.loadbalancer.server.port=3000&quot;
+
+      # SSE / long-running response support
+      - &quot;traefik.http.middlewares.long-timeout.forwardauth.responseheaders=Cache-Control,X-Accel-Buffering&quot;
+</code></pre>
+<p>In your Traefik static config, set
+<code>entryPoints.websecure.transport.respondingTimeouts.readTimeout = 3600s</code>
+so SSE streams don&#39;t terminate after the default 60 s. Traefik handles
+WebSocket upgrades transparently.</p>
+<h2>Production environment variables</h2>
+<p>The full reference is in <a href="./configuration.md#environment-variables"><code>configuration.md</code></a>.
+Production-relevant guidance:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Production value</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>UI_PASSWORD</code></td>
+<td>A strong shared secret if multiple humans share the deploy, OR a personal password for solo use</td>
+<td>Required for browser login.</td>
+</tr>
+<tr>
+<td><code>JWT_SECRET</code></td>
+<td>(leave empty for auto-generation) or <code>$(openssl rand -hex 32)</code> to override</td>
+<td>Signing key for browser session JWTs. When <code>UI_PASSWORD</code> is set and <code>JWT_SECRET</code> is empty, the server generates one and persists it to <code>${WORKBENCH_DATA_DIR}/jwt-secret</code> (mode 0600); the data dir is already a PVC / bind-mount so tokens survive restarts. Rotate by deleting the file (or rotating the env value).</td>
+</tr>
+<tr>
+<td><code>API_KEY</code></td>
+<td><code>$(openssl rand -hex 32)</code></td>
+<td>Static bearer token for scripts / CI. Different secret than the browser login.</td>
+</tr>
+<tr>
+<td><code>JWT_EXPIRES_IN_SECONDS</code></td>
+<td><code>86400</code> (24 h) for higher-trust environments, or leave at default <code>604800</code> (7 d)</td>
+<td>Shorter = re-login more often = smaller blast radius if a token leaks.</td>
+</tr>
+<tr>
+<td><code>RATE_LIMIT_LOGIN_MAX</code></td>
+<td><code>5</code> if you&#39;re paranoid; default <code>10</code> is fine for most</td>
+<td>Per-IP login attempts per minute.</td>
+</tr>
+<tr>
+<td><code>RATE_LIMIT_LOGIN_WINDOW_MS</code></td>
+<td>Default <code>60000</code></td>
+<td>Rate-limit window.</td>
+</tr>
+<tr>
+<td><code>TRUST_PROXY</code></td>
+<td><code>true</code></td>
+<td>Required when behind any reverse proxy so the rate-limit sees real client IPs.</td>
+</tr>
+<tr>
+<td><code>CORS_ORIGIN</code></td>
+<td>Your exact domain, e.g. <code>https://pi.example.com</code></td>
+<td>Pinning prevents same-network attackers from making cross-origin requests using the user&#39;s credentials.</td>
+</tr>
+<tr>
+<td><code>LOG_LEVEL</code></td>
+<td><code>info</code> (default) or <code>warn</code> if logs are noisy</td>
+<td><code>debug</code> / <code>trace</code> are useful during incidents but produce a lot.</td>
+</tr>
+<tr>
+<td><code>MINIMAL_UI</code></td>
+<td><code>true</code> if your users shouldn&#39;t have terminal / git / settings access</td>
+<td>Frontend-only gate; doesn&#39;t change server route exposure.</td>
+</tr>
+</tbody></table>
+<h3>Setting auth correctly</h3>
+<p>Either browser auth, API key, or both. Never neither for a network-
+exposed deploy.</p>
+<pre><code class="language-bash"># .env example for browser-only auth
+UI_PASSWORD=your-strong-password-here
+JWT_SECRET=                          # blank — auto-generated and persisted
+API_KEY=                             # blank — disabled
+
+# .env example for API-only auth (e.g., headless deploys)
+UI_PASSWORD=
+JWT_SECRET=
+API_KEY=&lt;openssl rand -hex 32 output&gt;
+
+# .env example for both — most common for &quot;humans + scripts share the deploy&quot;
+UI_PASSWORD=your-strong-password-here
+JWT_SECRET=                          # blank — auto-generated and persisted
+API_KEY=&lt;openssl rand -hex 32 output&gt;
+</code></pre>
+<p>When <code>UI_PASSWORD</code> is set and <code>JWT_SECRET</code> is empty, the server
+generates a 48-byte random secret on first boot and persists it to
+<code>${WORKBENCH_DATA_DIR}/jwt-secret</code> (mode 0600). Because <code>WORKBENCH_DATA_DIR</code>
+is already a PVC / bind-mount in K8s and Docker, the secret survives
+restarts and tokens issued before a restart keep working. Set
+<code>JWT_SECRET</code> explicitly only if you want to manage rotation out-of-band
+(e.g. centrally rotated K8s <code>Secret</code>). Delete the file to rotate
+in-place.</p>
+<h2>Backup recommendations</h2>
+<p>Three things worth backing up:</p>
+<ol>
+<li><strong><code>${WORKSPACE_HOST_PATH}</code></strong> — your code. The agent&#39;s writes live here.
+Use whatever you&#39;d use for any code repo: rsync, restic, borg, S3 sync,
+etc. Snapshot via filesystem (ZFS / Btrfs) or storage layer (EBS
+snapshots) if available.</li>
+<li><strong><code>${WORKSPACE_HOST_PATH}/.pi/sessions/</code></strong> — session JSONLs (default
+<code>${SESSION_DIR}</code> lives inside the workspace mount). These are the
+complete record of every prompt / response / tool call. Treat as
+sensitive — they contain everything the agent saw.</li>
+<li><strong><code>${PI_CONFIG_HOST_PATH}</code></strong> — provider API keys + custom provider
+definitions. Encrypted at rest if your backup tooling supports it
+(most do).</li>
+</ol>
+<p><code>projects.json</code> (under <code>${WORKBENCH_DATA_HOST_PATH}</code>) is recoverable
+from disk by re-adding projects manually, so it&#39;s lower priority — but
+also tiny, so back it up anyway.</p>
+<h2>Update / rollback</h2>
+<pre><code class="language-bash"># Update
+git pull origin main
+cd docker &amp;&amp; docker compose up -d --build
+
+# Rollback (assumes you tagged the deployed version locally)
+git checkout v0.X.Y
+cd docker &amp;&amp; docker compose up -d --build
+</code></pre>
+<p>Workspace, sessions, and pi config are on bind mounts — they survive
+container rebuilds. The only state lost during update is in-memory
+(active SSE connections, live PTY processes). SSE clients reconnect
+automatically with backoff; PTYs from before the restart are reaped
+(see <code>pty-manager.ts</code> IDLE_REAP_MS) and replaced with fresh shells on
+reconnect.</p>
+<h2>Multi-deploy patterns</h2>
+<p>pi-workbench is single-tenant. To support multiple users, run multiple
+deploys:</p>
+<pre><code class="language-yaml"># docker-compose.yml — one service per user
+services:
+  pi-workbench-alice:
+    container_name: pi-workbench-alice
+    image: pi-workbench:latest
+    ports: [&quot;127.0.0.1:3001:3000&quot;]
+    volumes:
+      - /srv/alice/workspace:/workspace
+      - /srv/alice/.pi/agent:/home/pi/.pi/agent
+      - /srv/alice/.pi-workbench:/home/pi/.pi-workbench
+    environment:
+      - UI_PASSWORD=${ALICE_PASSWORD}
+      - JWT_SECRET=${ALICE_JWT_SECRET}
+      - TRUST_PROXY=true
+
+  pi-workbench-bob:
+    container_name: pi-workbench-bob
+    image: pi-workbench:latest
+    ports: [&quot;127.0.0.1:3002:3000&quot;]
+    volumes:
+      - /srv/bob/workspace:/workspace
+      - /srv/bob/.pi/agent:/home/pi/.pi/agent
+      - /srv/bob/.pi-workbench:/home/pi/.pi-workbench
+    environment:
+      - UI_PASSWORD=${BOB_PASSWORD}
+      - JWT_SECRET=${BOB_JWT_SECRET}
+      - TRUST_PROXY=true
+</code></pre>
+<p>Then route each via the proxy:</p>
+<pre><code class="language-caddy">alice.pi.example.com {
+    reverse_proxy localhost:3001 { flush_interval -1; transport http { read_timeout 30m } }
+}
+bob.pi.example.com {
+    reverse_proxy localhost:3002 { flush_interval -1; transport http { read_timeout 30m } }
+}
+</code></pre>
+<p>Each deploy has its own JWT secret, its own provider keys, its own
+projects, its own session history. Zero shared state.</p>
+<h2>Monitoring</h2>
+<p>The shipped health endpoint is enough for liveness probes:</p>
+<pre><code class="language-bash">curl -s http://localhost:3000/api/v1/health
+# { &quot;status&quot;: &quot;ok&quot;, &quot;activeSessions&quot;: 0, &quot;activePtys&quot;: 0 }
+</code></pre>
+<p>The container&#39;s <code>HEALTHCHECK</code> directive uses this (see
+<a href="./CONTAINERS.md#health-check"><code>docs/CONTAINERS.md</code></a>).</p>
+<p>For deeper observability, the workbench logs to stdout in pino&#39;s JSON
+format. Pipe through your log aggregator of choice:</p>
+<pre><code class="language-bash"># Promtail / Loki
+docker compose logs -f pi-workbench | promtail-pipe
+
+# Vector
+docker logs -f pi-workbench | vector-pipe
+
+# Just file rotation
+docker compose logs -f pi-workbench &gt;&gt; /var/log/pi-workbench.log
+</code></pre>
+<p>Useful log fields to alert on:</p>
+<ul>
+<li>Repeated <code>terminal exited</code> with non-zero <code>exitCode</code> — agent&#39;s bash
+failing or shell crashing</li>
+<li><code>pty spawn failed</code> — node-pty native binding broken (rare in container,
+common on host installs)</li>
+<li><code>set model failed</code> — provider API rejecting requests (auth, quota)</li>
+<li><code>unmapped file-manager error</code> — defensive log; investigate as a
+potential undocumented error path</li>
+</ul>
+<p>There is no built-in metrics endpoint (no Prometheus exporter). The
+session count and active PTY count from <code>/api/v1/health</code> are the only
+exported numbers; scrape them with a 30 s job and alert on stuck values
+if you care.</p>
+<h2>See also</h2>
+<ul>
+<li><a href="./CONTAINERS.md"><code>docs/CONTAINERS.md</code></a> — Docker image internals,
+resources, troubleshooting</li>
+<li><a href="./configuration.md"><code>docs/configuration.md</code></a> — pi config files
+(auth, models, settings) + custom providers</li>
+<li><a href="./architecture.md"><code>docs/architecture.md</code></a> — component map, request
+lifecycles</li>
+<li><a href="../SECURITY.md"><code>SECURITY.md</code></a> — full threat model + vulnerability
+reporting</li>
+<li><a href="../kubernetes/DEPLOY.md"><code>kubernetes/DEPLOY.md</code></a> — Kubernetes /
+OpenShift recipes</li>
+</ul>
+
+    </main>
+  </div>
+
+  <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">&#9776;</button>
+
+  <script>
+    document.getElementById('mobileToggle').addEventListener('click', () => {
+      document.getElementById('navLinks').classList.toggle('open');
+    });
+    document.getElementById('sidebarToggle').addEventListener('click', () => {
+      document.getElementById('docsSidebar').classList.toggle('open');
+    });
+  </script>
+</body>
+</html>

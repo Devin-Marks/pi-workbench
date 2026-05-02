@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Configuration — pi-workbench</title>
+  <meta name="description" content="Every environment variable the workbench reads, with defaults and intent.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="../index.html" class="logo">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="#0d0d10"/>
+  <path d="M9 11 L6 16 L9 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M23 11 L26 16 L23 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M12 13 H20 M14 13 V21 M18 13 V21" stroke="#e6e7eb" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
+        pi-workbench
+      </a>
+      <nav class="nav-links" id="navLinks">
+        <a href="../index.html#features">Features</a>
+        <a href="../index.html#quickstart">Quick Start</a>
+        <a href="architecture.html">Docs</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench" class="nav-cta">GitHub</a>
+      </nav>
+      <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">&#9776;</button>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" id="docsSidebar">
+      <div class="sidebar-section">
+        <h4>Documentation</h4>
+        <a href="architecture.html">Architecture</a>
+        <a href="configuration.html" class="active">Configuration</a>
+        <a href="containers.html">Containers</a>
+        <a href="deployment.html">Deployment</a>
+        <a href="api.html">API Examples</a>
+        <a href="mcp.html">MCP Servers</a>
+        <a href="sse-events.html">SSE Events</a>
+      </div>
+      <div class="sidebar-section">
+        <h4>Project</h4>
+        <a href="https://github.com/Devin-Marks/pi-workbench">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/SECURITY.md">Security</a>
+      </div>
+    </aside>
+
+    <main class="docs-main">
+      <h1>Configuration</h1>
+      <p class="docs-subtitle">Every environment variable the workbench reads, with defaults and intent.</p>
+<p>pi-workbench&#39;s runtime behavior is shaped by <strong>two</strong> layers of configuration:</p>
+<ol>
+<li><strong>Workbench env vars</strong> — read by <code>packages/server/src/config.ts</code> at
+startup. Controls ports, paths, auth, and the <code>MINIMAL_UI</code> frontend
+gate. Documented in <a href="#environment-variables">Environment variables</a> below.</li>
+<li><strong>Pi SDK config files</strong> — JSON files under <code>${PI_CONFIG_DIR}</code> (default
+<code>~/.pi/agent</code>, container <code>/home/pi/.pi/agent</code>). Owned by the pi SDK,
+surfaced by the workbench&#39;s Settings panel and the
+<code>/api/v1/config/*</code> routes. See <a href="#pi-sdk-config-files">Pi SDK config files</a>
+below.</li>
+</ol>
+<h2>Environment variables</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>PORT</code></td>
+<td><code>3000</code></td>
+<td>Fastify listen port.</td>
+</tr>
+<tr>
+<td><code>HOST</code></td>
+<td><code>0.0.0.0</code></td>
+<td>Bind address.</td>
+</tr>
+<tr>
+<td><code>LOG_LEVEL</code></td>
+<td><code>info</code></td>
+<td>Pino log level.</td>
+</tr>
+<tr>
+<td><code>WORKSPACE_PATH</code></td>
+<td><code>~/.pi-workbench/workspace</code></td>
+<td>Where project code lives. Docker image overrides to <code>/workspace</code> (mounted from host). Point at an existing dir (e.g. <code>~/Code</code>) to reuse code you already have on disk.</td>
+</tr>
+<tr>
+<td><code>PI_CONFIG_DIR</code></td>
+<td><code>~/.pi/agent</code></td>
+<td>Pi SDK config dir (auth.json, models.json, settings.json — owned by the SDK). The Docker image overrides this to <code>/home/pi/.pi/agent</code> (mounted from the host&#39;s <code>~/.pi/agent</code>).</td>
+</tr>
+<tr>
+<td><code>WORKBENCH_DATA_DIR</code></td>
+<td><code>~/.pi-workbench</code></td>
+<td>Workbench-owned state (projects.json). Defaults to the same dotdir as the workspace (<code>projects.json</code> sits alongside <code>workspace/</code>). Kept separate from <code>PI_CONFIG_DIR</code> so we don&#39;t mix our state into the pi SDK&#39;s directory. Docker image points this at <code>/home/pi/.pi-workbench</code> (mounted from the host&#39;s <code>~/.pi-workbench-docker</code> by default — container has its own project list).</td>
+</tr>
+<tr>
+<td><code>CLIENT_DIST_PATH</code></td>
+<td><code>&lt;server-dist&gt;/../../client/dist</code></td>
+<td>Built Vite output served by Fastify in production.</td>
+</tr>
+<tr>
+<td><code>SERVE_CLIENT</code></td>
+<td><code>true</code></td>
+<td>Set to <code>false</code> to skip static-serving (useful when running the dev Vite server in front of the API).</td>
+</tr>
+<tr>
+<td><code>SESSION_DIR</code></td>
+<td><code>${WORKSPACE_PATH}/.pi/sessions</code></td>
+<td>JSONL session storage.</td>
+</tr>
+<tr>
+<td><code>UI_PASSWORD</code></td>
+<td>(unset)</td>
+<td>If set, enables browser JWT auth. <code>JWT_SECRET</code> is auto-generated on first boot if not supplied. After the user changes it via the UI, a scrypt hash is persisted to <code>${WORKBENCH_DATA_DIR}/password-hash</code> and this env var is ignored on subsequent logins.</td>
+</tr>
+<tr>
+<td><code>REQUIRE_PASSWORD_CHANGE</code></td>
+<td><code>true</code></td>
+<td>When the user logs in with the env-supplied <code>UI_PASSWORD</code> and no on-disk hash exists yet, the issued token is scoped to <code>POST /auth/change-password</code> and the UI forces the user to pick a new password before continuing. Set to <code>false</code> to keep the env-supplied password as-is (useful when <code>UI_PASSWORD</code> is itself sourced from a sealed secret you rotate out-of-band).</td>
+</tr>
+<tr>
+<td><code>JWT_SECRET</code></td>
+<td>(unset, auto-generated)</td>
+<td>HS256 signing key. <strong>Optional</strong> — when <code>UI_PASSWORD</code> is set and <code>JWT_SECRET</code> is not, the server generates one and persists it to <code>${WORKBENCH_DATA_DIR}/jwt-secret</code> (mode 0600). The data dir is already a PVC / bind-mount in K8s and Docker, so tokens survive restarts with no extra wiring. Set this env var to override (e.g. <code>openssl rand -hex 32</code>). Delete the file to rotate.</td>
+</tr>
+<tr>
+<td><code>API_KEY</code></td>
+<td>(unset)</td>
+<td>Static bearer token for programmatic access.</td>
+</tr>
+<tr>
+<td><code>JWT_EXPIRES_IN_SECONDS</code></td>
+<td><code>604800</code></td>
+<td>JWT lifetime (default 7 d).</td>
+</tr>
+<tr>
+<td><code>RATE_LIMIT_LOGIN_MAX</code></td>
+<td><code>10</code></td>
+<td>Max <code>/auth/login</code> attempts per window.</td>
+</tr>
+<tr>
+<td><code>RATE_LIMIT_LOGIN_WINDOW_MS</code></td>
+<td><code>60000</code></td>
+<td>Login rate-limit window (ms).</td>
+</tr>
+<tr>
+<td><code>CORS_ORIGIN</code></td>
+<td>(reflect request origin)</td>
+<td>Pin to a specific origin in production.</td>
+</tr>
+<tr>
+<td><code>TRUST_PROXY</code></td>
+<td><code>false</code></td>
+<td>Set to <code>true</code> when running behind a reverse proxy (nginx, Caddy, Traefik) so <code>req.ip</code> reflects the real client IP — required for the login rate limit to work per-user.</td>
+</tr>
+<tr>
+<td><code>MINIMAL_UI</code></td>
+<td><code>false</code></td>
+<td>Hide terminal / git / last-turn / providers / agent settings. Frontend gate; doesn&#39;t disable server routes.</td>
+</tr>
+</tbody></table>
+<p>Production-relevant env tuning (rate limits, JWT lifetime, TLS / proxy
+posture) lives in <a href="./deployment.md"><code>deployment.md</code></a>.</p>
+<h2>Pi SDK config files</h2>
+<p>This section covers layer 2 — what each pi config file does, how the
+workbench reads/writes it, and how to wire up a custom provider.</p>
+<h2>File layout</h2>
+<pre><code>${PI_CONFIG_DIR}/
+├── auth.json          — provider API keys + OAuth tokens
+├── models.json        — custom provider definitions
+└── settings.json      — agent defaults (model, thinking level, modes)
+</code></pre>
+<p>Skills (per-project Markdown files) live elsewhere — under <code>.pi/skills/</code>
+inside each project directory and inside <code>~/.pi/agent/skills/</code> for global
+skills. The workbench surfaces them but doesn&#39;t own their storage.</p>
+<h2>auth.json — provider API keys</h2>
+<p>The pi SDK stores provider credentials here. Format is owned by the SDK;
+schematically:</p>
+<pre><code class="language-json">{
+  &quot;anthropic&quot;: { &quot;apiKey&quot;: &quot;sk-ant-...&quot; },
+  &quot;openai&quot;:    { &quot;apiKey&quot;: &quot;sk-...&quot; },
+  &quot;google&quot;:    { &quot;apiKey&quot;: &quot;...&quot; },
+  &quot;openrouter&quot;:{ &quot;apiKey&quot;: &quot;sk-or-...&quot; }
+}
+</code></pre>
+<p>Some providers use OAuth and store tokens here instead of bare API keys.
+Pi handles the format; the workbench doesn&#39;t parse it.</p>
+<h3>How the workbench surfaces it</h3>
+<p>The Settings → Providers tab shows every provider that has a key
+configured (a green dot) or doesn&#39;t (an &quot;Add key&quot; button). It uses
+<strong>presence-only</strong> information from <code>GET /api/v1/config/auth</code> — the
+actual key values <strong>never</strong> leave the server. The route is enforced in
+<code>config-manager.ts</code>&#39;s <code>readAuthSummary()</code>; if you find a code path that
+returns key values, that&#39;s a security bug — file a private advisory.</p>
+<p>Adding a key uses <code>PUT /api/v1/config/auth/:provider</code> with <code>{ apiKey }</code>.
+Removing uses <code>DELETE /api/v1/config/auth/:provider</code>. Both write
+atomically (<code>tmp + rename</code>) so you can&#39;t end up with a corrupted file
+on a crash mid-write.</p>
+<p>In <code>MINIMAL_UI</code> mode the Providers tab is hidden; manage credentials
+out-of-band (edit <code>auth.json</code> directly, then <code>kubectl rollout restart</code>
+or <code>docker compose restart</code>).</p>
+<h2>models.json — custom provider definitions</h2>
+<p>Built-in providers (Anthropic, OpenAI, Google, OpenRouter, Bedrock,
+Vertex, etc.) are baked into pi-ai and don&#39;t need entries here. Use
+<code>models.json</code> only for <strong>custom</strong> OpenAI-compatible endpoints — vLLM,
+LiteLLM, Ollama, llama.cpp&#39;s <code>--api</code>, your company&#39;s internal proxy.</p>
+<pre><code class="language-json">{
+  &quot;providers&quot;: {
+    &quot;vllm-local&quot;: {
+      &quot;api&quot;: &quot;openai-completions&quot;,
+      &quot;url&quot;: &quot;http://localhost:8000/v1&quot;,
+      &quot;models&quot;: [
+        {
+          &quot;id&quot;: &quot;Qwen/Qwen2.5-Coder-32B-Instruct&quot;,
+          &quot;name&quot;: &quot;Qwen 2.5 Coder 32B (vLLM)&quot;,
+          &quot;contextWindow&quot;: 32000,
+          &quot;maxTokens&quot;: 8000,
+          &quot;input&quot;: [&quot;text&quot;],
+          &quot;reasoning&quot;: false,
+          &quot;cost&quot;: { &quot;input&quot;: 0, &quot;output&quot;: 0, &quot;cacheRead&quot;: 0, &quot;cacheWrite&quot;: 0 }
+        }
+      ]
+    },
+    &quot;ollama&quot;: {
+      &quot;api&quot;: &quot;openai-completions&quot;,
+      &quot;url&quot;: &quot;http://localhost:11434/v1&quot;,
+      &quot;models&quot;: [
+        {
+          &quot;id&quot;: &quot;llama3.1:70b&quot;,
+          &quot;name&quot;: &quot;Llama 3.1 70B (Ollama)&quot;,
+          &quot;contextWindow&quot;: 128000,
+          &quot;maxTokens&quot;: 4000,
+          &quot;input&quot;: [&quot;text&quot;],
+          &quot;reasoning&quot;: false,
+          &quot;cost&quot;: { &quot;input&quot;: 0, &quot;output&quot;: 0, &quot;cacheRead&quot;: 0, &quot;cacheWrite&quot;: 0 }
+        }
+      ]
+    }
+  }
+}
+</code></pre>
+<h3>Field reference (per model entry)</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td>string</td>
+<td>The exact <code>model</code> value the provider expects in API requests</td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td>string</td>
+<td>Display name in the model picker</td>
+</tr>
+<tr>
+<td><code>contextWindow</code></td>
+<td>number</td>
+<td>Tokens the model accepts as input. The Context Inspector uses this for the &quot;context window&quot; bar.</td>
+</tr>
+<tr>
+<td><code>maxTokens</code></td>
+<td>number</td>
+<td>Max output tokens per response. Pi clamps <code>max_tokens</code> in API calls to this.</td>
+</tr>
+<tr>
+<td><code>input</code></td>
+<td><code>(&quot;text&quot; | &quot;image&quot;)[]</code></td>
+<td>What content types the model accepts. Image-capable models can receive multipart attachments.</td>
+</tr>
+<tr>
+<td><code>reasoning</code></td>
+<td>boolean</td>
+<td>True if the model supports thinking / extended-reasoning blocks (OpenAI o1, Claude Sonnet 4.5 with thinking, etc.). Surfaces the thinking-level selector in Settings → Agent.</td>
+</tr>
+<tr>
+<td><code>cost</code></td>
+<td><code>{ input, output, cacheRead, cacheWrite }</code> (numbers, USD per 1M tokens)</td>
+<td>Required by the SDK type. Surfaces in the Context Inspector&#39;s per-turn cost telemetry. Set every field to <code>0</code> for self-hosted endpoints (vLLM, Ollama, llama.cpp) where you don&#39;t pay per token; for OpenAI-compatible commercial endpoints, copy the upstream provider&#39;s published rates. Without a <code>cost</code> block the model entry is rejected on next session creation.</td>
+</tr>
+</tbody></table>
+<h3>Provider <code>api</code> field</h3>
+<p>Each provider entry&#39;s <code>api</code> field tells pi-ai which protocol adapter to use:</p>
+<ul>
+<li><code>openai-completions</code> — <code>/v1/chat/completions</code> shape (OpenAI, vLLM,
+LiteLLM, Ollama, llama.cpp)</li>
+<li><code>openai-responses</code> — OpenAI&#39;s newer Responses API</li>
+<li><code>anthropic-messages</code> — Anthropic&#39;s Messages API</li>
+<li><code>google-generative-ai</code> — Google&#39;s Generative Language API</li>
+<li><code>bedrock-converse-stream</code> — AWS Bedrock Converse API (streaming)</li>
+</ul>
+<p>For most third-party endpoints you&#39;ll use <code>openai-completions</code>. Check the
+endpoint&#39;s docs to confirm wire-format compatibility.</p>
+<h3>How the workbench surfaces it</h3>
+<p>Settings → Providers shows a collapsible &quot;Custom providers (models.json)&quot;
+section with a raw-JSON editor. The editor is gated behind a <code>&lt;details&gt;</code>
+to keep casual users from accidentally clobbering it; a typed form per
+provider type is deferred to Phase 18 polish.</p>
+<p>Reads via <code>GET /api/v1/config/models</code>, writes via
+<code>PUT /api/v1/config/models</code> (full-document replace; the route validates
+<code>{ providers: {...} }</code> shape but doesn&#39;t validate per-provider schemas
+— pi-ai validates on next session creation).</p>
+<p>In <code>MINIMAL_UI</code> mode this surface is hidden. Edit <code>models.json</code> directly
+and restart.</p>
+<h2>settings.json — agent defaults</h2>
+<p>Pi-side defaults that apply to new sessions:</p>
+<pre><code class="language-json">{
+  &quot;defaultProvider&quot;: &quot;anthropic&quot;,
+  &quot;defaultModel&quot;: &quot;claude-sonnet-4-5-20250929&quot;,
+  &quot;defaultThinkingLevel&quot;: &quot;medium&quot;,
+  &quot;steeringMode&quot;: &quot;all&quot;,
+  &quot;followUpMode&quot;: &quot;all&quot;
+}
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Values</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>defaultProvider</code></td>
+<td>A provider key (<code>anthropic</code>, <code>openai</code>, <code>google</code>, custom from <code>models.json</code>, etc.)</td>
+<td>Picked by new sessions when no per-session model is set.</td>
+</tr>
+<tr>
+<td><code>defaultModel</code></td>
+<td>A model id from the chosen provider</td>
+<td>Same.</td>
+</tr>
+<tr>
+<td><code>defaultThinkingLevel</code></td>
+<td><code>minimal</code> / <code>low</code> / <code>medium</code> / <code>high</code> / <code>xhigh</code></td>
+<td>For reasoning-capable models. Lower = faster + cheaper; higher = better at hard problems.</td>
+</tr>
+<tr>
+<td><code>steeringMode</code></td>
+<td><code>all</code> / <code>one-at-a-time</code></td>
+<td>How the SDK delivers queued steering messages. <code>all</code> flushes the entire queue in one delivery to the agent at the next opportunity; <code>one-at-a-time</code> waits for the agent&#39;s response between queued messages. The per-call <code>mode</code> body field on <code>POST /sessions/:id/steer</code> is independent (<code>steer</code> vs <code>followUp</code> — that&#39;s the WHEN of delivery, not the BATCHING).</td>
+</tr>
+<tr>
+<td><code>followUpMode</code></td>
+<td><code>all</code> / <code>one-at-a-time</code></td>
+<td>Same shape as <code>steeringMode</code> but for follow-up messages (delivered after the agent goes fully idle rather than at the next tool-call boundary).</td>
+</tr>
+</tbody></table>
+<p>Other SDK keys (less commonly tuned) are accepted by the
+<code>PUT /api/v1/config/settings</code> route and persist in this file.</p>
+<h3>How the workbench surfaces it</h3>
+<p>Settings → Agent is a typed form for the common fields plus an
+&quot;Edit as JSON&quot; toggle for the long tail of SDK keys. Form changes
+fire <code>PUT /api/v1/config/settings</code> with a partial patch (Fastify
+shallow-merges into the existing file).</p>
+<p>The route preserves unknown fields the SDK might add in future
+versions — you won&#39;t lose data by editing through the form.</p>
+<h3>Per-session model override</h3>
+<p>The Settings → Agent default is the <strong>fallback</strong>. The chat input has a
+model picker that overrides per-session. The override persists in
+browser localStorage (<code>pi-workbench/model/&lt;sessionId&gt;</code>) and re-applies
+on session switch. It does NOT modify <code>settings.json</code>.</p>
+<p>(See the commit history around <code>routes/control.ts:setModel</code> for the
+gory details — the SDK&#39;s <code>setModel</code> writes the global default as a
+side effect, which the workbench undoes by snapshot-and-restore around
+the call so per-session selection doesn&#39;t mutate the global default.)</p>
+<h2>Per-project skills</h2>
+<p>Pi supports project-scoped skill files (Markdown files with YAML
+frontmatter the agent loads as additional instructions). They live
+under:</p>
+<ul>
+<li><strong>Project-local:</strong> <code>&lt;project-path&gt;/.pi/skills/*.md</code></li>
+<li><strong>Global:</strong> <code>~/.pi/agent/skills/*.md</code> — available across all projects</li>
+</ul>
+<p>The workbench&#39;s Settings → Skills tab shows the merged list (global +
+project-local) for the active project, with a toggle per skill to
+enable/disable for THIS project. Disable state writes to the project&#39;s
+<code>settings.json</code>; the skill files themselves are untouched.</p>
+<h2>Container ergonomics</h2>
+<p>Inside Docker, the bind mounts are:</p>
+<table>
+<thead>
+<tr>
+<th>Container path</th>
+<th>Default host path</th>
+<th>What lives here</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>/home/pi/.pi/agent</code></td>
+<td><code>~/.pi/agent</code></td>
+<td><code>auth.json</code>, <code>models.json</code>, <code>settings.json</code> (shared with host pi CLI by default)</td>
+</tr>
+<tr>
+<td><code>/home/pi/.pi-workbench</code></td>
+<td><code>~/.pi-workbench-docker</code></td>
+<td><code>projects.json</code> (separate from host&#39;s <code>~/.pi-workbench</code>)</td>
+</tr>
+<tr>
+<td><code>/workspace</code></td>
+<td><code>../workspace</code> (relative to compose file)</td>
+<td>User code; sessions under <code>.pi/sessions/</code> here</td>
+</tr>
+</tbody></table>
+<p>Sharing <code>~/.pi/agent</code> with the host means the host CLI and the container
+see the same provider keys + custom providers + agent defaults. Set
+<code>PI_CONFIG_HOST_PATH</code> to a different host directory if you want
+container-isolated config.</p>
+<p><code>projects.json</code> defaults to a SEPARATE host directory because mixing the
+host CLI&#39;s project list with the container&#39;s would mean the container
+can see projects whose paths point inside the host&#39;s home directory —
+they&#39;d resolve to invalid paths inside the container&#39;s filesystem.
+Setting both to the same host path requires also using the same
+workspace path semantics.</p>
+<h2>MCP servers</h2>
+<p>MCP server definitions live in <code>${WORKBENCH_DATA_DIR}/mcp.json</code> (global)
+and <code>&lt;projectPath&gt;/.mcp.json</code> (project-scoped). Manage them from the
+<strong>Settings → MCP</strong> tab in the browser, or edit the files directly. See
+<a href="./mcp.md"><code>mcp.md</code></a> for the field reference, transport options,
+auth model, and troubleshooting.</p>
+<h2>See also</h2>
+<ul>
+<li><a href="../README.md"><code>README.md</code></a> — workbench env vars + Docker quickstart</li>
+<li><a href="./deployment.md"><code>docs/deployment.md</code></a> — production deploy with TLS +
+reverse proxy + auth</li>
+<li><a href="./CONTAINERS.md"><code>docs/CONTAINERS.md</code></a> — container internals + bind
+mounts + UID/GID handling</li>
+<li><a href="./architecture.md"><code>docs/architecture.md</code></a> — what config-manager.ts
+does + how the routes wire it</li>
+<li><a href="../SECURITY.md"><code>SECURITY.md</code></a> — auth.json key safety + threat model</li>
+</ul>
+
+    </main>
+  </div>
+
+  <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">&#9776;</button>
+
+  <script>
+    document.getElementById('mobileToggle').addEventListener('click', () => {
+      document.getElementById('navLinks').classList.toggle('open');
+    });
+    document.getElementById('sidebarToggle').addEventListener('click', () => {
+      document.getElementById('docsSidebar').classList.toggle('open');
+    });
+  </script>
+</body>
+</html>
