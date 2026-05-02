@@ -47,21 +47,28 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { config } from "./config.js";
 
-export const WORKBENCH_SECRET_HYGIENE_RULE = `
-When running shell commands on behalf of the user, treat the contents of \
-environment variables as credentials by default. Do not echo, print, or \
-paste env-var *values* into your responses or tool outputs unless the user \
-has explicitly asked you to display that specific variable. Checking \
-whether a variable is set (\`-z "$X"\` style) is fine; printing the value \
-is not. If you need to use a secret in a command, reference it by \`$NAME\` \
-rather than expanding it inline (e.g. \`curl -H "Authorization: Bearer \
-$GITHUB_TOKEN"\`, not \`curl -H "Authorization: Bearer ghp_..."\`).
-
-This rule applies even when debugging — if you suspect an env var is \
-misconfigured, prefer reporting "\$X is unset" or "\$X is set (length N)" \
-over reflecting the value. The transcript may be screen-shared, logged, or \
-pasted into bug reports.
-`.trim();
+/**
+ * Plain string (not a backtick template) so what's stored is exactly
+ * what's documented — no surprises from template-literal escape rules
+ * (in particular, `\$` inside backticks emits a literal backslash, and
+ * `\<newline>` is a line continuation). Concatenated for readability;
+ * the resulting string the model sees is normal prose with paragraph
+ * breaks at the intentional `\n\n`s.
+ */
+export const WORKBENCH_SECRET_HYGIENE_RULE =
+  "When running shell commands on behalf of the user, treat the contents of " +
+  "environment variables as credentials by default. Do not echo, print, or " +
+  "paste env-var *values* into your responses or tool outputs unless the user " +
+  "has explicitly asked you to display that specific variable. Checking " +
+  'whether a variable is set (`-z "$X"` style) is fine; printing the value ' +
+  "is not. If you need to use a secret in a command, reference it by `$NAME` " +
+  'rather than expanding it inline (e.g. `curl -H "Authorization: Bearer ' +
+  '$GITHUB_TOKEN"`, not `curl -H "Authorization: Bearer ghp_..."`).' +
+  "\n\n" +
+  "This rule applies even when debugging — if you suspect an env var is " +
+  'misconfigured, prefer reporting "$X is unset" or "$X is set (length N)" ' +
+  "over reflecting the value. The transcript may be screen-shared, logged, " +
+  "or pasted into bug reports.";
 
 /**
  * Build a ResourceLoader pre-loaded with the workbench's optional
@@ -89,4 +96,28 @@ export async function buildWorkbenchResourceLoader(
   });
   await loader.reload();
   return loader;
+}
+
+/**
+ * One-time boot log so operators can confirm from container logs that
+ * `AGENT_SECRET_HYGIENE_RULE` was read. Prevents the most common
+ * "I set the env var but nothing happened" debugging dead-end (image
+ * cached an old build, env var didn't reach the process, config
+ * ignored the value, etc.) — the log either appears or it doesn't.
+ *
+ * Called from `index.ts` at startup. Side-effect-only; safe to call
+ * once.
+ */
+export function logSecretHygieneState(): void {
+  if (config.agentSecretHygieneRule) {
+    console.log(
+      "[agent-resource-loader] AGENT_SECRET_HYGIENE_RULE=true — appending " +
+        `secret-hygiene rule to every agent system prompt (${WORKBENCH_SECRET_HYGIENE_RULE.length} chars)`,
+    );
+  } else {
+    console.log(
+      "[agent-resource-loader] AGENT_SECRET_HYGIENE_RULE not set — agent system " +
+        "prompt unmodified (set =true to opt in; see SECURITY.md)",
+    );
+  }
 }

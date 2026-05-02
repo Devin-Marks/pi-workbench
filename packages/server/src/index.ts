@@ -28,6 +28,7 @@ import { terminalRoutes } from "./routes/terminal.js";
 import { disposeAll as disposeAllMcp, loadGlobal as loadGlobalMcp } from "./mcp/manager.js";
 import { disposeAllSessions } from "./session-registry.js";
 import { disposeAllPtys, installPtyExitHandler } from "./pty-manager.js";
+import { logSecretHygieneState } from "./agent-resource-loader.js";
 
 /**
  * Per-route auth metadata. Routes that should skip the auth preHandler set
@@ -430,6 +431,12 @@ async function start(): Promise<void> {
     }
   }
   const fastify = await buildServer();
+  // One-line confirmation of optional security knobs that are easy to
+  // typo or forget to wire through. If you add another opt-in
+  // behavioral toggle here, log its state too — operators should be
+  // able to grep container logs for the answer to "did my env var
+  // take effect" without sending a test prompt.
+  logSecretHygieneState();
   try {
     await fastify.listen({ port: config.port, host: config.host });
     fastify.log.info(`pi-workbench server listening on :${config.port}`);
