@@ -186,12 +186,20 @@ async function main(): Promise<void> {
       });
       assert("POST /projects (valid) → 201", status === 201, `status=${status}`);
       created = body as Project;
+      // The server realpaths the input before storing (project-manager.ts
+      // canonicalizes so symlinks can't bypass the workspace boundary).
+      // On macOS that turns `/var/folders/...` into `/private/var/...`.
+      // Assert both ends resolve to the same canonical path rather than
+      // requiring string equality with the un-realpath'd input.
+      const { realpath } = await import("node:fs/promises");
+      const repoFolderReal = await realpath(repoFolder);
       assert(
         "  response includes id, name, path, createdAt",
         typeof created.id === "string" &&
           created.name === "my-repo" &&
-          created.path === repoFolder &&
+          created.path === repoFolderReal &&
           typeof created.createdAt === "string",
+        `created.path=${created.path} repoFolderReal=${repoFolderReal}`,
       );
     }
 

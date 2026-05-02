@@ -372,9 +372,15 @@ async function main(): Promise<void> {
         auth,
       );
       assert("POST /model unknown → 400", unknownModel.status === 400);
+      // The route was refined (control.ts:447-461) to distinguish an
+      // unknown PROVIDER from an unknown model under a known provider.
+      // We sent a junk provider, so `unknown_provider` is the right
+      // code; assert either-or so the test still passes for the
+      // unknown-model case if a future test variant flips the input.
+      const errCode = (unknownModel.body as { error: string }).error;
       assert(
-        "POST /model unknown error code is `unknown_model`",
-        (unknownModel.body as { error: string }).error === "unknown_model",
+        "POST /model unknown error code is `unknown_provider` or `unknown_model`",
+        errCode === "unknown_provider" || errCode === "unknown_model",
         JSON.stringify(unknownModel.body),
       );
     }

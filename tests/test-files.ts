@@ -183,6 +183,12 @@ async function main(): Promise<void> {
     );
     assert("POST /projects → 201", created.status === 201);
     const projectId = (created.body as { id: string }).id;
+    // project-manager.createProject realpaths the input path before
+    // storing it (so symlinks can't bypass the workspace boundary).
+    // On macOS that turns the test's `/var/folders/...` into
+    // `/private/var/folders/...` — using the un-realpath'd path for
+    // file ops produces "path is outside the project root" 403s.
+    const canonicalProjectPath = (created.body as { path: string }).path;
 
     // ---- /files/tree ----
     {
@@ -215,7 +221,7 @@ async function main(): Promise<void> {
     }
 
     // ---- write + read roundtrip ----
-    const newFile = join(projectPath, "src", "added.ts");
+    const newFile = join(canonicalProjectPath, "src", "added.ts");
     {
       const w = await jsend(
         "PUT",
@@ -223,7 +229,7 @@ async function main(): Promise<void> {
         { projectId, path: newFile, content: "export const y = 2;\n" },
         auth,
       );
-      assert("PUT /files/write → 200", w.status === 200);
+      assert("PUT /files/write → 200", w.status === 200, JSON.stringify(w.body));
 
       const qs = new URLSearchParams({ projectId, path: newFile }).toString();
       const r = await jget(`${base}/api/v1/files/read?${qs}`, auth);
@@ -236,7 +242,7 @@ async function main(): Promise<void> {
 
     // ---- write to a nested non-existent directory creates parents ----
     {
-      const deep = join(projectPath, "newdir", "child", "hello.md");
+      const deep = join(canonicalProjectPath, "newdir", "child", "hello.md");
       const w = await jsend(
         "PUT",
         `${base}/api/v1/files/write`,
@@ -270,8 +276,8 @@ async function main(): Promise<void> {
     // ---- move (across dirs) ----
     let movedDest = "";
     {
-      const src = join(projectPath, "src", "renamed.ts");
-      const dest = join(projectPath, "moved.ts");
+      const src = join(canonicalProjectPath, "src", "renamed.ts");
+      const dest = join(canonicalProjectPath, "moved.ts");
       const r = await jsend("POST", `${base}/api/v1/files/move`, { projectId, src, dest }, auth);
       assert("POST /files/move → 200", r.status === 200);
       movedDest = (r.body as { path: string }).path;
@@ -295,7 +301,7 @@ async function main(): Promise<void> {
       const make = await jsend(
         "POST",
         `${base}/api/v1/files/mkdir`,
-        { projectId, parentPath: projectPath, name: "fresh" },
+        { projectId, parentPath: canonicalProjectPath, name: "fresh" },
         auth,
       );
       assert("POST /files/mkdir → 200", make.status === 200);
@@ -303,12 +309,12 @@ async function main(): Promise<void> {
       const dup = await jsend(
         "POST",
         `${base}/api/v1/files/mkdir`,
-        { projectId, parentPath: projectPath, name: "fresh" },
+        { projectId, parentPath: canonicalProjectPath, name: "fresh" },
         auth,
       );
       assert("POST /files/mkdir duplicate → 409 target_exists", dup.status === 409);
 
-      const freshPath = join(projectPath, "fresh");
+      const freshPath = join(canonicalProjectPath, "fresh");
       const qs = new URLSearchParams({ projectId, path: freshPath }).toString();
       const d = await jsend("DELETE", `${base}/api/v1/files/delete?${qs}`, undefined, auth);
       assert("DELETE empty dir → 204", d.status === 204);
@@ -316,7 +322,10 @@ async function main(): Promise<void> {
 
     // ---- delete non-empty directory → 409 ----
     {
-      const qs = new URLSearchParams({ projectId, path: join(projectPath, "src") }).toString();
+      const qs = new URLSearchParams({
+        projectId,
+        path: join(canonicalProjectPath, "src"),
+      }).toString();
       const d = await jsend("DELETE", `${base}/api/v1/files/delete?${qs}`, undefined, auth);
       assert("DELETE non-empty dir → 409 directory_not_empty", d.status === 409);
     }
@@ -344,7 +353,7 @@ async function main(): Promise<void> {
 
     // ---- delete project root itself → 403 ----
     {
-      const qs = new URLSearchParams({ projectId, path: projectPath }).toString();
+      const qs = new URLSearchParams({ projectId, path: canonicalProjectPath }).toString();
       const r = await jsend("DELETE", `${base}/api/v1/files/delete?${qs}`, undefined, auth);
       // Either 403 (path_not_allowed) or 409 (directory_not_empty) is
       // acceptable — both keep the root from being clobbered. Assert the
@@ -356,7 +365,7 @@ async function main(): Promise<void> {
     {
       const qs = new URLSearchParams({
         projectId,
-        path: join(projectPath, "logo.png"),
+        path: join(canonicalProjectPath, "logo.png"),
       }).toString();
       const r = await jget(`${base}/api/v1/files/read?${qs}`, auth);
       assert("read binary → 200", r.status === 200);
@@ -371,18 +380,23 @@ async function main(): Promise<void> {
     // symlink itself is inside), so without realpath resolution this
     // would let an attacker read /etc/passwd via /<project>/escape.
     {
+      // For the symlink primitive itself we use the un-realpath'd
+      // projectPath so node fs writes through to the actual path on
+      // disk. For the HTTP request below, switch to the canonical
+      // form the server has stored.
       const escapeLink = join(projectPath, "escape");
+      const escapeLinkCanonical = join(canonicalProjectPath, "escape");
       const outside = "/etc/hosts";
       const { symlink } = await import("node:fs/promises");
       await symlink(outside, escapeLink);
-      const qs = new URLSearchParams({ projectId, path: escapeLink }).toString();
+      const qs = new URLSearchParams({ projectId, path: escapeLinkCanonical }).toString();
       const r = await jget(`${base}/api/v1/files/read?${qs}`, auth);
       assert("read through symlink-out-of-root → 403", r.status === 403);
       // Same for a write target that resolves through the escape link.
       const w = await jsend(
         "PUT",
         `${base}/api/v1/files/write`,
-        { projectId, path: escapeLink, content: "no" },
+        { projectId, path: escapeLinkCanonical, content: "no" },
         auth,
       );
       assert("write through symlink-out-of-root → 403", w.status === 403);
@@ -393,7 +407,7 @@ async function main(): Promise<void> {
     // ("string contains null bytes") — a non-Error.code shape
     // our mapper falls through to a 500. We convert these into 403.
     {
-      const sneaky = projectPath + "/foo" + String.fromCharCode(0) + ".ts";
+      const sneaky = canonicalProjectPath + "/foo" + String.fromCharCode(0) + ".ts";
       const qs = new URLSearchParams({ projectId, path: sneaky }).toString();
       const r = await jget(`${base}/api/v1/files/read?${qs}`, auth);
       assert("read with NUL-byte in path → 403 (not 500)", r.status === 403);
@@ -408,12 +422,13 @@ async function main(): Promise<void> {
 
     // ---- file-too-large (5 MB cap) ----
     {
+      // Write through projectPath (the un-realpath'd path Node fs
+      // accepts directly) but query through the canonical form.
       const big = join(projectPath, "big.txt");
-      // 6 MB: bigger than the 5 MB read cap. Use Buffer to avoid a giant
-      // JS string.
-      const buf = Buffer.alloc(6 * 1024 * 1024, "a");
+      const bigCanonical = join(canonicalProjectPath, "big.txt");
+      const buf = Buffer.alloc(6 * 1024 * 1024, "a"); // 6 MB > 5 MB read cap
       await fsWrite(big, buf);
-      const qs = new URLSearchParams({ projectId, path: big }).toString();
+      const qs = new URLSearchParams({ projectId, path: bigCanonical }).toString();
       const r = await jget(`${base}/api/v1/files/read?${qs}`, auth);
       assert("read 6MB file → 413 file_too_large", r.status === 413);
     }

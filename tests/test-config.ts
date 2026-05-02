@@ -281,7 +281,32 @@ async function main(): Promise<void> {
       const hello = skills.find((s) => s.name === "hello");
       assert("project-local 'hello' skill discovered", hello !== undefined);
       assert("  source is 'project'", hello?.source === "project");
-      assert("  enabled is initially false", hello?.enabled === false);
+      // Skills are now ENABLED by default in the global state (the
+      // model is "exclude by `!name` pattern"; absence of the pattern
+      // means enabled). Disable the skill first so the subsequent
+      // PUT-true and on-disk pattern checks have something to flip.
+      assert("  enabled is initially true (default state)", hello?.enabled === true);
+
+      const initialDisable = await jsend(
+        base,
+        "PUT",
+        `/api/v1/config/skills/hello/enabled?projectId=${projectId}`,
+        { enabled: false },
+      );
+      assert("PUT /config/skills/hello/enabled false → 200", initialDisable.status === 200);
+      const disabledOnce = (
+        initialDisable.body as { skills: { name: string; enabled: boolean }[] }
+      ).skills.find((s) => s.name === "hello");
+      assert("  hello.enabled === false after disable", disabledOnce?.enabled === false);
+      // settings.json should now contain the `!hello` exclude pattern.
+      const onDiskAfterDisable = JSON.parse(
+        await readFile(join(configDir, "settings.json"), "utf8"),
+      ) as { skills?: string[] };
+      assert(
+        "settings.skills contains the `!hello` exclude pattern after disable",
+        onDiskAfterDisable.skills?.includes("!hello") === true,
+        JSON.stringify(onDiskAfterDisable.skills),
+      );
 
       const enable = await jsend(
         base,
@@ -293,13 +318,19 @@ async function main(): Promise<void> {
       const enabledSkills = (enable.body as { skills: { name: string; enabled: boolean }[] })
         .skills;
       const hello2 = enabledSkills.find((s) => s.name === "hello");
-      assert("  hello.enabled === true after toggle", hello2?.enabled === true);
+      assert("  hello.enabled === true after re-enable", hello2?.enabled === true);
 
-      // settings.json should now have skills: ["hello"]
+      // Enabling clears the `!hello` exclude pattern from settings.json
+      // (skills are enabled by default; absence of the pattern is the
+      // signal). settings.skills must NOT contain `!hello` here.
       const onDisk = JSON.parse(await readFile(join(configDir, "settings.json"), "utf8")) as {
         skills?: string[];
       };
-      assert("settings.json reflects the toggle", onDisk.skills?.includes("hello") === true);
+      assert(
+        "settings.skills no longer contains the `!hello` exclude pattern",
+        onDisk.skills?.includes("!hello") !== true,
+        JSON.stringify(onDisk.skills),
+      );
 
       const disable = await jsend(
         base,
@@ -372,14 +403,19 @@ async function main(): Promise<void> {
         JSON.stringify(projects),
       );
 
-      // pi's settings.json should NOT have absorbed the project override —
-      // project state lives in the workbench-private overrides file.
+      // pi's settings.json should NOT have absorbed the project
+      // override — project state lives in the workbench-private
+      // overrides file. In the new pattern model, "global view
+      // unaffected" means the global file does NOT pick up a
+      // `!hello` exclude pattern as a side-effect of the project-
+      // scope disable.
       const settingsPostProj = JSON.parse(
         await readFile(join(configDir, "settings.json"), "utf8"),
       ) as { skills?: string[] };
       assert(
-        "  pi settings.skills still lists hello (global view unaffected)",
-        settingsPostProj.skills?.includes("hello") === true,
+        "  pi settings.skills does NOT contain `!hello` (global view unaffected)",
+        settingsPostProj.skills?.includes("!hello") !== true,
+        JSON.stringify(settingsPostProj.skills),
       );
 
       // DELETE clears the project override (= inherit from global).
