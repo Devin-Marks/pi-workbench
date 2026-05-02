@@ -44,6 +44,27 @@ details, follow the links in [Documentation](#documentation) below.
 
 ## Features
 
+### Tools & MCP
+
+- **MCP server integration** — connect to remote Model Context Protocol servers
+  over StreamableHTTP or SSE (auto-fallback). Per-project `<project>/.mcp.json`
+  overrides global config on the same name. Header status badge shows connection
+  state at a glance; master kill-switch in Settings disables every MCP tool with
+  one click for restricted-environment audits. See [`docs/mcp.md`](./docs/mcp.md).
+- **Per-tool enable / disable** — every tool the agent could call is enumerated
+  in **Settings → MCP** (per-server cascade) and **Settings → Tools** (built-ins).
+  Disable individual MCP tools without dropping the whole server, or pare back
+  the built-in set (e.g. turn off `bash` or `edit` for read-only audit
+  deployments). Allow-by-default; changes apply on the next session.
+- **Built-in coding tools** — pi's seven shipped tools active out of the box:
+  `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. The agent uses typed
+  tools for filesystem search and listing instead of shelling out for every
+  directory walk.
+- **Bash tool with workbench env scrub** — the agent's `bash` calls inherit a
+  scrubbed environment (no `JWT_SECRET`, `API_KEY`, provider keys) so a stuck
+  agent can't `printenv` workbench secrets back into the transcript. Same
+  posture as the integrated terminal and the `!` exec route.
+
 ### Sessions & chat
 
 - **Streaming chat** — token-by-token rendering over SSE. Tool calls and their
@@ -81,10 +102,6 @@ details, follow the links in [Documentation](#documentation) below.
   OpenRouter) plus custom OpenAI-compatible endpoints (vLLM, LiteLLM, Ollama,
   internal gateways) via `models.json`. Per-provider API keys stored in `auth.json`,
   presence-only in the API surface (key values never sent to the browser).
-- **MCP server integration** — connect to remote MCP servers over StreamableHTTP or
-  SSE (auto-fallback). Per-project `<project>/.mcp.json` overrides global config on
-  the same name. Header status badge in the app header. Master kill-switch toggle.
-  See [`docs/mcp.md`](./docs/mcp.md).
 - **Skills with per-project overrides** — pi's skills (`.md` files) get a tri-state
   per-project toggle: enabled, disabled, or inherit-from-global. Cascade view in
   Settings shows every project's override at a glance.

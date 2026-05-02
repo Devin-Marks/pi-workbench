@@ -1065,36 +1065,33 @@ function AddOverrideDropdown({
 // ---------------- Tools tab ----------------
 
 /**
- * Per-tool enable / disable view. Two collapsible sections:
+ * Per-tool enable / disable view for pi's seven built-in tools
+ * (read / bash / edit / write / grep / find / ls). Each row is a
+ * single toggle.
  *
- *  - Built-in tools — pi's seven shipped coding tools
- *    (read / bash / edit / write / grep / find / ls). Each row is
- *    a single toggle.
- *  - MCP server tools — one collapsible per connected server,
- *    expanding to that server's tools (each toggleable). The
- *    server's master enable flag (mcp.json) lives on the MCP tab,
- *    not here — this view is per-tool only.
+ * MCP per-tool toggles live on the MCP tab as a cascade under each
+ * server — keeping them next to the server's connection status,
+ * URL, and master enable flag. Splitting the views lets each tab
+ * focus: Tools = "what coding affordances does the agent have,"
+ * MCP = "what external services is it connected to and which of
+ * their tools are exposed."
  *
  * Allow-by-default. Disabling a tool removes it from the
  * `tools: [...]` allowlist passed to the next `createAgentSession`
  * — live sessions keep the tool set they booted with (same caveat
  * as every settings change today).
- *
- * Includes the active project's MCP servers when there is one
- * (so project-scope `.mcp.json` tools show up). With no active
- * project, only global MCP servers are listed.
  */
 function ToolsTab({ onError }: { onError: (msg: string | undefined) => void }) {
-  const project = useActiveProject();
-  const projectId = project?.id;
   const [listing, setListing] = useState<ToolListing | undefined>(undefined);
   const [busy, setBusy] = useState<string | undefined>(undefined);
-  const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set());
 
   const refresh = async (): Promise<void> => {
     onError(undefined);
     try {
-      setListing(await api.listTools(projectId));
+      // No `projectId` — this view only shows builtins, which are
+      // global. The MCP tab calls `listTools(projectId)` separately
+      // for its cascade.
+      setListing(await api.listTools());
     } catch (err) {
       onError(`Failed to load tools: ${errorCode(err)}`);
     }
@@ -1103,37 +1100,24 @@ function ToolsTab({ onError }: { onError: (msg: string | undefined) => void }) {
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, []);
 
-  const toggle = async (
-    family: "builtin" | "mcp",
-    name: string,
-    nextEnabled: boolean,
-  ): Promise<void> => {
-    const key = `${family}:${name}`;
-    setBusy(key);
+  const toggle = async (name: string, nextEnabled: boolean): Promise<void> => {
+    setBusy(name);
     try {
-      await api.setToolEnabled(family, name, nextEnabled);
+      await api.setToolEnabled("builtin", name, nextEnabled);
       // Optimistic local update so the toggle feels instant — then
       // re-fetch so the canonical state is always the server's.
-      setListing((prev) => {
-        if (prev === undefined) return prev;
-        if (family === "builtin") {
-          return {
-            ...prev,
-            builtin: prev.builtin.map((t) =>
-              t.name === name ? { ...t, enabled: nextEnabled } : t,
-            ),
-          };
-        }
-        return {
-          ...prev,
-          mcp: prev.mcp.map((srv) => ({
-            ...srv,
-            tools: srv.tools.map((t) => (t.name === name ? { ...t, enabled: nextEnabled } : t)),
-          })),
-        };
-      });
+      setListing((prev) =>
+        prev === undefined
+          ? prev
+          : {
+              ...prev,
+              builtin: prev.builtin.map((t) =>
+                t.name === name ? { ...t, enabled: nextEnabled } : t,
+              ),
+            },
+      );
       void refresh();
     } catch (err) {
       onError(`Toggle failed: ${errorCode(err)}`);
@@ -1142,27 +1126,18 @@ function ToolsTab({ onError }: { onError: (msg: string | undefined) => void }) {
     }
   };
 
-  const toggleServerExpanded = (server: string): void => {
-    setExpandedServers((cur) => {
-      const next = new Set(cur);
-      if (next.has(server)) next.delete(server);
-      else next.add(server);
-      return next;
-    });
-  };
-
   if (listing === undefined) {
     return <p className="text-xs italic text-neutral-500">Loading tools…</p>;
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <p className="text-xs text-neutral-500">
-        Toggle individual tools the agent can call. Changes apply to the next session —
-        already-running sessions keep the tool set they started with.
+        Toggle individual built-in tools the agent can call. Changes apply to the next session —
+        already-running sessions keep the tool set they started with. MCP server tools live under
+        their respective server in the <strong>MCP</strong> tab.
       </p>
 
-      {/* Built-in tools */}
       <section>
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
           Built-in tools
@@ -1174,93 +1149,10 @@ function ToolsTab({ onError }: { onError: (msg: string | undefined) => void }) {
               name={t.name}
               description={t.description}
               enabled={t.enabled}
-              busy={busy === `builtin:${t.name}`}
-              onToggle={(next) => void toggle("builtin", t.name, next)}
+              busy={busy === t.name}
+              onToggle={(next) => void toggle(t.name, next)}
             />
           ))}
-        </div>
-      </section>
-
-      {/* MCP server tools */}
-      <section>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
-          MCP server tools
-        </h3>
-        {listing.mcp.length === 0 && (
-          <p className="text-xs italic text-neutral-500">
-            No MCP servers configured. Add one in the MCP tab.
-          </p>
-        )}
-        <div className="space-y-2">
-          {listing.mcp.map((srv) => {
-            const expanded = expandedServers.has(srv.server);
-            const stateClass =
-              srv.state === "connected"
-                ? "text-emerald-400"
-                : srv.state === "connecting"
-                  ? "text-amber-400"
-                  : srv.state === "error"
-                    ? "text-red-400"
-                    : "text-neutral-500";
-            return (
-              <div key={srv.server} className="rounded border border-neutral-800 bg-neutral-900/40">
-                <button
-                  type="button"
-                  onClick={() => toggleServerExpanded(srv.server)}
-                  className="flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-neutral-900"
-                >
-                  <span className="flex items-center gap-2">
-                    <span className="text-neutral-500">{expanded ? "▾" : "▸"}</span>
-                    <span className="font-mono text-neutral-200">{srv.server}</span>
-                    <span
-                      className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400"
-                      title={srv.scope === "project" ? "Project-scope server" : "Global server"}
-                    >
-                      {srv.scope}
-                    </span>
-                    <span className={`text-[10px] uppercase tracking-wider ${stateClass}`}>
-                      {srv.state}
-                    </span>
-                    {!srv.enabled && (
-                      <span
-                        className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-amber-400"
-                        title="Server master toggle is off (configure in MCP tab)"
-                      >
-                        server-disabled
-                      </span>
-                    )}
-                  </span>
-                  <span className="text-[10px] text-neutral-500">
-                    {srv.tools.length} tool{srv.tools.length === 1 ? "" : "s"}
-                  </span>
-                </button>
-                {expanded && (
-                  <div className="border-t border-neutral-800 px-3 py-2">
-                    {srv.tools.length === 0 ? (
-                      <p className="text-xs italic text-neutral-500">
-                        No tools — server hasn&apos;t reported any
-                        {srv.state === "connected" ? "" : ` (state: ${srv.state})`}.
-                      </p>
-                    ) : (
-                      <div className="space-y-1">
-                        {srv.tools.map((t) => (
-                          <ToolRow
-                            key={`mcp:${t.name}`}
-                            name={t.shortName}
-                            fqn={t.name}
-                            description={t.description}
-                            enabled={t.enabled}
-                            busy={busy === `mcp:${t.name}`}
-                            onToggle={(next) => void toggle("mcp", t.name, next)}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
         </div>
       </section>
     </div>
@@ -1584,10 +1476,42 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
   const [busy, setBusy] = useState(false);
   const [probing, setProbing] = useState<string | undefined>(undefined);
 
+  // Per-tool listing fetched alongside the server config so each
+  // server row can cascade its tools (with per-tool enable toggles).
+  // Keyed locally by `<scope>:<server>` to dodge the global-vs-
+  // project name-collision the listing already disambiguates by
+  // scope. Refreshed after every per-tool toggle so the canonical
+  // state is always the server's, with an optimistic local update
+  // for snappy UI.
+  const [toolsByServer, setToolsByServer] = useState<
+    Map<string, { name: string; shortName: string; description: string; enabled: boolean }[]>
+  >(new Map());
+  const [toolBusy, setToolBusy] = useState<string | undefined>(undefined);
+  const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set());
+
+  const refreshTools = async (): Promise<void> => {
+    try {
+      const listing = await api.listTools(project?.id);
+      const next = new Map<
+        string,
+        { name: string; shortName: string; description: string; enabled: boolean }[]
+      >();
+      for (const srv of listing.mcp) {
+        next.set(`${srv.scope}:${srv.server}`, srv.tools);
+      }
+      setToolsByServer(next);
+    } catch (err) {
+      // Tools listing is best-effort — failure shouldn't block the
+      // server config UI from rendering. Surface but don't block.
+      onError(`Failed to load tool listing: ${errorCode(err)}`);
+    }
+  };
+
   useEffect(() => {
     void refreshProject(project?.id).catch((err: unknown) => {
       onError(`Failed to load MCP config: ${errorCode(err)}`);
     });
+    void refreshTools();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id]);
 
@@ -1685,11 +1609,52 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
     try {
       await probeServerStore(name, scope === "project" ? project?.id : undefined);
       onError(undefined);
+      // After a probe the tool list may have changed (newly-connected
+      // server populates its tools). Refresh in the background.
+      void refreshTools();
     } catch (err) {
       onError(`Probe failed for '${name}': ${errorCode(err)}`);
     } finally {
       setProbing(undefined);
     }
+  };
+
+  const toggleTool = async (
+    serverKey: string,
+    fqn: string,
+    nextEnabled: boolean,
+  ): Promise<void> => {
+    setToolBusy(fqn);
+    try {
+      await api.setToolEnabled("mcp", fqn, nextEnabled);
+      // Optimistic local update for snappy UI; canonical state comes
+      // from the refresh below.
+      setToolsByServer((prev) => {
+        const next = new Map(prev);
+        const list = next.get(serverKey);
+        if (list !== undefined) {
+          next.set(
+            serverKey,
+            list.map((t) => (t.name === fqn ? { ...t, enabled: nextEnabled } : t)),
+          );
+        }
+        return next;
+      });
+      void refreshTools();
+    } catch (err) {
+      onError(`Toggle failed: ${errorCode(err)}`);
+    } finally {
+      setToolBusy(undefined);
+    }
+  };
+
+  const toggleServerExpanded = (serverKey: string): void => {
+    setExpandedServers((cur) => {
+      const next = new Set(cur);
+      if (next.has(serverKey)) next.delete(serverKey);
+      else next.add(serverKey);
+      return next;
+    });
   };
 
   if (settings === undefined) {
@@ -1736,6 +1701,11 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
         editable
         editingName={editingName ?? null}
         probingName={probing ?? null}
+        toolsByServer={toolsByServer}
+        expandedServers={expandedServers}
+        toolBusy={toolBusy ?? null}
+        onToggleExpanded={toggleServerExpanded}
+        onToggleTool={(serverKey, fqn, next) => void toggleTool(serverKey, fqn, next)}
         onToggle={(name, next) => void toggleServer(name, next)}
         onProbe={(name) => void probeServer(name, "global")}
         onEdit={startEdit}
@@ -1756,6 +1726,11 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
           servers={projectStatus.map((s) => ({ status: s, config: undefined }))}
           editable={false}
           probingName={probing ?? null}
+          toolsByServer={toolsByServer}
+          expandedServers={expandedServers}
+          toolBusy={toolBusy ?? null}
+          onToggleExpanded={toggleServerExpanded}
+          onToggleTool={(serverKey, fqn, next) => void toggleTool(serverKey, fqn, next)}
           onProbe={(name) => void probeServer(name, "project")}
         />
       )}
@@ -1789,6 +1764,13 @@ interface ServerRowEntry {
   config: McpServerConfig | undefined;
 }
 
+interface McpToolRow {
+  name: string;
+  shortName: string;
+  description: string;
+  enabled: boolean;
+}
+
 function McpServerList(props: {
   title: string;
   emptyHint: React.ReactNode;
@@ -1799,6 +1781,15 @@ function McpServerList(props: {
    *  being assigned to an optional prop typed as `string`. */
   editingName?: string | null;
   probingName?: string | null;
+  /** Per-server tool listing keyed by `<scope>:<server>` so the cascade
+   *  can disambiguate global vs project servers with the same name. */
+  toolsByServer: Map<string, McpToolRow[]>;
+  /** Same `<scope>:<server>` keys for the expand state. */
+  expandedServers: Set<string>;
+  /** FQN of the tool currently being toggled, or null if none. */
+  toolBusy?: string | null;
+  onToggleExpanded: (serverKey: string) => void;
+  onToggleTool: (serverKey: string, fqn: string, nextEnabled: boolean) => void;
   onToggle?: (name: string, enabled: boolean) => void;
   onProbe: (name: string) => void;
   onEdit?: (name: string) => void;
@@ -1817,69 +1808,111 @@ function McpServerList(props: {
             const s = entry.status;
             const isEditing = props.editingName === s.name;
             const isProbing = props.probingName === s.name;
+            const serverKey = `${s.scope}:${s.name}`;
+            const tools = props.toolsByServer.get(serverKey) ?? [];
+            const expanded = props.expandedServers.has(serverKey);
+            const canExpand = tools.length > 0;
             return (
               <div
-                key={`${s.scope}:${s.name}`}
-                className={`rounded border p-3 ${
+                key={serverKey}
+                className={`rounded border ${
                   isEditing
                     ? "border-neutral-500 bg-neutral-900"
                     : "border-neutral-800 bg-neutral-900/40"
                 }`}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <McpStateDot state={s.state} />
-                    <span className="font-mono text-sm text-neutral-100">{s.name}</span>
-                    <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400">
-                      {s.transport ?? "auto"}
-                    </span>
-                    <span className="text-[11px] text-neutral-500">{s.toolCount} tools</span>
+                <div className="p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      {/* Cascade caret — also clickable on the row body */}
+                      <button
+                        type="button"
+                        onClick={() => canExpand && props.onToggleExpanded(serverKey)}
+                        disabled={!canExpand}
+                        className="text-neutral-500 hover:text-neutral-300 disabled:opacity-30"
+                        title={
+                          canExpand
+                            ? expanded
+                              ? "Hide tools"
+                              : "Show tools"
+                            : "No tools to show (server not connected or empty)"
+                        }
+                      >
+                        {expanded ? "▾" : "▸"}
+                      </button>
+                      <McpStateDot state={s.state} />
+                      <span className="font-mono text-sm text-neutral-100">{s.name}</span>
+                      <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400">
+                        {s.transport ?? "auto"}
+                      </span>
+                      <span className="text-[11px] text-neutral-500">{s.toolCount} tools</span>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1 text-xs">
+                      {props.editable && props.onToggle !== undefined && (
+                        <button
+                          onClick={() => props.onToggle?.(s.name, !s.enabled)}
+                          className={`rounded border px-2 py-0.5 ${
+                            s.enabled
+                              ? "border-emerald-700/50 bg-emerald-900/20 text-emerald-300"
+                              : "border-neutral-700 text-neutral-400 hover:border-neutral-500"
+                          }`}
+                        >
+                          {s.enabled ? "Enabled" : "Disabled"}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => props.onProbe(s.name)}
+                        disabled={isProbing}
+                        className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-300 hover:border-neutral-500 disabled:opacity-50"
+                        title="Reconnect and refresh tool list"
+                      >
+                        {isProbing ? "Probing…" : "Probe"}
+                      </button>
+                      {props.editable && props.onEdit !== undefined && (
+                        <button
+                          onClick={() => props.onEdit?.(s.name)}
+                          className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-300 hover:border-neutral-500"
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {props.editable && props.onRemove !== undefined && (
+                        <button
+                          onClick={() => props.onRemove?.(s.name)}
+                          className="rounded border border-red-700/50 px-2 py-0.5 text-red-300 hover:bg-red-900/20"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1 text-xs">
-                    {props.editable && props.onToggle !== undefined && (
-                      <button
-                        onClick={() => props.onToggle?.(s.name, !s.enabled)}
-                        className={`rounded border px-2 py-0.5 ${
-                          s.enabled
-                            ? "border-emerald-700/50 bg-emerald-900/20 text-emerald-300"
-                            : "border-neutral-700 text-neutral-400 hover:border-neutral-500"
-                        }`}
-                      >
-                        {s.enabled ? "Enabled" : "Disabled"}
-                      </button>
-                    )}
-                    <button
-                      onClick={() => props.onProbe(s.name)}
-                      disabled={isProbing}
-                      className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-300 hover:border-neutral-500 disabled:opacity-50"
-                      title="Reconnect and refresh tool list"
-                    >
-                      {isProbing ? "Probing…" : "Probe"}
-                    </button>
-                    {props.editable && props.onEdit !== undefined && (
-                      <button
-                        onClick={() => props.onEdit?.(s.name)}
-                        className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-300 hover:border-neutral-500"
-                      >
-                        Edit
-                      </button>
-                    )}
-                    {props.editable && props.onRemove !== undefined && (
-                      <button
-                        onClick={() => props.onRemove?.(s.name)}
-                        className="rounded border border-red-700/50 px-2 py-0.5 text-red-300 hover:bg-red-900/20"
-                      >
-                        Remove
-                      </button>
-                    )}
+                  <div className="mt-1 truncate text-[11px] text-neutral-500" title={s.url}>
+                    {s.url}
                   </div>
+                  {s.lastError !== undefined && (
+                    <div className="mt-1 truncate text-[11px] text-red-300" title={s.lastError}>
+                      {s.lastError}
+                    </div>
+                  )}
                 </div>
-                <div className="mt-1 truncate text-[11px] text-neutral-500" title={s.url}>
-                  {s.url}
-                </div>
-                {s.lastError !== undefined && (
-                  <div className="mt-1 truncate text-[11px] text-red-300" title={s.lastError}>
-                    {s.lastError}
+                {expanded && canExpand && (
+                  <div className="border-t border-neutral-800 bg-neutral-950/40 px-3 py-2">
+                    <div className="mb-1 text-[10px] uppercase tracking-wider text-neutral-500">
+                      Tools
+                    </div>
+                    <div className="space-y-1">
+                      {tools.map((t) => (
+                        <ToolRow
+                          key={`mcp:${t.name}`}
+                          name={t.shortName}
+                          fqn={t.name}
+                          description={t.description}
+                          enabled={t.enabled}
+                          busy={props.toolBusy === t.name}
+                          onToggle={(next) => props.onToggleTool(serverKey, t.name, next)}
+                        />
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

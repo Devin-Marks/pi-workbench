@@ -56,22 +56,23 @@ the README for the support window policy.
   for every directory listing or content search. MCP tool names
   are unioned into the same allowlist at each call site so the
   added `tools: [...]` arg doesn't filter custom tools.
-- **Per-tool enable / disable.** New **Settings → Tools** tab
-  showing every tool the agent could see — pi's seven builtins
-  in one section, each connected MCP server's tools (with the
+- **Per-tool enable / disable.** Every tool the agent could call
+  is now toggleable individually. **Settings → Tools** lists pi's
+  seven built-ins (read, bash, edit, write, grep, find, ls) with
+  per-tool toggles. **Settings → MCP** gets a cascade under each
+  server: an expand chevron reveals that server's tools (with the
   bridged `<server>__<tool>` name + the unprefixed shortName +
-  description) in expandable per-server sections beneath. Each
-  row has a toggle. Allow-by-default; disabled names are stored
-  in `${WORKBENCH_DATA_DIR}/tool-overrides.json` (atomic write,
-  same shape as `skills-overrides.json`). Changes apply on the
-  NEXT `createAgentSession` — live sessions keep the tool set
-  they booted with. Routes: `GET /api/v1/config/tools` for the
-  unified view (with optional `?projectId=` to include project-
-  scope MCP servers), `PUT /api/v1/config/tools/:family/:name/enabled`
-  to toggle one tool by family + fully-qualified name. The
-  Tools tab stays visible in `MINIMAL_UI` mode so locked-down
-  deployments can still disable `bash` / `edit` / `write` without
-  the rest of the settings surface.
+  description), each individually toggleable. Allow-by-default;
+  disabled names are stored in
+  `${WORKBENCH_DATA_DIR}/tool-overrides.json` (atomic write, same
+  shape as `skills-overrides.json`). Changes apply on the NEXT
+  `createAgentSession` — live sessions keep the tool set they
+  booted with. Routes: `GET /api/v1/config/tools[?projectId=]` for
+  the unified view, `PUT /api/v1/config/tools/:family/:name/enabled`
+  to toggle one tool by family + fully-qualified name. The Tools
+  tab stays visible in `MINIMAL_UI` mode so locked-down deployments
+  can still disable `bash` / `edit` / `write` without the rest of
+  the settings surface.
 - **Config export / import as `.tar.gz`.** New `Settings → Backup`
   tab and matching API routes — `GET /api/v1/config/export` streams a
   flat tar with `mcp.json`, `settings.json`, and `models.json`;
