@@ -167,6 +167,15 @@ export interface ServerStatus {
   enabled: boolean;
   state: ConnectionState;
   toolCount: number;
+  /**
+   * Per-tool detail surfaced for the Settings → Tools view (and
+   * any other UI that wants to enumerate tools). Each entry's
+   * `name` is the BRIDGED name pi sees on the wire
+   * (`<server>__<tool>`); `shortName` is the unprefixed name the
+   * MCP server itself reports. Empty when the connection isn't in
+   * `connected` state — there's nothing to enumerate yet.
+   */
+  tools: { name: string; shortName: string; description: string }[];
   lastError?: string;
   /** Resolved transport — populated once a connection succeeds.
    *  Useful for UI display when the user picked `auto`. */
@@ -180,6 +189,17 @@ export function getStatus(opts?: { projectId?: string }): ServerStatus[] {
       if (opts?.projectId !== undefined && e.scope.project !== opts.projectId) continue;
       if (opts?.projectId === undefined) continue; // omit project entries from global view
     }
+    // Pair each raw `entry.tools[i]` with the bridged tool sitting
+    // at the same index — `connectEntry` builds them in lockstep, so
+    // index alignment is the load-bearing invariant. Surfacing both
+    // names lets the UI key toggles by the bridged name (which pi
+    // sees) while still showing the operator the human-friendlier
+    // unprefixed form.
+    const tools = e.tools.map((t, i) => ({
+      name: e.bridged[i]?.name ?? `${e.name}__${t.name}`,
+      shortName: t.name,
+      description: t.description,
+    }));
     const status: ServerStatus = {
       scope: e.scope === "global" ? "global" : "project",
       name: e.name,
@@ -187,6 +207,7 @@ export function getStatus(opts?: { projectId?: string }): ServerStatus[] {
       enabled: e.config.enabled !== false,
       state: e.state,
       toolCount: e.tools.length,
+      tools,
     };
     if (e.scope !== "global") status.projectId = e.scope.project;
     if (e.lastError !== undefined) status.lastError = e.lastError;

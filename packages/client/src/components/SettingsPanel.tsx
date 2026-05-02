@@ -8,13 +8,14 @@ import {
   type McpTransport,
   type ProvidersListing,
   type SkillSummary,
+  type ToolListing,
 } from "../lib/api-client";
 import { useActiveProject, useProjectStore } from "../store/project-store";
 import { useUiConfigStore } from "../store/ui-config-store";
 import { EMPTY_STATUS, useMcpStore } from "../store/mcp-store";
 import { THEME_DEFS, useThemeStore, type ThemeId } from "../lib/theme";
 
-type Tab = "providers" | "agent" | "mcp" | "skills" | "appearance" | "backup";
+type Tab = "providers" | "agent" | "mcp" | "tools" | "skills" | "appearance" | "backup";
 
 interface Props {
   onClose: () => void;
@@ -54,8 +55,12 @@ export function SettingsPanel({ onClose, initialTab }: Props) {
   const visibleTabs = useMemo<readonly Tab[]>(
     () =>
       minimal
-        ? (["skills", "appearance", "backup"] as const)
-        : (["providers", "agent", "mcp", "skills", "appearance", "backup"] as const),
+        ? // Tools stays visible in minimal — operators in locked-down
+          // deployments often want to disable bash/edit/write at the
+          // tool level, regardless of what providers / agent settings
+          // are exposed.
+          (["skills", "tools", "appearance", "backup"] as const)
+        : (["providers", "agent", "mcp", "tools", "skills", "appearance", "backup"] as const),
     [minimal],
   );
   const [tab, setTab] = useState<Tab>(initialTab ?? (minimal ? "skills" : "providers"));
@@ -102,11 +107,13 @@ export function SettingsPanel({ onClose, initialTab }: Props) {
                     ? "Agent"
                     : t === "mcp"
                       ? "MCP"
-                      : t === "skills"
-                        ? "Skills"
-                        : t === "appearance"
-                          ? "Appearance"
-                          : "Backup"}
+                      : t === "tools"
+                        ? "Tools"
+                        : t === "skills"
+                          ? "Skills"
+                          : t === "appearance"
+                            ? "Appearance"
+                            : "Backup"}
               </button>
             ))}
           </div>
@@ -129,6 +136,7 @@ export function SettingsPanel({ onClose, initialTab }: Props) {
           {tab === "providers" && <ProvidersTab onError={setError} />}
           {tab === "agent" && <AgentTab onError={setError} />}
           {tab === "mcp" && <McpTab onError={setError} />}
+          {tab === "tools" && <ToolsTab onError={setError} />}
           {tab === "skills" && <SkillsTab onError={setError} />}
           {tab === "appearance" && <AppearanceTab />}
           {tab === "backup" && <BackupTab onError={setError} />}
@@ -1049,6 +1057,262 @@ function AddOverrideDropdown({
         className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-400 hover:border-neutral-500"
       >
         Cancel
+      </button>
+    </div>
+  );
+}
+
+// ---------------- Tools tab ----------------
+
+/**
+ * Per-tool enable / disable view. Two collapsible sections:
+ *
+ *  - Built-in tools — pi's seven shipped coding tools
+ *    (read / bash / edit / write / grep / find / ls). Each row is
+ *    a single toggle.
+ *  - MCP server tools — one collapsible per connected server,
+ *    expanding to that server's tools (each toggleable). The
+ *    server's master enable flag (mcp.json) lives on the MCP tab,
+ *    not here — this view is per-tool only.
+ *
+ * Allow-by-default. Disabling a tool removes it from the
+ * `tools: [...]` allowlist passed to the next `createAgentSession`
+ * — live sessions keep the tool set they booted with (same caveat
+ * as every settings change today).
+ *
+ * Includes the active project's MCP servers when there is one
+ * (so project-scope `.mcp.json` tools show up). With no active
+ * project, only global MCP servers are listed.
+ */
+function ToolsTab({ onError }: { onError: (msg: string | undefined) => void }) {
+  const project = useActiveProject();
+  const projectId = project?.id;
+  const [listing, setListing] = useState<ToolListing | undefined>(undefined);
+  const [busy, setBusy] = useState<string | undefined>(undefined);
+  const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set());
+
+  const refresh = async (): Promise<void> => {
+    onError(undefined);
+    try {
+      setListing(await api.listTools(projectId));
+    } catch (err) {
+      onError(`Failed to load tools: ${errorCode(err)}`);
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  const toggle = async (
+    family: "builtin" | "mcp",
+    name: string,
+    nextEnabled: boolean,
+  ): Promise<void> => {
+    const key = `${family}:${name}`;
+    setBusy(key);
+    try {
+      await api.setToolEnabled(family, name, nextEnabled);
+      // Optimistic local update so the toggle feels instant — then
+      // re-fetch so the canonical state is always the server's.
+      setListing((prev) => {
+        if (prev === undefined) return prev;
+        if (family === "builtin") {
+          return {
+            ...prev,
+            builtin: prev.builtin.map((t) =>
+              t.name === name ? { ...t, enabled: nextEnabled } : t,
+            ),
+          };
+        }
+        return {
+          ...prev,
+          mcp: prev.mcp.map((srv) => ({
+            ...srv,
+            tools: srv.tools.map((t) => (t.name === name ? { ...t, enabled: nextEnabled } : t)),
+          })),
+        };
+      });
+      void refresh();
+    } catch (err) {
+      onError(`Toggle failed: ${errorCode(err)}`);
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const toggleServerExpanded = (server: string): void => {
+    setExpandedServers((cur) => {
+      const next = new Set(cur);
+      if (next.has(server)) next.delete(server);
+      else next.add(server);
+      return next;
+    });
+  };
+
+  if (listing === undefined) {
+    return <p className="text-xs italic text-neutral-500">Loading tools…</p>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="text-xs text-neutral-500">
+        Toggle individual tools the agent can call. Changes apply to the next session —
+        already-running sessions keep the tool set they started with.
+      </p>
+
+      {/* Built-in tools */}
+      <section>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+          Built-in tools
+        </h3>
+        <div className="space-y-1">
+          {listing.builtin.map((t) => (
+            <ToolRow
+              key={`builtin:${t.name}`}
+              name={t.name}
+              description={t.description}
+              enabled={t.enabled}
+              busy={busy === `builtin:${t.name}`}
+              onToggle={(next) => void toggle("builtin", t.name, next)}
+            />
+          ))}
+        </div>
+      </section>
+
+      {/* MCP server tools */}
+      <section>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+          MCP server tools
+        </h3>
+        {listing.mcp.length === 0 && (
+          <p className="text-xs italic text-neutral-500">
+            No MCP servers configured. Add one in the MCP tab.
+          </p>
+        )}
+        <div className="space-y-2">
+          {listing.mcp.map((srv) => {
+            const expanded = expandedServers.has(srv.server);
+            const stateClass =
+              srv.state === "connected"
+                ? "text-emerald-400"
+                : srv.state === "connecting"
+                  ? "text-amber-400"
+                  : srv.state === "error"
+                    ? "text-red-400"
+                    : "text-neutral-500";
+            return (
+              <div key={srv.server} className="rounded border border-neutral-800 bg-neutral-900/40">
+                <button
+                  type="button"
+                  onClick={() => toggleServerExpanded(srv.server)}
+                  className="flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-neutral-900"
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="text-neutral-500">{expanded ? "▾" : "▸"}</span>
+                    <span className="font-mono text-neutral-200">{srv.server}</span>
+                    <span
+                      className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400"
+                      title={srv.scope === "project" ? "Project-scope server" : "Global server"}
+                    >
+                      {srv.scope}
+                    </span>
+                    <span className={`text-[10px] uppercase tracking-wider ${stateClass}`}>
+                      {srv.state}
+                    </span>
+                    {!srv.enabled && (
+                      <span
+                        className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-amber-400"
+                        title="Server master toggle is off (configure in MCP tab)"
+                      >
+                        server-disabled
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-[10px] text-neutral-500">
+                    {srv.tools.length} tool{srv.tools.length === 1 ? "" : "s"}
+                  </span>
+                </button>
+                {expanded && (
+                  <div className="border-t border-neutral-800 px-3 py-2">
+                    {srv.tools.length === 0 ? (
+                      <p className="text-xs italic text-neutral-500">
+                        No tools — server hasn&apos;t reported any
+                        {srv.state === "connected" ? "" : ` (state: ${srv.state})`}.
+                      </p>
+                    ) : (
+                      <div className="space-y-1">
+                        {srv.tools.map((t) => (
+                          <ToolRow
+                            key={`mcp:${t.name}`}
+                            name={t.shortName}
+                            fqn={t.name}
+                            description={t.description}
+                            enabled={t.enabled}
+                            busy={busy === `mcp:${t.name}`}
+                            onToggle={(next) => void toggle("mcp", t.name, next)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ToolRow({
+  name,
+  fqn,
+  description,
+  enabled,
+  busy,
+  onToggle,
+}: {
+  name: string;
+  /** Optional fully-qualified name, displayed as a small subtitle when present. */
+  fqn?: string;
+  description: string;
+  enabled: boolean;
+  busy: boolean;
+  onToggle: (next: boolean) => void;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 rounded px-2 py-1.5 hover:bg-neutral-900/60">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          <span className="font-mono text-xs text-neutral-200">{name}</span>
+          {fqn !== undefined && fqn !== name && (
+            <span
+              className="font-mono text-[10px] text-neutral-500"
+              title="Bridged tool name pi sees on the wire"
+            >
+              {fqn}
+            </span>
+          )}
+        </div>
+        {description.length > 0 && (
+          <p className="mt-0.5 text-[11px] text-neutral-500">{description}</p>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={() => onToggle(!enabled)}
+        disabled={busy}
+        className={`shrink-0 rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider transition-colors disabled:opacity-50 ${
+          enabled
+            ? "border-emerald-700 bg-emerald-900/20 text-emerald-300 hover:bg-emerald-900/40"
+            : "border-neutral-700 bg-neutral-800 text-neutral-400 hover:bg-neutral-700"
+        }`}
+        title={enabled ? "Click to disable" : "Click to enable"}
+      >
+        {enabled ? "on" : "off"}
       </button>
     </div>
   );

@@ -161,6 +161,35 @@ export interface SkillOverridesResponse {
   projects: Record<string, { enable: string[]; disable: string[] }>;
 }
 
+/**
+ * Unified tool listing returned by `GET /api/v1/config/tools`.
+ * Two families:
+ *   - `builtin` — pi's seven shipped coding tools (read, bash, edit,
+ *     write, grep, find, ls). Names are bare.
+ *   - `mcp` — one entry per connected MCP server, each with the tools
+ *     it exposes. The tool `name` is the bridged form pi sees on the
+ *     wire (`<server>__<tool>`); `shortName` is the unprefixed name
+ *     the MCP server itself reports.
+ *
+ * `enabled` reflects the workbench-private overrides file
+ * (`tool-overrides.json`), allow-by-default. The agent's actual
+ * active set on the next session is `enabled === true` for every
+ * row here, intersected with the SDK's standard activation rules.
+ */
+export interface ToolListing {
+  builtin: { name: string; description: string; enabled: boolean }[];
+  mcp: {
+    server: string;
+    scope: "global" | "project";
+    projectId?: string;
+    /** The MCP server's own master enable flag (from mcp.json). */
+    enabled: boolean;
+    state: McpConnectionState;
+    lastError?: string;
+    tools: { name: string; shortName: string; description: string; enabled: boolean }[];
+  }[];
+}
+
 export interface ProviderModelEntry {
   id: string;
   name: string;

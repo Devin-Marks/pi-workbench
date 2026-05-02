@@ -13,6 +13,8 @@ import { config } from "./config.js";
 import { makeDedupe, makeLock } from "./concurrency.js";
 import { effectiveSkillsForProject } from "./config-manager.js";
 import { readProjects } from "./project-manager.js";
+import { filterEnabledTools, readToolOverrides } from "./tool-overrides.js";
+import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import {
   customToolsForProject as mcpCustomToolsForProject,
   ensureProjectLoaded as mcpEnsureProjectLoaded,
@@ -133,7 +135,7 @@ const registry = new Map<string, LiveSession>();
  * through. Without that union, enabling the read-only set would
  * silently disable MCP.
  */
-const BUILTIN_TOOL_NAMES: readonly string[] = [
+export const BUILTIN_TOOL_NAMES: readonly string[] = [
   "read",
   "bash",
   "edit",
@@ -142,6 +144,28 @@ const BUILTIN_TOOL_NAMES: readonly string[] = [
   "find",
   "ls",
 ];
+
+/**
+ * Build the `tools` allowlist passed to `createAgentSession` for this
+ * session, applying any per-tool overrides from
+ * `${WORKBENCH_DATA_DIR}/tool-overrides.json`. The overrides file is
+ * allow-by-default — a tool is enabled unless its name appears in
+ * the disabled set for its family ("builtin" or "mcp").
+ *
+ * The overrides file is read FRESH per session create (not cached)
+ * so toggling a tool in Settings → Tools takes effect on the next
+ * new session without a server restart. Live sessions keep the tool
+ * list they were created with — same caveat as every settings
+ * change today.
+ */
+async function buildToolsAllowlist(customTools: readonly ToolDefinition[]): Promise<string[]> {
+  const overrides = await readToolOverrides();
+  const candidates = [
+    ...BUILTIN_TOOL_NAMES.map((name) => ({ family: "builtin" as const, name })),
+    ...customTools.map((t) => ({ family: "mcp" as const, name: t.name })),
+  ];
+  return filterEnabledTools(overrides, candidates);
+}
 
 /** Match the project-manager UUID shape; defends against ad-hoc project IDs. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -352,7 +376,7 @@ export async function createSession(
     resourceLoader,
     agentDir: config.piConfigDir,
     customTools,
-    tools: [...BUILTIN_TOOL_NAMES, ...customTools.map((t) => t.name)],
+    tools: await buildToolsAllowlist(customTools),
   });
 
   const now = new Date();
@@ -504,7 +528,7 @@ export async function resumeSession(
       resourceLoader,
       agentDir: config.piConfigDir,
       customTools,
-      tools: [...BUILTIN_TOOL_NAMES, ...customTools.map((t) => t.name)],
+      tools: await buildToolsAllowlist(customTools),
     });
 
     const now = new Date();
@@ -877,7 +901,7 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
     resourceLoader,
     agentDir: config.piConfigDir,
     customTools,
-    tools: [...BUILTIN_TOOL_NAMES, ...customTools.map((t) => t.name)],
+    tools: await buildToolsAllowlist(customTools),
   });
 
   const now = new Date();
@@ -926,7 +950,7 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
         resourceLoader: restoredResourceLoader,
         agentDir: config.piConfigDir,
         customTools: restoredCustomTools,
-        tools: [...BUILTIN_TOOL_NAMES, ...restoredCustomTools.map((t) => t.name)],
+        tools: await buildToolsAllowlist(restoredCustomTools),
       });
       // Mutate the existing LiveSession in place rather than
       // replacing the registry entry — any SSE client holding a

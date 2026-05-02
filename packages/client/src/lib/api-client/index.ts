@@ -19,6 +19,7 @@ import {
   type UnifiedSession,
   type SessionSummary,
   type SkillSummary,
+  type ToolListing,
   type ProvidersListing,
   type AuthSummary,
   type FileTreeNode,
@@ -1173,6 +1174,54 @@ export const api = {
       `/api/v1/config/skills/${encodeURIComponent(name)}/enabled?projectId=${encodeURIComponent(projectId)}`,
       vSkillsList,
       { method: "DELETE" },
+    ),
+
+  // ---------------- per-tool overrides ----------------
+  /**
+   * Unified tool listing — pi's seven builtins + every connected MCP
+   * server's tools, each with an `enabled` flag reflecting the
+   * workbench-private overrides file. Optional `?projectId=` includes
+   * project-scope MCP servers.
+   *
+   * The server normalizes the response shape; we only sanity-check
+   * the top-level keys so a future field addition doesn't break this
+   * client (the new field just gets ignored at the validation
+   * boundary).
+   */
+  listTools: (projectId?: string): Promise<ToolListing> => {
+    const qs =
+      projectId !== undefined && projectId.length > 0
+        ? `?projectId=${encodeURIComponent(projectId)}`
+        : "";
+    return request(`/api/v1/config/tools${qs}`, (v) => {
+      if (!isObject(v) || !Array.isArray(v.builtin) || !Array.isArray(v.mcp)) {
+        throw new ApiError(0, "invalid_response_body");
+      }
+      return v as unknown as ToolListing;
+    });
+  },
+
+  /**
+   * Toggle a single tool. `family` is "builtin" (pi's shipped tools
+   * — bash, read, etc.) or "mcp" (bridged tool name
+   * `<server>__<tool>`). `enabled: false` adds it to the disabled
+   * set; `enabled: true` removes it (allow-by-default semantics).
+   */
+  setToolEnabled: (family: "builtin" | "mcp", name: string, enabled: boolean) =>
+    request(
+      `/api/v1/config/tools/${family}/${encodeURIComponent(name)}/enabled`,
+      (v) => {
+        if (
+          !isObject(v) ||
+          typeof v.family !== "string" ||
+          typeof v.name !== "string" ||
+          typeof v.enabled !== "boolean"
+        ) {
+          throw new ApiError(0, "invalid_response_body");
+        }
+        return { family: v.family, name: v.name, enabled: v.enabled };
+      },
+      { method: "PUT", body: { enabled } },
     ),
 
   // ---------------- config export / import ----------------

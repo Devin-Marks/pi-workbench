@@ -16,6 +16,12 @@ import {
   type ModelsJson,
 } from "../config-manager.js";
 import { buildExportTar, importConfigFromBuffer, MAX_IMPORT_BYTES } from "../config-export.js";
+import {
+  ensureProjectLoaded as mcpEnsureProjectLoaded,
+  getStatus as mcpGetStatus,
+} from "../mcp/manager.js";
+import { BUILTIN_TOOL_NAMES } from "../session-registry.js";
+import { readToolOverrides, setToolEnabled, type ToolFamily } from "../tool-overrides.js";
 import { getProject } from "../project-manager.js";
 import { errorSchema } from "./_schemas.js";
 
@@ -666,4 +672,218 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
       }
     },
   );
+
+  // ---------------------- per-tool overrides ----------------------
+  // Surface the unified tool view (builtins + per-MCP-server tools)
+  // and a single toggle endpoint. The agent-side filter that applies
+  // these overrides lives in `session-registry.buildToolsAllowlist`
+  // and runs at every `createAgentSession` site — see that function
+  // for the runtime semantics. This route pair is just the operator
+  // interface.
+  fastify.get<{ Querystring: { projectId?: string } }>(
+    "/config/tools",
+    {
+      schema: {
+        description:
+          "List every tool the agent could see, with its current " +
+          "enable/disable state. Two families: `builtin` (pi's seven " +
+          "shipped coding tools — read, bash, edit, write, grep, " +
+          "find, ls) and `mcp` (one entry per connected MCP server, " +
+          "each with its tool list). When `?projectId=` is provided, " +
+          "project-scoped MCP servers are included alongside global " +
+          "ones; the project-scope server-name shadowing rule from " +
+          "`mcp/manager.customToolsForProject` applies. Tool changes " +
+          "apply on the NEXT session created — live sessions keep " +
+          "the tool set they booted with.",
+        tags: ["config"],
+        querystring: {
+          type: "object",
+          properties: { projectId: { type: "string" } },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["builtin", "mcp"],
+            properties: {
+              builtin: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["name", "description", "enabled"],
+                  properties: {
+                    name: { type: "string" },
+                    description: { type: "string" },
+                    enabled: { type: "boolean" },
+                  },
+                },
+              },
+              mcp: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["server", "scope", "enabled", "state", "tools"],
+                  properties: {
+                    server: { type: "string" },
+                    scope: { type: "string", enum: ["global", "project"] },
+                    projectId: { type: "string" },
+                    enabled: { type: "boolean" },
+                    state: { type: "string" },
+                    lastError: { type: "string" },
+                    tools: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        required: ["name", "shortName", "description", "enabled"],
+                        properties: {
+                          name: { type: "string" },
+                          shortName: { type: "string" },
+                          description: { type: "string" },
+                          enabled: { type: "boolean" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      try {
+        const overrides = await readToolOverrides();
+        const builtinDisabled = new Set(overrides.builtin);
+        const mcpDisabled = new Set(overrides.mcp);
+
+        // Project-scope MCP servers are loaded lazily; trigger a load
+        // before reading status so a fresh-after-restart UI fetch
+        // doesn't show an empty MCP list for a previously-configured
+        // project. Best-effort — load failures shouldn't 500 the
+        // whole tool listing.
+        if (typeof req.query.projectId === "string" && req.query.projectId.length > 0) {
+          const project = await getProject(req.query.projectId);
+          if (project !== undefined) {
+            await mcpEnsureProjectLoaded(project.id, project.path).catch(() => undefined);
+          }
+        }
+
+        const mcpServers = mcpGetStatus(
+          typeof req.query.projectId === "string" ? { projectId: req.query.projectId } : undefined,
+        );
+
+        return {
+          builtin: BUILTIN_TOOL_NAMES.map((name) => ({
+            name,
+            description: BUILTIN_TOOL_DESCRIPTIONS[name] ?? "",
+            enabled: !builtinDisabled.has(name),
+          })),
+          mcp: mcpServers.map((s) => {
+            const out: {
+              server: string;
+              scope: "global" | "project";
+              projectId?: string;
+              enabled: boolean;
+              state: string;
+              lastError?: string;
+              tools: { name: string; shortName: string; description: string; enabled: boolean }[];
+            } = {
+              server: s.name,
+              scope: s.scope,
+              enabled: s.enabled,
+              state: s.state,
+              tools: s.tools.map((t) => ({
+                name: t.name,
+                shortName: t.shortName,
+                description: t.description,
+                enabled: !mcpDisabled.has(t.name),
+              })),
+            };
+            if (s.projectId !== undefined) out.projectId = s.projectId;
+            if (s.lastError !== undefined) out.lastError = s.lastError;
+            return out;
+          }),
+        };
+      } catch (err) {
+        return internalError(reply, err);
+      }
+    },
+  );
+
+  fastify.put<{
+    Params: { family: ToolFamily; name: string };
+    Body: { enabled: boolean };
+  }>(
+    "/config/tools/:family/:name/enabled",
+    {
+      schema: {
+        description:
+          "Toggle a single tool by family + name. Family is `builtin` " +
+          "(short bare name like `bash`) or `mcp` (bridged name like " +
+          "`<server>__<tool>` — same name pi sees on the wire). " +
+          "Allow-by-default — `enabled: false` adds the name to the " +
+          "disabled set; `enabled: true` removes it (returning to the " +
+          "implicit-enabled default). Idempotent. Applies on the NEXT " +
+          "session created; live sessions are unaffected.",
+        tags: ["config"],
+        params: {
+          type: "object",
+          required: ["family", "name"],
+          properties: {
+            family: { type: "string", enum: ["builtin", "mcp"] },
+            name: { type: "string", minLength: 1 },
+          },
+        },
+        body: {
+          type: "object",
+          required: ["enabled"],
+          additionalProperties: false,
+          properties: { enabled: { type: "boolean" } },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["family", "name", "enabled"],
+            properties: {
+              family: { type: "string" },
+              name: { type: "string" },
+              enabled: { type: "boolean" },
+            },
+          },
+          400: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      try {
+        await setToolEnabled(req.params.family, req.params.name, req.body.enabled);
+        return {
+          family: req.params.family,
+          name: req.params.name,
+          enabled: req.body.enabled,
+        };
+      } catch (err) {
+        return internalError(reply, err);
+      }
+    },
+  );
+};
+
+/**
+ * One-line user-facing description per built-in tool. Kept here
+ * (not in pi's SDK metadata) because we want operator-friendly
+ * copy that explains the tool's PURPOSE for an audit-style view,
+ * not the LLM-facing prompt snippet the SDK ships. Update if pi
+ * adds new builtins to `ToolName`.
+ */
+const BUILTIN_TOOL_DESCRIPTIONS: Record<string, string> = {
+  read: "Read file contents from the project tree.",
+  bash: "Run shell commands in the project directory.",
+  edit: "Apply a search/replace edit to a file (produces a unified diff).",
+  write: "Create or overwrite a file with new content.",
+  grep: "Search file contents with a regex (ripgrep-backed).",
+  find: "Find files by path glob.",
+  ls: "List directory entries.",
 };
