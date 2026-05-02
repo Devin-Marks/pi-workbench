@@ -147,24 +147,28 @@ export const BUILTIN_TOOL_NAMES: readonly string[] = [
 
 /**
  * Build the `tools` allowlist passed to `createAgentSession` for this
- * session, applying any per-tool overrides from
- * `${WORKBENCH_DATA_DIR}/tool-overrides.json`. The overrides file is
- * allow-by-default — a tool is enabled unless its name appears in
- * the disabled set for its family ("builtin" or "mcp").
+ * session, applying both global and per-project overrides from
+ * `${WORKBENCH_DATA_DIR}/tool-overrides.json`. Allow-by-default: a
+ * tool is enabled unless either the global disabled set OR the
+ * project's tri-state override says otherwise (project explicit
+ * enable / disable wins; absent = inherit global).
  *
  * The overrides file is read FRESH per session create (not cached)
- * so toggling a tool in Settings → Tools takes effect on the next
- * new session without a server restart. Live sessions keep the tool
+ * so toggling a tool in Settings takes effect on the next new
+ * session without a server restart. Live sessions keep the tool
  * list they were created with — same caveat as every settings
  * change today.
  */
-async function buildToolsAllowlist(customTools: readonly ToolDefinition[]): Promise<string[]> {
+async function buildToolsAllowlist(
+  customTools: readonly ToolDefinition[],
+  projectId: string,
+): Promise<string[]> {
   const overrides = await readToolOverrides();
   const candidates = [
     ...BUILTIN_TOOL_NAMES.map((name) => ({ family: "builtin" as const, name })),
     ...customTools.map((t) => ({ family: "mcp" as const, name: t.name })),
   ];
-  return filterEnabledTools(overrides, candidates);
+  return filterEnabledTools(overrides, projectId, candidates);
 }
 
 /** Match the project-manager UUID shape; defends against ad-hoc project IDs. */
@@ -376,7 +380,7 @@ export async function createSession(
     resourceLoader,
     agentDir: config.piConfigDir,
     customTools,
-    tools: await buildToolsAllowlist(customTools),
+    tools: await buildToolsAllowlist(customTools, projectId),
   });
 
   const now = new Date();
@@ -528,7 +532,7 @@ export async function resumeSession(
       resourceLoader,
       agentDir: config.piConfigDir,
       customTools,
-      tools: await buildToolsAllowlist(customTools),
+      tools: await buildToolsAllowlist(customTools, projectId),
     });
 
     const now = new Date();
@@ -901,7 +905,7 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
     resourceLoader,
     agentDir: config.piConfigDir,
     customTools,
-    tools: await buildToolsAllowlist(customTools),
+    tools: await buildToolsAllowlist(customTools, source.projectId),
   });
 
   const now = new Date();
@@ -950,7 +954,7 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
         resourceLoader: restoredResourceLoader,
         agentDir: config.piConfigDir,
         customTools: restoredCustomTools,
-        tools: await buildToolsAllowlist(restoredCustomTools),
+        tools: await buildToolsAllowlist(restoredCustomTools, source.projectId),
       });
       // Mutate the existing LiveSession in place rather than
       // replacing the registry entry — any SSE client holding a

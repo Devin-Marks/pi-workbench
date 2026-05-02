@@ -56,23 +56,38 @@ the README for the support window policy.
   for every directory listing or content search. MCP tool names
   are unioned into the same allowlist at each call site so the
   added `tools: [...]` arg doesn't filter custom tools.
-- **Per-tool enable / disable.** Every tool the agent could call
-  is now toggleable individually. **Settings → Tools** lists pi's
-  seven built-ins (read, bash, edit, write, grep, find, ls) with
-  per-tool toggles. **Settings → MCP** gets a cascade under each
-  server: an expand chevron reveals that server's tools (with the
-  bridged `<server>__<tool>` name + the unprefixed shortName +
-  description), each individually toggleable. Allow-by-default;
-  disabled names are stored in
+- **Per-tool enable / disable, with per-project overrides.** Every
+  tool the agent could call is now toggleable individually.
+  **Settings → Tools** lists pi's seven built-ins (read, bash, edit,
+  write, grep, find, ls). **Settings → MCP** gets a cascade under
+  each server: an expand chevron reveals that server's tools (with
+  the bridged `<server>__<tool>` name + the unprefixed shortName +
+  description). Every row carries a `Global: enabled/disabled`
+  toggle plus an `▸ Overrides (N)` expand button that opens an
+  inline cascade — each project that already overrides this tool
+  shows a tri-state Inherit / Enabled / Disabled picker, and an
+  `+ Add override for…` dropdown lets you add or change overrides
+  for any other project from the same screen (no need to switch
+  active projects). Same UX as the Skills tab. Project overrides
+  win over the global default in both directions (project enable
+  beats global disable; project disable beats global enable);
+  absence inherits global. Allow-by-default; global disables and
+  per-project overrides are stored in
   `${WORKBENCH_DATA_DIR}/tool-overrides.json` (atomic write, same
   shape as `skills-overrides.json`). Changes apply on the NEXT
   `createAgentSession` — live sessions keep the tool set they
   booted with. Routes: `GET /api/v1/config/tools[?projectId=]` for
-  the unified view, `PUT /api/v1/config/tools/:family/:name/enabled`
-  to toggle one tool by family + fully-qualified name. The Tools
-  tab stays visible in `MINIMAL_UI` mode so locked-down deployments
-  can still disable `bash` / `edit` / `write` without the rest of
-  the settings surface.
+  the unified view (response per row carries `enabled`,
+  `globalEnabled`, and the optional `projectOverride`),
+  `GET /api/v1/config/tools/overrides` for the cascade across every
+  project (mirrors the skills cascade endpoint),
+  `PUT /api/v1/config/tools/:family/:name/enabled` toggles either
+  scope (`scope: "global"` default, or `scope: "project"` with
+  `?projectId=`), and `DELETE` on the same path with `?projectId=`
+  clears a per-project override (idempotent). The Tools tab stays
+  visible in `MINIMAL_UI` mode so locked-down deployments can still
+  disable `bash` / `edit` / `write` without the rest of the
+  settings surface.
 - **Config export / import as `.tar.gz`.** New `Settings → Backup`
   tab and matching API routes — `GET /api/v1/config/export` streams a
   flat tar with `mcp.json`, `settings.json`, and `models.json`;

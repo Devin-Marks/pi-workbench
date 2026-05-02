@@ -19,6 +19,18 @@
  *   - On-disk file shape — the override file at
  *     ${WORKBENCH_DATA_DIR}/tool-overrides.json contains the
  *     disabled name and nothing else.
+ *   - Per-project overrides:
+ *       - PUT with scope=project + projectId writes to the project
+ *         section; GET ?projectId= echoes `projectOverride` +
+ *         `globalEnabled`; effective `enabled` reflects the override.
+ *       - Project enable beats global disable, and vice versa.
+ *       - DELETE clears the override; GET reverts to inheriting the
+ *         global state.
+ *       - PUT scope=project without projectId → 400.
+ *       - PUT scope=project with unknown projectId → 404.
+ *   - Cascade view at GET /config/tools/overrides — returns every
+ *     project's per-family overrides; cleared overrides are absent;
+ *     global-only disables don't bleed into the project section.
  */
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -234,6 +246,231 @@ async function main(): Promise<void> {
         "  tool-overrides.json contains 'myserver__add' in mcp",
         onDisk.mcp.includes("myserver__add"),
         JSON.stringify(onDisk),
+      );
+    }
+
+    // ---- 8. Per-project overrides ----
+    //
+    // Need a real project so the route's existence check passes.
+    // Create one rooted in our temp workspace.
+    const projectDir = join(workspacePath, "alpha");
+    await mkdir(projectDir, { recursive: true });
+    const projCreate = await jsend(base, "POST", "/api/v1/projects", {
+      name: "alpha",
+      path: projectDir,
+    });
+    if (projCreate.status !== 201) {
+      throw new Error(
+        `project create failed: ${projCreate.status} ${JSON.stringify(projCreate.body)}`,
+      );
+    }
+    const projectId = (projCreate.body as { id: string }).id;
+
+    {
+      // Project explicitly disables `read` even though global is enabled.
+      const r = await jsend(
+        base,
+        "PUT",
+        `/api/v1/config/tools/builtin/read/enabled?projectId=${encodeURIComponent(projectId)}`,
+        { enabled: false, scope: "project" },
+      );
+      assert("PUT scope=project disable → 200", r.status === 200, JSON.stringify(r.body));
+      const body = r.body as {
+        family: string;
+        name: string;
+        enabled: boolean;
+        scope: string;
+        projectId?: string;
+      };
+      assert(
+        "  response echoes scope=project + projectId",
+        body.scope === "project" && body.projectId === projectId,
+        JSON.stringify(body),
+      );
+
+      // GET with the projectId echoes the override + the project's
+      // effective state (disabled), and globalEnabled stays true.
+      const list = await jget(
+        base,
+        `/api/v1/config/tools?projectId=${encodeURIComponent(projectId)}`,
+      );
+      const read = (
+        list.body as {
+          builtin: {
+            name: string;
+            enabled: boolean;
+            globalEnabled: boolean;
+            projectOverride?: string;
+          }[];
+        }
+      ).builtin.find((b) => b.name === "read");
+      assert(
+        "  GET ?projectId= reflects effective=false, override=disabled, global=true",
+        read?.enabled === false &&
+          read?.projectOverride === "disabled" &&
+          read?.globalEnabled === true,
+        JSON.stringify(read),
+      );
+
+      // GET WITHOUT projectId still shows global (read enabled, no override).
+      const listGlobal = await jget(base, "/api/v1/config/tools");
+      const readGlobal = (
+        listGlobal.body as {
+          builtin: { name: string; enabled: boolean; projectOverride?: string }[];
+        }
+      ).builtin.find((b) => b.name === "read");
+      assert(
+        "  GET (no projectId) ignores project overrides",
+        readGlobal?.enabled === true && readGlobal?.projectOverride === undefined,
+        JSON.stringify(readGlobal),
+      );
+
+      // On-disk file: projects[projectId].builtin.disable contains "read".
+      const onDisk = JSON.parse(await readFile(overridesPath, "utf8")) as {
+        projects?: Record<string, { builtin?: { enable?: string[]; disable?: string[] } }>;
+      };
+      assert(
+        "  tool-overrides.json: projects[id].builtin.disable contains 'read'",
+        onDisk.projects?.[projectId]?.builtin?.disable?.includes("read") === true,
+        JSON.stringify(onDisk),
+      );
+    }
+
+    {
+      // Disable `find` GLOBALLY, then explicitly enable in the project.
+      // Verifies project enable beats global disable.
+      await jsend(base, "PUT", "/api/v1/config/tools/builtin/find/enabled", { enabled: false });
+      const r = await jsend(
+        base,
+        "PUT",
+        `/api/v1/config/tools/builtin/find/enabled?projectId=${encodeURIComponent(projectId)}`,
+        { enabled: true, scope: "project" },
+      );
+      assert("PUT scope=project enable over global-disable → 200", r.status === 200);
+
+      const list = await jget(
+        base,
+        `/api/v1/config/tools?projectId=${encodeURIComponent(projectId)}`,
+      );
+      const find = (
+        list.body as {
+          builtin: {
+            name: string;
+            enabled: boolean;
+            globalEnabled: boolean;
+            projectOverride?: string;
+          }[];
+        }
+      ).builtin.find((b) => b.name === "find");
+      assert(
+        "  project enable wins: effective=true, global=false, override=enabled",
+        find?.enabled === true &&
+          find?.globalEnabled === false &&
+          find?.projectOverride === "enabled",
+        JSON.stringify(find),
+      );
+    }
+
+    {
+      // DELETE the per-project override on `read` — should revert to
+      // global (enabled).
+      const r = await jsend(
+        base,
+        "DELETE",
+        `/api/v1/config/tools/builtin/read/enabled?projectId=${encodeURIComponent(projectId)}`,
+      );
+      assert("DELETE per-project override → 200", r.status === 200, JSON.stringify(r.body));
+
+      const list = await jget(
+        base,
+        `/api/v1/config/tools?projectId=${encodeURIComponent(projectId)}`,
+      );
+      const read = (
+        list.body as {
+          builtin: {
+            name: string;
+            enabled: boolean;
+            projectOverride?: string;
+          }[];
+        }
+      ).builtin.find((b) => b.name === "read");
+      assert(
+        "  GET shows override cleared, inherits global enabled",
+        read?.enabled === true && read?.projectOverride === undefined,
+        JSON.stringify(read),
+      );
+
+      // Idempotent — second DELETE still 200.
+      const r2 = await jsend(
+        base,
+        "DELETE",
+        `/api/v1/config/tools/builtin/read/enabled?projectId=${encodeURIComponent(projectId)}`,
+      );
+      assert("DELETE is idempotent → 200", r2.status === 200, JSON.stringify(r2.body));
+    }
+
+    {
+      // PUT scope=project without projectId → 400.
+      const r = await jsend(base, "PUT", "/api/v1/config/tools/builtin/bash/enabled", {
+        enabled: false,
+        scope: "project",
+      });
+      assert(
+        "PUT scope=project without projectId → 400",
+        r.status === 400,
+        `status=${r.status} body=${JSON.stringify(r.body)}`,
+      );
+    }
+
+    {
+      // PUT scope=project with unknown projectId → 404.
+      const r = await jsend(
+        base,
+        "PUT",
+        "/api/v1/config/tools/builtin/bash/enabled?projectId=does-not-exist",
+        { enabled: false, scope: "project" },
+      );
+      assert(
+        "PUT scope=project with unknown projectId → 404",
+        r.status === 404,
+        `status=${r.status} body=${JSON.stringify(r.body)}`,
+      );
+    }
+
+    {
+      // GET /config/tools/overrides — cascade view used by the
+      // Settings UI's "+ Add override for…" picker. Should reflect
+      // both the project's outstanding `find` enable (set above) AND
+      // the previously-set MCP `myserver__add` global disable
+      // shouldn't appear (it's global, not per-project). Project
+      // `read` was DELETEd, so it shouldn't appear either.
+      const r = await jget(base, "/api/v1/config/tools/overrides");
+      assert("GET /config/tools/overrides → 200", r.status === 200);
+      const body = r.body as {
+        projects: Record<
+          string,
+          {
+            builtin: { enable: string[]; disable: string[] };
+            mcp: { enable: string[]; disable: string[] };
+          }
+        >;
+      };
+      const proj = body.projects[projectId];
+      assert("  cascade contains the project entry", proj !== undefined, JSON.stringify(body));
+      assert(
+        "  cascade.builtin.enable contains 'find'",
+        proj?.builtin.enable.includes("find") === true,
+        JSON.stringify(proj),
+      );
+      assert(
+        "  cascade.builtin.disable does NOT contain 'read' (cleared)",
+        proj?.builtin.disable.includes("read") === false,
+        JSON.stringify(proj),
+      );
+      assert(
+        "  cascade.mcp.disable does NOT include the global mcp disable",
+        proj?.mcp.disable.includes("myserver__add") === false,
+        JSON.stringify(proj),
       );
     }
   } finally {

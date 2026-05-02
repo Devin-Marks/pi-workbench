@@ -171,13 +171,26 @@ export interface SkillOverridesResponse {
  *     wire (`<server>__<tool>`); `shortName` is the unprefixed name
  *     the MCP server itself reports.
  *
- * `enabled` reflects the workbench-private overrides file
- * (`tool-overrides.json`), allow-by-default. The agent's actual
- * active set on the next session is `enabled === true` for every
- * row here, intersected with the SDK's standard activation rules.
+ * Per-tool fields:
+ *   - `enabled` is the EFFECTIVE state for the active project (or
+ *     global state when no `projectId` was passed in the query).
+ *   - `globalEnabled` is the underlying global state regardless of
+ *     any project override — surfaces the "Global: enabled" label
+ *     in the UI alongside the per-project tri-state.
+ *   - `projectOverride` is the active project's tri-state position:
+ *     `"enabled"` (project explicitly enables), `"disabled"`
+ *     (project explicitly disables), or absent (inherit global).
+ *     Only present when the request included `?projectId=`.
  */
+export interface ToolListingItem {
+  name: string;
+  description: string;
+  enabled: boolean;
+  globalEnabled: boolean;
+  projectOverride?: "enabled" | "disabled";
+}
 export interface ToolListing {
-  builtin: { name: string; description: string; enabled: boolean }[];
+  builtin: ToolListingItem[];
   mcp: {
     server: string;
     scope: "global" | "project";
@@ -186,8 +199,25 @@ export interface ToolListing {
     enabled: boolean;
     state: McpConnectionState;
     lastError?: string;
-    tools: { name: string; shortName: string; description: string; enabled: boolean }[];
+    tools: (ToolListingItem & { shortName: string })[];
   }[];
+}
+
+/**
+ * Cascade view returned by `GET /api/v1/config/tools/overrides`.
+ * Maps projectId → that project's per-family explicit overrides.
+ * Same shape as `SkillOverridesResponse` but split per family.
+ * Mostly consumed by the Settings UI's per-tool expand-and-show-
+ * all-projects affordance.
+ */
+export interface ToolOverridesResponse {
+  projects: Record<
+    string,
+    {
+      builtin: { enable: string[]; disable: string[] };
+      mcp: { enable: string[]; disable: string[] };
+    }
+  >;
 }
 
 export interface ProviderModelEntry {

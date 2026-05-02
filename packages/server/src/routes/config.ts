@@ -21,7 +21,16 @@ import {
   getStatus as mcpGetStatus,
 } from "../mcp/manager.js";
 import { BUILTIN_TOOL_NAMES } from "../session-registry.js";
-import { readToolOverrides, setToolEnabled, type ToolFamily } from "../tool-overrides.js";
+import {
+  getAllToolOverrides,
+  getProjectToolState,
+  isToolEffective,
+  readToolOverrides,
+  setProjectToolOverride,
+  setToolEnabled,
+  type ToolFamily,
+  type ToolOverrideState,
+} from "../tool-overrides.js";
 import { getProject } from "../project-manager.js";
 import { errorSchema } from "./_schemas.js";
 
@@ -680,6 +689,66 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
   // and runs at every `createAgentSession` site — see that function
   // for the runtime semantics. This route pair is just the operator
   // interface.
+  // Cascade view: every per-project tool override across every
+  // project, used by the Tools/MCP tabs' "+ Add override for…"
+  // affordance. Mirrors the skills cascade endpoint at
+  // /config/skills/overrides — same shape, same posture (single
+  // small JSON file, one fetch per tab open is fine).
+  fastify.get(
+    "/config/tools/overrides",
+    {
+      schema: {
+        description:
+          "All per-project tool overrides across all projects. Returns " +
+          "`{ projects: { <projectId>: { builtin: { enable, disable }, " +
+          "mcp: { enable, disable } } } }`. Absent project keys mean " +
+          "'no overrides defined' (the project inherits from global).",
+        tags: ["config"],
+        response: {
+          200: {
+            type: "object",
+            required: ["projects"],
+            properties: {
+              projects: {
+                type: "object",
+                additionalProperties: {
+                  type: "object",
+                  required: ["builtin", "mcp"],
+                  properties: {
+                    builtin: {
+                      type: "object",
+                      required: ["enable", "disable"],
+                      properties: {
+                        enable: { type: "array", items: { type: "string" } },
+                        disable: { type: "array", items: { type: "string" } },
+                      },
+                    },
+                    mcp: {
+                      type: "object",
+                      required: ["enable", "disable"],
+                      properties: {
+                        enable: { type: "array", items: { type: "string" } },
+                        disable: { type: "array", items: { type: "string" } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          500: errorSchema,
+        },
+      },
+    },
+    async (_req, reply) => {
+      try {
+        return await getAllToolOverrides();
+      } catch (err) {
+        return internalError(reply, err);
+      }
+    },
+  );
+
   fastify.get<{ Querystring: { projectId?: string } }>(
     "/config/tools",
     {
@@ -709,11 +778,20 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
                 type: "array",
                 items: {
                   type: "object",
-                  required: ["name", "description", "enabled"],
+                  required: ["name", "description", "enabled", "globalEnabled"],
                   properties: {
                     name: { type: "string" },
                     description: { type: "string" },
+                    /** Effective state for the active project (or
+                     *  global state when no projectId given). */
                     enabled: { type: "boolean" },
+                    /** Underlying global state, regardless of any
+                     *  project override. The UI uses this to render
+                     *  the "Global: enabled" badge alongside the
+                     *  per-project tri-state. */
+                    globalEnabled: { type: "boolean" },
+                    /** Tri-state per-project override (absent = inherit). */
+                    projectOverride: { type: "string", enum: ["enabled", "disabled"] },
                   },
                 },
               },
@@ -733,12 +811,14 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
                       type: "array",
                       items: {
                         type: "object",
-                        required: ["name", "shortName", "description", "enabled"],
+                        required: ["name", "shortName", "description", "enabled", "globalEnabled"],
                         properties: {
                           name: { type: "string" },
                           shortName: { type: "string" },
                           description: { type: "string" },
                           enabled: { type: "boolean" },
+                          globalEnabled: { type: "boolean" },
+                          projectOverride: { type: "string", enum: ["enabled", "disabled"] },
                         },
                       },
                     },
@@ -756,29 +836,46 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
         const overrides = await readToolOverrides();
         const builtinDisabled = new Set(overrides.builtin);
         const mcpDisabled = new Set(overrides.mcp);
+        const projectId =
+          typeof req.query.projectId === "string" && req.query.projectId.length > 0
+            ? req.query.projectId
+            : undefined;
 
         // Project-scope MCP servers are loaded lazily; trigger a load
         // before reading status so a fresh-after-restart UI fetch
         // doesn't show an empty MCP list for a previously-configured
         // project. Best-effort — load failures shouldn't 500 the
         // whole tool listing.
-        if (typeof req.query.projectId === "string" && req.query.projectId.length > 0) {
-          const project = await getProject(req.query.projectId);
+        if (projectId !== undefined) {
+          const project = await getProject(projectId);
           if (project !== undefined) {
             await mcpEnsureProjectLoaded(project.id, project.path).catch(() => undefined);
           }
         }
 
-        const mcpServers = mcpGetStatus(
-          typeof req.query.projectId === "string" ? { projectId: req.query.projectId } : undefined,
-        );
+        const mcpServers = mcpGetStatus(projectId !== undefined ? { projectId } : undefined);
 
         return {
-          builtin: BUILTIN_TOOL_NAMES.map((name) => ({
-            name,
-            description: BUILTIN_TOOL_DESCRIPTIONS[name] ?? "",
-            enabled: !builtinDisabled.has(name),
-          })),
+          builtin: BUILTIN_TOOL_NAMES.map((name) => {
+            const globalEnabled = !builtinDisabled.has(name);
+            const out: {
+              name: string;
+              description: string;
+              enabled: boolean;
+              globalEnabled: boolean;
+              projectOverride?: "enabled" | "disabled";
+            } = {
+              name,
+              description: BUILTIN_TOOL_DESCRIPTIONS[name] ?? "",
+              enabled: isToolEffective(overrides, projectId, "builtin", name),
+              globalEnabled,
+            };
+            if (projectId !== undefined) {
+              const ov = getProjectToolState(overrides, projectId, "builtin", name);
+              if (ov !== undefined) out.projectOverride = ov;
+            }
+            return out;
+          }),
           mcp: mcpServers.map((s) => {
             const out: {
               server: string;
@@ -787,18 +884,40 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
               enabled: boolean;
               state: string;
               lastError?: string;
-              tools: { name: string; shortName: string; description: string; enabled: boolean }[];
+              tools: {
+                name: string;
+                shortName: string;
+                description: string;
+                enabled: boolean;
+                globalEnabled: boolean;
+                projectOverride?: "enabled" | "disabled";
+              }[];
             } = {
               server: s.name,
               scope: s.scope,
               enabled: s.enabled,
               state: s.state,
-              tools: s.tools.map((t) => ({
-                name: t.name,
-                shortName: t.shortName,
-                description: t.description,
-                enabled: !mcpDisabled.has(t.name),
-              })),
+              tools: s.tools.map((t) => {
+                const tOut: {
+                  name: string;
+                  shortName: string;
+                  description: string;
+                  enabled: boolean;
+                  globalEnabled: boolean;
+                  projectOverride?: "enabled" | "disabled";
+                } = {
+                  name: t.name,
+                  shortName: t.shortName,
+                  description: t.description,
+                  enabled: isToolEffective(overrides, projectId, "mcp", t.name),
+                  globalEnabled: !mcpDisabled.has(t.name),
+                };
+                if (projectId !== undefined) {
+                  const ov = getProjectToolState(overrides, projectId, "mcp", t.name);
+                  if (ov !== undefined) tOut.projectOverride = ov;
+                }
+                return tOut;
+              }),
             };
             if (s.projectId !== undefined) out.projectId = s.projectId;
             if (s.lastError !== undefined) out.lastError = s.lastError;
@@ -813,7 +932,8 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.put<{
     Params: { family: ToolFamily; name: string };
-    Body: { enabled: boolean };
+    Querystring: { projectId?: string };
+    Body: { enabled: boolean; scope?: "global" | "project" };
   }>(
     "/config/tools/:family/:name/enabled",
     {
@@ -822,10 +942,15 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
           "Toggle a single tool by family + name. Family is `builtin` " +
           "(short bare name like `bash`) or `mcp` (bridged name like " +
           "`<server>__<tool>` — same name pi sees on the wire). " +
-          "Allow-by-default — `enabled: false` adds the name to the " +
-          "disabled set; `enabled: true` removes it (returning to the " +
-          "implicit-enabled default). Idempotent. Applies on the NEXT " +
-          "session created; live sessions are unaffected.",
+          'Default `scope: "global"` toggles the tool\'s GLOBAL state — ' +
+          'absence in the disabled set means enabled. `scope: "project"` ' +
+          "(requires `?projectId=`) writes a tri-state per-project " +
+          "override that wins over global: `enabled: true` adds an " +
+          "explicit project-enable, `enabled: false` adds a project- " +
+          "disable. Clear a project override (= inherit global) via " +
+          "`DELETE` on the same path with `?projectId=`. " +
+          "All toggles apply on the NEXT session created; live sessions " +
+          "are unaffected.",
         tags: ["config"],
         params: {
           type: "object",
@@ -835,34 +960,134 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
             name: { type: "string", minLength: 1 },
           },
         },
+        querystring: {
+          type: "object",
+          properties: { projectId: { type: "string" } },
+        },
         body: {
           type: "object",
           required: ["enabled"],
           additionalProperties: false,
-          properties: { enabled: { type: "boolean" } },
+          properties: {
+            enabled: { type: "boolean" },
+            scope: { type: "string", enum: ["global", "project"] },
+          },
         },
         response: {
           200: {
             type: "object",
-            required: ["family", "name", "enabled"],
+            required: ["family", "name", "enabled", "scope"],
             properties: {
               family: { type: "string" },
               name: { type: "string" },
               enabled: { type: "boolean" },
+              scope: { type: "string", enum: ["global", "project"] },
+              projectId: { type: "string" },
             },
           },
           400: errorSchema,
+          404: errorSchema,
           500: errorSchema,
         },
       },
     },
     async (req, reply) => {
       try {
+        const scope = req.body.scope ?? "global";
+        if (scope === "project") {
+          const projectId = req.query.projectId;
+          if (typeof projectId !== "string" || projectId.length === 0) {
+            return reply.code(400).send({ error: "missing_project_id" });
+          }
+          // Validate project exists so a typo'd id can't pollute the
+          // overrides file with garbage that never resolves to anything.
+          const project = await getProject(projectId);
+          if (project === undefined) {
+            return reply.code(404).send({ error: "project_not_found" });
+          }
+          const state: ToolOverrideState = req.body.enabled ? "enabled" : "disabled";
+          await setProjectToolOverride(projectId, req.params.family, req.params.name, state);
+          return {
+            family: req.params.family,
+            name: req.params.name,
+            enabled: req.body.enabled,
+            scope,
+            projectId,
+          };
+        }
         await setToolEnabled(req.params.family, req.params.name, req.body.enabled);
         return {
           family: req.params.family,
           name: req.params.name,
           enabled: req.body.enabled,
+          scope,
+        };
+      } catch (err) {
+        return internalError(reply, err);
+      }
+    },
+  );
+
+  // Clear a per-project tool override (= return that project to
+  // inheriting the global default). Mirrors the skills DELETE
+  // endpoint's shape.
+  fastify.delete<{
+    Params: { family: ToolFamily; name: string };
+    Querystring: { projectId: string };
+  }>(
+    "/config/tools/:family/:name/enabled",
+    {
+      schema: {
+        description:
+          "Clear a per-project tool override so the project inherits " +
+          "the global state. `?projectId=` is required. Idempotent — " +
+          "no-op if no override exists. Returns 404 if the project " +
+          "doesn't exist.",
+        tags: ["config"],
+        params: {
+          type: "object",
+          required: ["family", "name"],
+          properties: {
+            family: { type: "string", enum: ["builtin", "mcp"] },
+            name: { type: "string", minLength: 1 },
+          },
+        },
+        querystring: {
+          type: "object",
+          required: ["projectId"],
+          properties: { projectId: { type: "string", minLength: 1 } },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["family", "name", "projectId"],
+            properties: {
+              family: { type: "string" },
+              name: { type: "string" },
+              projectId: { type: "string" },
+            },
+          },
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      try {
+        const project = await getProject(req.query.projectId);
+        if (project === undefined) {
+          return reply.code(404).send({ error: "project_not_found" });
+        }
+        await setProjectToolOverride(
+          req.query.projectId,
+          req.params.family,
+          req.params.name,
+          undefined,
+        );
+        return {
+          family: req.params.family,
+          name: req.params.name,
+          projectId: req.query.projectId,
         };
       } catch (err) {
         return internalError(reply, err);

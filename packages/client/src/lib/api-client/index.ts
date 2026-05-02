@@ -20,6 +20,7 @@ import {
   type SessionSummary,
   type SkillSummary,
   type ToolListing,
+  type ToolOverridesResponse,
   type ProvidersListing,
   type AuthSummary,
   type FileTreeNode,
@@ -1204,24 +1205,83 @@ export const api = {
   /**
    * Toggle a single tool. `family` is "builtin" (pi's shipped tools
    * — bash, read, etc.) or "mcp" (bridged tool name
-   * `<server>__<tool>`). `enabled: false` adds it to the disabled
-   * set; `enabled: true` removes it (allow-by-default semantics).
+   * `<server>__<tool>`).
+   *
+   * Default `scope: "global"` toggles the tool's GLOBAL state —
+   * `enabled: false` adds it to the disabled set, `enabled: true`
+   * removes it (allow-by-default semantics).
+   *
+   * `scope: "project"` (requires `projectId`) writes a tri-state
+   * per-project override that wins over global: `enabled: true` is
+   * an explicit project-enable; `enabled: false` an explicit
+   * disable. Use `clearToolProjectOverride` to return a project to
+   * inheriting the global default.
    */
-  setToolEnabled: (family: "builtin" | "mcp", name: string, enabled: boolean) =>
-    request(
-      `/api/v1/config/tools/${family}/${encodeURIComponent(name)}/enabled`,
+  setToolEnabled: (
+    family: "builtin" | "mcp",
+    name: string,
+    enabled: boolean,
+    scope: "global" | "project" = "global",
+    projectId?: string,
+  ) => {
+    const qs =
+      scope === "project" && projectId !== undefined
+        ? `?projectId=${encodeURIComponent(projectId)}`
+        : "";
+    return request(
+      `/api/v1/config/tools/${family}/${encodeURIComponent(name)}/enabled${qs}`,
       (v) => {
         if (
           !isObject(v) ||
           typeof v.family !== "string" ||
           typeof v.name !== "string" ||
-          typeof v.enabled !== "boolean"
+          typeof v.enabled !== "boolean" ||
+          typeof v.scope !== "string"
         ) {
           throw new ApiError(0, "invalid_response_body");
         }
-        return { family: v.family, name: v.name, enabled: v.enabled };
+        return {
+          family: v.family,
+          name: v.name,
+          enabled: v.enabled,
+          scope: v.scope as "global" | "project",
+        };
       },
-      { method: "PUT", body: { enabled } },
+      { method: "PUT", body: { enabled, scope } },
+    );
+  },
+
+  /**
+   * Cascade view: every per-project tool override across every
+   * project, split per family. Used by the Tools tab + MCP cascade
+   * to show "this tool is overridden in N projects" + the "Add
+   * override for…" affordance. Mirrors `listSkillOverrides`.
+   */
+  listToolOverrides: (): Promise<ToolOverridesResponse> =>
+    request("/api/v1/config/tools/overrides", (v) => {
+      if (!isObject(v) || typeof v.projects !== "object" || v.projects === null) {
+        throw new ApiError(0, "invalid_response_body");
+      }
+      return v as unknown as ToolOverridesResponse;
+    }),
+
+  /** Clear a per-project tool override so the project inherits the
+   *  global default. Idempotent. */
+  clearToolProjectOverride: (family: "builtin" | "mcp", name: string, projectId: string) =>
+    request(
+      `/api/v1/config/tools/${family}/${encodeURIComponent(name)}/enabled?projectId=${encodeURIComponent(projectId)}`,
+      (v) => {
+        if (
+          !isObject(v) ||
+          typeof v.family !== "string" ||
+          typeof v.name !== "string" ||
+          typeof v.projectId !== "string"
+        ) {
+          throw new ApiError(0, "invalid_response_body");
+        }
+        return { family: v.family, name: v.name, projectId: v.projectId };
+      },
+      { method: "DELETE" },
     ),
 
   // ---------------- config export / import ----------------
