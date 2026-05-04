@@ -184,44 +184,14 @@ workbench had to absorb show up in the release notes' **Changed**
 section so operators know what to re-test before upgrading. Per-tag
 notes live in [CHANGELOG.md](./CHANGELOG.md).
 
-## Risks & disclaimer
+## Heads up
 
-pi-workbench is a self-hosted developer tool, provided **"as is"** under
-the MIT [LICENSE](./LICENSE) — no warranty, no support obligation, no
-certification (SOC 2, HIPAA, PCI DSS, FedRAMP, etc.). It is not designed
-or suitable for safety-critical, life-critical, or regulated-data
-contexts. Specific risks worth knowing before you deploy it:
-
-- **LLM hallucinations.** The agent can produce plausible-looking code
-  and explanations that are wrong. Review what it writes before running
-  or shipping it.
-- **Real tool side effects.** The agent's `bash`, `write`, and `edit`
-  tools take real action on your filesystem and can run arbitrary
-  commands as the workbench user. Treat the agent with the same caution
-  you'd apply to any pair-programmer who can run `rm -rf`.
-- **Provider data flow.** Your prompts, attached files, and tool
-  outputs are sent to whichever LLM provider you configure. The
-  provider's terms govern retention, logging, and training — not
-  pi-workbench. Read them.
-- **Cost overruns.** A misconfigured agent or a stuck loop can burn
-  tokens fast. Set provider-side spending limits; pi-workbench surfaces
-  per-turn cost in the Context Inspector but enforces no caps of its
-  own.
-- **Prompt injection.** Content the agent reads (file contents, tool
-  output, web pages) can contain instructions that override yours. The
-  pi SDK mitigates the worst cases; the residual threat is real.
-- **Network exposure.** The container speaks plain HTTP. Exposing it
-  to the public internet without TLS at a reverse proxy + auth is
-  unsafe — see [`SECURITY.md`](./SECURITY.md) and
-  [`docs/deployment.md`](./docs/deployment.md).
-- **Jurisdictional regulation.** AI use is regulated differently
-  across jurisdictions (EU AI Act, US state AI bills, sector-specific
-  rules in finance / health / law). Compliance is on you.
-
-Operating pi-workbench means you accept these risks. To the maximum
-extent permitted by law, no party associated with this project is
-liable for any damages arising from your use of it — see the LICENSE
-for the controlling text.
+pi-workbench drives a coding agent that runs real commands (`bash`,
+`write`, `edit`) as the workbench user — review what it does, set
+provider-side spending limits, and don't expose the container to the
+public internet without TLS + auth. See
+[`SECURITY.md`](./SECURITY.md) for the threat model and
+[`docs/deployment.md`](./docs/deployment.md) for production notes.
 
 ## Related projects
 
