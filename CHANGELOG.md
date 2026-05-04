@@ -12,7 +12,32 @@ the README for the support window policy.
 
 ## [Unreleased]
 
-## [1.0.1] — 2026-05-03
+### Added
+
+- **Pane toggles for chat and editor.** New **Chat** and **Editor**
+  buttons in the header alongside the existing **Files** and
+  **Terminal** toggles. Each pane is independently hideable so a
+  user can collapse the workbench down to whichever surface
+  matters for the task at hand (e.g. just editor + terminal for a
+  test-running flow, or just chat for an agent-driving flow).
+  Persistence mirrors the existing toggles: `localStorage` keys
+  `pi-workbench/chat-open` and `pi-workbench/editor-open`, both
+  defaulting to OPEN.
+- **Editor pane decoupled from the file browser.** The Files
+  toggle previously controlled both the file tree AND the editor
+  visibility; closing the tree also hid any open tabs. Now the
+  Editor toggle is independent — keep one file open without the
+  280px file tree taking room, or browse the tree without the
+  editor pane materialising.
+- **Editor tabs persist across page reloads.** Open tab paths and
+  the active path are now saved to `sessionStorage` per project
+  (`pi.editor.tabs.v1:<projectId>`), mirroring the terminal store's
+  per-browser-tab persistence. On reload the tabs reopen via the
+  existing `openFile` read; files that have been deleted since
+  persist time are silently dropped. Only paths + active path are
+  stored — file content stays on the server.
+
+
 
 ### Changed
 
