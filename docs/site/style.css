@@ -233,15 +233,15 @@ img { max-width: 100%; height: auto; }
 .demo-titlebar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 18px;
+  gap: 6px;
+  padding: 6px 12px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
 }
 
 .demo-dot {
-  width: 12px;
-  height: 12px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
 }
 .demo-dot.red { background: #ff5f57; }
@@ -263,6 +263,86 @@ img { max-width: 100%; height: auto; }
   height: auto;
   display: block;
 }
+
+/* === Carousel (hero screenshots) === */
+.carousel {
+  position: relative;
+  width: 100%;
+  background: #0a0a0a;
+}
+.carousel-viewport {
+  width: 100%;
+  overflow: hidden;
+}
+.carousel-track {
+  position: relative;
+  width: 100%;
+  /* Aspect-ratio reservation so layout doesn't jump while images load.
+     Matches the source ratio (~16:10 from a Mac viewport capture). */
+  aspect-ratio: 16 / 10;
+}
+.carousel-slide {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #0a0a0a;
+  opacity: 0;
+  transition: opacity 0.45s ease-in-out;
+  pointer-events: none;
+}
+.carousel-slide.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+.carousel-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--text);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+  transition: opacity 0.2s, background 0.2s;
+}
+.carousel-btn:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.8);
+}
+.carousel-prev { left: 14px; }
+.carousel-next { right: 14px; }
+.carousel-dots {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 999px;
+}
+.carousel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.carousel-dot:hover { background: rgba(255, 255, 255, 0.6); }
+.carousel-dot.active { background: var(--accent-light, #fff); }
 
 /* === Sections === */
 .section {
@@ -298,7 +378,13 @@ img { max-width: 100%; height: auto; }
 .feature-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  /* `1fr` rows + cards stretching to fill their cell makes every
+     row in the grid uniform — without this the tallest card in a
+     row wins and the others stay compact, giving the grid a ragged
+     bottom edge. */
+  grid-auto-rows: 1fr;
   gap: 20px;
+  align-items: stretch;
 }
 
 .feature-card {
@@ -307,6 +393,11 @@ img { max-width: 100%; height: auto; }
   border-radius: var(--radius);
   padding: 26px;
   transition: border-color 0.3s, background 0.3s, transform 0.2s;
+  /* Stretch to fill the grid cell so cards in the same row match
+     heights. Without this, cards size to their content. */
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .feature-card:hover {

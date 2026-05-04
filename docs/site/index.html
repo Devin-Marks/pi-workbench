@@ -65,7 +65,22 @@
         <div class="demo-dot green"></div>
       </div>
       <div class="demo-content">
-        <p style="padding: 60px;">Screenshot or demo GIF goes here &mdash; drop a recording as <code>docs/site/demo.gif</code> (or screenshot as <code>docs/site/hero.png</code>) and replace this placeholder.</p>
+        <div class="carousel" id="carousel">
+          <div class="carousel-viewport">
+            <div class="carousel-track" id="carouselTrack">
+              <img class="carousel-slide active" src="../images/img0.png" alt="pi-workbench overview" loading="eager"/>
+              <img class="carousel-slide" src="../images/img1.png" alt="Screenshot" loading="lazy"/>
+              <img class="carousel-slide" src="../images/img2.png" alt="Screenshot" loading="lazy"/>
+              <img class="carousel-slide" src="../images/img3.png" alt="Screenshot" loading="lazy"/>
+              <img class="carousel-slide" src="../images/img4.png" alt="Screenshot" loading="lazy"/>
+              <img class="carousel-slide" src="../images/img5.png" alt="Screenshot" loading="lazy"/>
+              <img class="carousel-slide" src="../images/img6.png" alt="Screenshot" loading="lazy"/>
+            </div>
+          </div>
+          <button class="carousel-btn carousel-prev" id="carouselPrev" aria-label="Previous screenshot">&#10094;</button>
+          <button class="carousel-btn carousel-next" id="carouselNext" aria-label="Next screenshot">&#10095;</button>
+          <div class="carousel-dots" id="carouselDots"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -79,12 +94,12 @@
       <div class="feature-card">
         <div class="feature-icon">&#128279;</div>
         <h3>MCP server integration</h3>
-        <p>Connect remote Model Context Protocol servers over StreamableHTTP or SSE (auto-fallback). Per-project <code>.mcp.json</code> overrides global config; header status badge shows connection state at a glance; master kill-switch in Settings disables every MCP tool with one click for restricted-environment audits.</p>
+        <p>Connect remote Model Context Protocol servers over StreamableHTTP or SSE. Per-project <code>.mcp.json</code> overrides, header status badge, and a master kill-switch for restricted environments.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon">&#128736;</div>
         <h3>Per-tool enable / disable</h3>
-        <p>Every tool the agent could call enumerated in Settings — pi's seven built-ins plus a cascade of each connected MCP server's tools. Toggle individual MCP tools without dropping the whole server, or pare back the built-in set (turn off <code>bash</code> or <code>edit</code> for read-only deployments). Allow-by-default; changes apply on the next session.</p>
+        <p>Every tool the agent could call — pi's seven built-ins plus each MCP server's tools — toggleable individually with per-project overrides. Allow-by-default; changes apply on the next session.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon">&#128172;</div>
@@ -115,11 +130,6 @@
         <div class="feature-icon">&#127760;</div>
         <h3>Git panel</h3>
         <p>Status, unified or split diff, stage / unstage per file, commit, push, fetch, pull, branch checkout / create / delete, log with ref decorations.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">&#128640;</div>
-        <h3>Provider freedom</h3>
-        <p>Built-in Anthropic / OpenAI / Google / OpenRouter plus any OpenAI-compatible endpoint (vLLM, LiteLLM, Ollama, internal gateways) via models.json.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon">&#128202;</div>
@@ -291,6 +301,37 @@ curl -N -H <span class="code-string">"Authorization: Bearer $KEY"</span> \
     document.getElementById('mobileToggle').addEventListener('click', () => {
       document.getElementById('navLinks').classList.toggle('open');
     });
+
+    // Hero carousel — minimal vanilla impl. Slides are <img> elements
+    // sharing one .carousel-track; the active one gets .active. User-
+    // controlled only; no auto-advance (auto-rotating carousels yank
+    // attention away from whatever the visitor is reading).
+    (function () {
+      const slides = Array.from(document.querySelectorAll('.carousel-slide'));
+      if (slides.length === 0) return;
+      const dotsRoot = document.getElementById('carouselDots');
+      let current = 0;
+
+      const dots = slides.map((_, i) => {
+        const d = document.createElement('button');
+        d.className = 'carousel-dot' + (i === 0 ? ' active' : '');
+        d.setAttribute('aria-label', 'Go to screenshot ' + (i + 1));
+        d.addEventListener('click', () => go(i));
+        dotsRoot.appendChild(d);
+        return d;
+      });
+
+      function go(next) {
+        slides[current].classList.remove('active');
+        dots[current].classList.remove('active');
+        current = (next + slides.length) % slides.length;
+        slides[current].classList.add('active');
+        dots[current].classList.add('active');
+      }
+
+      document.getElementById('carouselPrev').addEventListener('click', () => go(current - 1));
+      document.getElementById('carouselNext').addEventListener('click', () => go(current + 1));
+    })();
   </script>
 </body>
 </html>

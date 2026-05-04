@@ -12,7 +12,28 @@ A self-hosted browser workbench for the [pi coding agent](https://github.com/bad
 Chat with the agent against your code, browse files, run a terminal, review
 diffs, all from one tab.
 
-> Status: in active development. Things will change between releases.
+<p align="center">
+  <img src="docs/images/img0.png" alt="pi-workbench in action" width="1200"/>
+</p>
+
+<details>
+<summary>More screenshots</summary>
+
+<p align="center">
+  <img src="docs/images/img1.png" alt="Screenshot" width="1000"/>
+  <br/><br/>
+  <img src="docs/images/img2.png" alt="Screenshot" width="1000"/>
+  <br/><br/>
+  <img src="docs/images/img3.png" alt="Screenshot" width="1000"/>
+  <br/><br/>
+  <img src="docs/images/img4.png" alt="Screenshot" width="1000"/>
+  <br/><br/>
+  <img src="docs/images/img5.png" alt="Screenshot" width="1000"/>
+  <br/><br/>
+  <img src="docs/images/img6.png" alt="Screenshot" width="1000"/>
+</p>
+
+</details>
 
 ## Why pi-workbench?
 
