@@ -384,27 +384,46 @@ type FileRef =
 
 function extractFileRefs(text: string): { stripped: string; refs: FileRef[] } {
   const refs: FileRef[] = [];
-  // Step 1: pull out fenced "<lang> file: <path>" blocks.
-  const fenceRe = /(`{3,})(\w*)\s+file:\s+([^\n]+)\n([\s\S]*?)\n\1(?=\n|$)/g;
+  // Step 1: pull out fenced "<lang> file: <path>" blocks. The server
+  // (after the file-references fix) emits the literal `@<path>` marker
+  // immediately before each fenced block, so dropping just the block
+  // here leaves the marker in place inline with the user's prose.
+  //
+  // Eat the `\n` immediately before AND after the fence too so the
+  // marker flows inline with surrounding prose — without this, the
+  // server's mandatory `marker\nfence\ntail` framing leaves an
+  // orphan blank line between the marker and the rest of the
+  // sentence after the fence is stripped. The leading `\n?` is
+  // optional because the marker may be at start-of-string.
+  const fenceRe = /\n?(`{3,})(\w*)\s+file:\s+([^\n]+)\n([\s\S]*?)\n\1\n?/g;
   let stripped = text.replace(
     fenceRe,
     (_match, _fence: string, lang: string, path: string, content: string) => {
       refs.push({ kind: "inline", path: path.trim(), lang, content });
-      return "\n";
+      return "";
     },
   );
-  // Step 2: pull out bare `@<path>` (or `@"path"`) deferred refs from
-  // what's left. Same prefix anchor as the server regex.
-  const deferRe = /(^|\s)@(?:"([^"\n]+)"|([^\s]+))/g;
-  stripped = stripped.replace(deferRe, (_match, lead: string, quoted: string, bare: string) => {
-    const path = (quoted ?? bare ?? "").trim();
-    if (path.length > 0) refs.push({ kind: "defer", path });
-    // Preserve the leading whitespace/anchor so surrounding text
-    // doesn't fuse together.
-    return lead;
-  });
-  // Collapse any 3+ consecutive newlines (from fenced removal) to a
-  // single blank line, then trim the whole string.
+  // Step 2: collect bare `@<path>` (or `@"path"`) deferred refs WITHOUT
+  // stripping them — the marker stays visible in the bubble so the
+  // user's sentence still reads as typed ("look at @src/foo.ts and
+  // explain"). The badge rendered below is the expandable affordance
+  // for inline content; deferred refs no longer get a separate badge
+  // since the inline marker already carries the information.
+  // Lazy bare alternation + lookahead so trailing sentence punctuation
+  // (`?`, `,`, `;`, `:`, `!`, `)`, `]`) doesn't end up in the path —
+  // kept in sync with file-references.ts#REF_RE.
+  const deferRe = /(^|\s)@(?:"([^"\n]+)"|([^\s]+?))(?=[?,;:!)\]]?(?:\s|$))/g;
+  let m: RegExpExecArray | null;
+  while ((m = deferRe.exec(stripped)) !== null) {
+    const path = (m[2] ?? m[3] ?? "").trim();
+    if (path.length === 0) continue;
+    // Avoid duplicating the inline ref we already collected above —
+    // when the server inlines a file, the marker AND the fenced block
+    // both appear, and we want a single badge for that pair.
+    if (refs.some((r) => r.kind === "inline" && r.path === path)) continue;
+    refs.push({ kind: "defer", path });
+  }
+  // Collapse runs of blank lines created by the fence removal.
   stripped = stripped.replace(/\n{3,}/g, "\n\n").trim();
   return { stripped, refs };
 }
