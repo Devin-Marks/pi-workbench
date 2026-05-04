@@ -16,6 +16,25 @@ diffs, all from one tab.
   <img src="docs/images/img0.png" alt="pi-workbench in action" width="1200"/>
 </p>
 
+<details>
+<summary>More screenshots</summary>
+
+<p align="center">
+  <img src="docs/images/img1.png" alt="Screenshot" width="1000"/>
+  <br/><br/>
+  <img src="docs/images/img2.png" alt="Screenshot" width="1000"/>
+  <br/><br/>
+  <img src="docs/images/img3.png" alt="Screenshot" width="1000"/>
+  <br/><br/>
+  <img src="docs/images/img4.png" alt="Screenshot" width="1000"/>
+  <br/><br/>
+  <img src="docs/images/img5.png" alt="Screenshot" width="1000"/>
+  <br/><br/>
+  <img src="docs/images/img6.png" alt="Screenshot" width="1000"/>
+</p>
+
+</details>
+
 ## Why pi-workbench?
 
 - **Self-hosted, single-tenant.** Your code, your provider keys, your container. No cloud.
