@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FolderTree, Terminal as TerminalIcon } from "lucide-react";
+import { FolderTree, MessageSquare, Terminal as TerminalIcon } from "lucide-react";
 import { useAuthStore } from "./store/auth-store";
 import { useActiveProject, useProjectStore } from "./store/project-store";
 import { useSessionStore } from "./store/session-store";
@@ -121,6 +121,18 @@ export function App() {
   const setTerminalOpenPersisted = (v: boolean): void => {
     setTerminalOpen(v);
     localStorage.setItem("pi-workbench/terminal-open", v ? "true" : "false");
+  };
+
+  // Chat pane visibility — defaults to OPEN (the chat is the workbench's
+  // primary surface), and the persistence key is absence-means-open so a
+  // user who has never touched the toggle gets the chat. Hide is for the
+  // "I just want to use the file editor + terminal" focus mode.
+  const [chatOpen, setChatOpen] = useState<boolean>(
+    () => localStorage.getItem("pi-workbench/chat-open") !== "false",
+  );
+  const setChatOpenPersisted = (v: boolean): void => {
+    setChatOpen(v);
+    localStorage.setItem("pi-workbench/chat-open", v ? "true" : "false");
   };
   const [terminalHeight, setTerminalHeight] = useState<number>(() =>
     readPersistedWidth(TERMINAL_HEIGHT_KEY, DEFAULT_TERMINAL_HEIGHT),
@@ -314,6 +326,18 @@ export function App() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setChatOpenPersisted(!chatOpen)}
+            className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
+              chatOpen
+                ? "border-neutral-500 bg-neutral-800 text-neutral-100"
+                : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+            }`}
+            title="Toggle the chat pane"
+          >
+            <MessageSquare size={13} />
+            Chat
+          </button>
+          <button
             onClick={() => setFilesOpenPersisted(!filesOpen)}
             className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
               filesOpen
@@ -380,40 +404,49 @@ export function App() {
               materialises between chat and files only when at least
               one file is open. Both right-side panes are user-resizable
               via their dividers; widths persist in localStorage. */}
-            <div className="flex flex-1 flex-col overflow-hidden">
-              {projectsLoaded && projects.length === 0 ? (
-                <div className="flex flex-1 items-center justify-center">
-                  <ProjectPicker required onClose={noop} />
-                </div>
-              ) : activeSessionId !== undefined ? (
-                <>
-                  <ChatView sessionId={activeSessionId} />
-                  {!minimal && (
-                    <ChangedFilesBadge
-                      sessionId={activeSessionId}
-                      alreadyOnChangesTab={filesOpen && rightTab === "changes"}
-                      onOpen={() => {
-                        if (!filesOpen) setFilesOpenPersisted(true);
-                        setRightTabPersisted("changes");
-                      }}
-                    />
-                  )}
-                  <ChatInput sessionId={activeSessionId} />
-                </>
-              ) : active ? (
-                <div className="flex flex-1 items-center justify-center px-6 text-center">
-                  <div className="space-y-2 text-sm text-neutral-400">
-                    <h2 className="text-xl font-semibold text-neutral-100">{active.name}</h2>
-                    <p className="font-mono text-xs">{active.path}</p>
-                    <p>Pick a session from the sidebar — or click "+ New session" to start one.</p>
+            {/* Chat column is suppressed when chatOpen=false. Empty-
+                state branches (no project, no session) still render so
+                the user gets the picker / "select a session" prompt
+                even when chat is hidden — those messages aren't really
+                "chat", they're load-bearing onboarding. */}
+            {(chatOpen || activeSessionId === undefined) && (
+              <div className="flex flex-1 flex-col overflow-hidden">
+                {projectsLoaded && projects.length === 0 ? (
+                  <div className="flex flex-1 items-center justify-center">
+                    <ProjectPicker required onClose={noop} />
                   </div>
-                </div>
-              ) : (
-                <div className="flex flex-1 items-center justify-center">
-                  <p className="text-sm text-neutral-400">Select a project from the sidebar.</p>
-                </div>
-              )}
-            </div>
+                ) : activeSessionId !== undefined ? (
+                  <>
+                    <ChatView sessionId={activeSessionId} />
+                    {!minimal && (
+                      <ChangedFilesBadge
+                        sessionId={activeSessionId}
+                        alreadyOnChangesTab={filesOpen && rightTab === "changes"}
+                        onOpen={() => {
+                          if (!filesOpen) setFilesOpenPersisted(true);
+                          setRightTabPersisted("changes");
+                        }}
+                      />
+                    )}
+                    <ChatInput sessionId={activeSessionId} />
+                  </>
+                ) : active ? (
+                  <div className="flex flex-1 items-center justify-center px-6 text-center">
+                    <div className="space-y-2 text-sm text-neutral-400">
+                      <h2 className="text-xl font-semibold text-neutral-100">{active.name}</h2>
+                      <p className="font-mono text-xs">{active.path}</p>
+                      <p>
+                        Pick a session from the sidebar — or click "+ New session" to start one.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-1 items-center justify-center">
+                    <p className="text-sm text-neutral-400">Select a project from the sidebar.</p>
+                  </div>
+                )}
+              </div>
+            )}
 
             {filesOpen && editorVisible && (
               <>
