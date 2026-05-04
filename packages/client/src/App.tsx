@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FolderTree, MessageSquare, Terminal as TerminalIcon } from "lucide-react";
+import { FileCode, FolderTree, MessageSquare, Terminal as TerminalIcon } from "lucide-react";
 import { useAuthStore } from "./store/auth-store";
 import { useActiveProject, useProjectStore } from "./store/project-store";
 import { useSessionStore } from "./store/session-store";
@@ -134,6 +134,19 @@ export function App() {
     setChatOpen(v);
     localStorage.setItem("pi-workbench/chat-open", v ? "true" : "false");
   };
+
+  // Editor pane visibility — independent of `filesOpen` (the file
+  // browser tree). Defaults to OPEN so a user with persisted tabs from
+  // the previous session sees them on reload. Tabs themselves persist
+  // in sessionStorage via file-store; this toggle just controls
+  // visibility of the rendered pane.
+  const [editorOpen, setEditorOpen] = useState<boolean>(
+    () => localStorage.getItem("pi-workbench/editor-open") !== "false",
+  );
+  const setEditorOpenPersisted = (v: boolean): void => {
+    setEditorOpen(v);
+    localStorage.setItem("pi-workbench/editor-open", v ? "true" : "false");
+  };
   const [terminalHeight, setTerminalHeight] = useState<number>(() =>
     readPersistedWidth(TERMINAL_HEIGHT_KEY, DEFAULT_TERMINAL_HEIGHT),
   );
@@ -165,7 +178,7 @@ export function App() {
   }, [editorWidth]);
 
   const openFilesCount = useFileStore((s) => s.openFiles.length);
-  const editorVisible = filesOpen && openFilesCount > 0;
+  const editorVisible = editorOpen && openFilesCount > 0;
 
   // Drives the modified-file count badge on the Git tab. Polls every
   // 5s via the hook regardless of which tab is currently visible —
@@ -185,11 +198,22 @@ export function App() {
     activeSessionId !== undefined ? (s.streamingBySession[activeSessionId] ?? false) : false,
   );
   const loadFileTree = useFileStore((s) => s.loadTree);
+  const restoreTabs = useFileStore((s) => s.restoreTabs);
   useEffect(() => {
     if (active === undefined || isStreaming) return;
     void loadFileTree(active.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.id, isStreaming, agentEndCount]);
+
+  // Re-open the editor tabs persisted for this project. No-op if any
+  // tabs are already open, so a project hot-switch doesn't fight a
+  // user who's mid-edit. Runs only on project change (not on every
+  // agent_end / streaming flip the tree refresh keys off of).
+  useEffect(() => {
+    if (active === undefined) return;
+    void restoreTabs(active.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id]);
 
   // Agent file-change awareness for open editor tabs. Walks NEW
   // tool_result messages since we last looked, finds write/edit
@@ -344,10 +368,22 @@ export function App() {
                 ? "border-neutral-500 bg-neutral-800 text-neutral-100"
                 : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
             }`}
-            title="Toggle the file browser + editor pane"
+            title="Toggle the file browser tree"
           >
             <FolderTree size={13} />
             Files
+          </button>
+          <button
+            onClick={() => setEditorOpenPersisted(!editorOpen)}
+            className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
+              editorOpen
+                ? "border-neutral-500 bg-neutral-800 text-neutral-100"
+                : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+            }`}
+            title="Toggle the editor pane (open tabs persist across reloads)"
+          >
+            <FileCode size={13} />
+            Editor
           </button>
           {!minimal && (
             <button
@@ -448,7 +484,7 @@ export function App() {
               </div>
             )}
 
-            {filesOpen && editorVisible && (
+            {editorVisible && (
               <>
                 <ResizableDivider
                   getStartSize={() => editorWidthRef.current}
@@ -459,7 +495,7 @@ export function App() {
                   minSize={MIN_EDITOR_WIDTH}
                   maxSize={Math.max(
                     MIN_EDITOR_WIDTH,
-                    window.innerWidth - filesWidth - MIN_CHAT_WIDTH - 240, // 240 ≈ ProjectSidebar
+                    window.innerWidth - (filesOpen ? filesWidth : 0) - MIN_CHAT_WIDTH - 240, // 240 ≈ ProjectSidebar
                   )}
                 />
                 <div
