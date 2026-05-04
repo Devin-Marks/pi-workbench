@@ -49,8 +49,17 @@ const INLINE_THRESHOLD_BYTES = 128 * 1024;
  * Regex shared by `findRefs` and `parseFileReferences`. Match `@` at
  * start-or-after-whitespace then either a `"path with spaces"` quoted
  * form or a bare non-whitespace token.
+ *
+ * The bare alternation is lazy + uses a lookahead so trailing
+ * sentence punctuation (`?`, `,`, `;`, `:`, `!`, `)`, `]`) followed by
+ * whitespace or end-of-string isn't pulled into the path. Without
+ * this, `@README.md?` matches `README.md?` and the server can't
+ * resolve the file. The `.` is intentionally NOT in the strip set
+ * because dots are common in filenames (`README.md`, `tsconfig.json`)
+ * — users who want a literal trailing period should use the quoted
+ * form (`@"file.txt".`), same escape hatch as filenames with spaces.
  */
-const REF_RE = /(^|\s)@(?:"([^"\n]+)"|([^\s]+))/g;
+const REF_RE = /(^|\s)@(?:"([^"\n]+)"|([^\s]+?))(?=[?,;:!)\]]?(?:\s|$))/g;
 
 interface RefMatch {
   start: number;
@@ -139,14 +148,18 @@ export async function expandFileReferences(text: string, workspacePath: string):
     if (outcome === undefined || mm === undefined) continue;
     const before = out.slice(0, mm.start) + mm.lead;
     const after = out.slice(mm.end);
+    // Re-emit the marker (preserve quoting if path has whitespace) so
+    // the user's prose still reads "look at @src/foo.ts and explain"
+    // after expansion. Previously the inline branch dropped the marker
+    // entirely and only kept the fenced block, which broke the flow of
+    // the surrounding sentence in the chat history.
+    const marker = /\s/.test(mm.path) ? `@"${mm.path}"` : `@${mm.path}`;
     if (outcome.kind === "inline") {
-      out = `${before}\n${outcome.text}\n${after}`;
+      out = `${before}${marker}\n${outcome.text}\n${after}`;
     } else if (outcome.kind === "defer") {
-      // Re-emit the marker (preserve quoting if path has whitespace).
-      const marker = /\s/.test(mm.path) ? `@"${mm.path}"` : `@${mm.path}`;
       out = `${before}${marker}${after}`;
     } else {
-      out = `${before}[@${mm.path} not included: ${outcome.reason}]${after}`;
+      out = `${before}[${marker} not included: ${outcome.reason}]${after}`;
     }
   }
   return out;

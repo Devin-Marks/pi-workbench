@@ -31,7 +31,11 @@ import { useUiStore } from "../store/ui-store";
  * will reference.
  */
 function parseChatFileReferences(text: string): string[] {
-  const re = /(?:^|\s)@(?:"([^"\n]+)"|([^\s]+))/g;
+  // Lazy bare alternation + lookahead so trailing sentence punctuation
+  // (`?`, `,`, `;`, `:`, `!`, `)`, `]`) doesn't get glued onto the
+  // path — kept in sync with the server-side REF_RE in
+  // file-references.ts. See that file for the rationale.
+  const re = /(?:^|\s)@(?:"([^"\n]+)"|([^\s]+?))(?=[?,;:!)\]]?(?:\s|$))/g;
   const out: string[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
@@ -933,11 +937,13 @@ export function ChatInput({ sessionId }: Props) {
     if (acToken === undefined) return;
     const before = text.slice(0, acToken.start);
     const after = text.slice(acToken.end);
-    // Wrap paths containing whitespace in double quotes so the
-    // server-side `expandFileReferences` regex can recognize the full
-    // path. The quoted form is documented at file-references.ts.
-    const needsQuotes = /\s/.test(path);
-    const replacement = needsQuotes ? `@"${path}"` : `@${path}`;
+    // Always wrap in double quotes. The quoted form lets users type
+    // punctuation directly after the path (`@"src/foo.ts".`,
+    // `@"src/foo.ts",`) — the bare form's `[^\s]+` rule would otherwise
+    // greedy-match the trailing `.` or `,` as part of the filename and
+    // break the reference. The quoted form is documented at
+    // file-references.ts.
+    const replacement = `@"${path}"`;
     const next = `${before}${replacement}${after}`;
     setText(next);
     setAcToken(undefined);
