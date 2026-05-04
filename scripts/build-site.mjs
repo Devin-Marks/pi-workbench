@@ -28,7 +28,7 @@
 //
 // Dependencies: just `marked`. Installed as a devDep so the
 // production install doesn't pull it.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Marked } from "marked";
@@ -279,13 +279,13 @@ ${HEADER_NAV_LANDING}
         <div class="carousel" id="carousel">
           <div class="carousel-viewport">
             <div class="carousel-track" id="carouselTrack">
-              <img class="carousel-slide active" src="../images/img0.png" alt="pi-workbench overview" loading="eager"/>
-              <img class="carousel-slide" src="../images/img1.png" alt="Screenshot" loading="lazy"/>
-              <img class="carousel-slide" src="../images/img2.png" alt="Screenshot" loading="lazy"/>
-              <img class="carousel-slide" src="../images/img3.png" alt="Screenshot" loading="lazy"/>
-              <img class="carousel-slide" src="../images/img4.png" alt="Screenshot" loading="lazy"/>
-              <img class="carousel-slide" src="../images/img5.png" alt="Screenshot" loading="lazy"/>
-              <img class="carousel-slide" src="../images/img6.png" alt="Screenshot" loading="lazy"/>
+              <img class="carousel-slide active" src="images/img0.png" alt="pi-workbench overview" loading="eager"/>
+              <img class="carousel-slide" src="images/img1.png" alt="Screenshot" loading="lazy"/>
+              <img class="carousel-slide" src="images/img2.png" alt="Screenshot" loading="lazy"/>
+              <img class="carousel-slide" src="images/img3.png" alt="Screenshot" loading="lazy"/>
+              <img class="carousel-slide" src="images/img4.png" alt="Screenshot" loading="lazy"/>
+              <img class="carousel-slide" src="images/img5.png" alt="Screenshot" loading="lazy"/>
+              <img class="carousel-slide" src="images/img6.png" alt="Screenshot" loading="lazy"/>
             </div>
           </div>
           <button class="carousel-btn carousel-prev" id="carouselPrev" aria-label="Previous screenshot">&#10094;</button>
@@ -549,4 +549,22 @@ curl -N -H <span class="code-string">"Authorization: Bearer $KEY"</span> \\
 `;
 writeFileSync(join(siteRoot, "index.html"), LANDING);
 
-console.log(`[build-site] wrote ${count} doc page(s) + index.html under ${siteRoot}`);
+// Copy docs/images/* → docs/site/images/* so the Pages deployment
+// can serve them under the site root. The Pages workflow uploads
+// only docs/site/, so the canonical `docs/images/` (used by README
+// for the GitHub repo render) isn't reachable from the deployed
+// site; we mirror the bytes in instead. Source of truth stays
+// `docs/images/`. Build-time copy keeps the two in lockstep
+// without requiring a second commit step.
+const imagesSrc = join(repoRoot, "docs", "images");
+const imagesOut = join(siteRoot, "images");
+mkdirSync(imagesOut, { recursive: true });
+let copied = 0;
+for (const name of readdirSync(imagesSrc)) {
+  copyFileSync(join(imagesSrc, name), join(imagesOut, name));
+  copied += 1;
+}
+
+console.log(
+  `[build-site] wrote ${count} doc page(s) + index.html + ${copied} image(s) under ${siteRoot}`,
+);
