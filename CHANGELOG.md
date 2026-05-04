@@ -12,6 +12,8 @@ the README for the support window policy.
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-05-03
+
 ### Changed
 
 - **Markdown + syntax-highlighted code in chat messages.** User
@@ -104,6 +106,27 @@ the README for the support window policy.
   `env/`, the workbench automatically runs `source <dir>/bin/activate`
   in the freshly-spawned shell. Reattach to an existing PTY does not
   re-source so manually-switched venvs are preserved.
+
+### Fixed
+
+- **`@<path>` file references preserved in chat history.** When a
+  referenced file was small enough to inline, the server previously
+  emitted only the fenced code block — the user's prose lost the
+  `@<filename>` they typed (`look at @README.md and explain` rendered
+  as `look at and explain`). The server now keeps the literal marker
+  for every outcome (inline, defer, error), the client no longer
+  strips bare markers from the rendered bubble, and the fence-stripper
+  consumes adjacent newlines so the marker flows inline with
+  surrounding prose instead of leaving an orphan blank line.
+- **Trailing-punctuation file references resolve correctly.**
+  `@README.md?`, `@src/foo.ts,`, `@build.js)` etc. used to greedy-match
+  the trailing punctuation as part of the filename, so the server
+  couldn't resolve the file. The bare-form regex is now lazy + uses a
+  lookahead so trailing `?,;:!)]` followed by whitespace or EOS
+  isn't pulled into the path. Dot is intentionally not in the strip
+  set (filenames have dots); the autocomplete now always inserts the
+  quoted form (`@"src/foo.ts"`) so users can type any punctuation
+  directly after an autocompleted reference.
 
 ### Security
 
