@@ -1,6 +1,8 @@
 # Changelog
 
-All notable changes to pi-workbench are documented in this file.
+All notable changes to pi-forge are documented in this file. (Formerly
+`pi-workbench` through v1.0.3 — see the v1.1.0 entry for the rename
+details.)
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -11,6 +13,97 @@ is called out in its own release notes section. See the "Versions" section of
 the README for the support window policy.
 
 ## [Unreleased]
+
+### Renamed
+
+The project is renamed from **pi-workbench** to **pi-forge** in this
+release. The bare `pi-workbench` slot on npm was already squatted by an
+unrelated tmux-based tool, so a clean reservable identity end-to-end
+(npm + Docker Hub + GitHub) made more sense than coexistence. No
+features change in this release — every other line below describes the
+breaking surface operators upgrading from v1.0.3 must know about.
+
+#### Breaking — operators must take action
+
+- **npm package**: `pi-workbench` → `pi-forge` (root). Workspace
+  packages renamed too: `@pi-workbench/server` → `@pi-forge/server`,
+  `@pi-workbench/client` → `@pi-forge/client`. The workspace packages
+  are private and not published to npm; the rename is purely cosmetic
+  for them.
+- **Docker image**: `ghcr.io/devin-marks/pi-workbench` →
+  `ghcr.io/devin-marks/pi-forge`. The previous image stream stops
+  receiving new tags. Existing pinned tags (`:1.0.3`, `:1.0.2`, etc.)
+  remain pullable from the old name; pull the new image for `1.1.0+`.
+- **Env var**: `WORKBENCH_DATA_DIR` → `FORGE_DATA_DIR`. Update your
+  `docker-compose.yml`, `.env`, helm values, and k8s manifests. The
+  old name is **not** read as a fallback — set the new one or accept
+  the default (`~/.pi-forge/`).
+- **Env var (compose only)**: `WORKBENCH_DATA_HOST_PATH` →
+  `FORGE_DATA_HOST_PATH` in the compose env. Default now points at
+  `~/.pi-forge-docker`.
+- **Default data dir**: `~/.pi-workbench/` → `~/.pi-forge/`. **An
+  auto-migration runs on first boot of v1.1.0**: if `~/.pi-forge/`
+  does not exist and `~/.pi-workbench/` does, the entire directory is
+  atomically renamed (`fs.rename`), carrying `projects.json`,
+  `mcp.json`, `tool-overrides.json`, `skills-overrides.json`,
+  `password-hash`, `jwt-secret`, and the workspace subdir in a single
+  step. Cross-filesystem fallback is `cp -a` + `rm -rf`. The migration
+  is skipped (with a warn-level log) if both directories exist —
+  resolve manually in that case. Skipped entirely if `FORGE_DATA_DIR`
+  is pinned away from the default (operator owns their own path).
+- **HTTP response headers**:
+  - `X-Pi-Workbench-Files` → `X-Pi-Forge-Files` (config export
+    download)
+  - `X-Pi-Workbench-File-Count` → `X-Pi-Forge-File-Count` (skills
+    export download)
+- **Browser localStorage / sessionStorage keys** are renamed from the
+  `pi-workbench/*` and `pi.*` prefixes to `pi-forge/*` and `forge.*`
+  respectively (auth-token, theme, panel widths, view-mode prefs,
+  editor / terminal tab lists, model picker history, input history,
+  every UI preference). **Every existing browser session is logged
+  out and every UI preference reverts to defaults** on first load of
+  v1.1.0. Re-login + re-set preferences is the expected one-time cost.
+- **BroadcastChannel name**: `pi-workbench` → `pi-forge`. Two browser
+  tabs running mixed builds (one pre-rename, one post-rename) lose
+  cross-tab session sync until both reload onto the same build.
+- **Kubernetes manifests**: PVC names, app labels, service / route /
+  deployment names, secret name, mount path all renamed
+  (`pi-workbench-*` → `pi-forge-*`, `/home/pi/.pi-workbench` →
+  `/home/pi/.pi-forge`). Existing operators must rename their PVCs
+  (or recreate from a snapshot) since k8s does not auto-rebind a PVC
+  to a renamed claim. See `kubernetes/DEPLOY.md` for the procedure.
+- **Compose container / service name**: `pi-workbench` → `pi-forge`.
+- **MCP client identifier name**: the `name` field the workbench
+  presents to MCP servers as their connecting client is now
+  `pi-forge` (was `pi-workbench`). Visible only in MCP server logs;
+  no behavioral change.
+- **Swagger / OpenAPI spec title**: `pi-workbench API` →
+  `pi-forge API`. Programmatic clients that key off the spec title
+  must update; auth and route shapes are unchanged.
+
+#### Non-breaking project metadata
+
+- **GitHub repo**: renamed from `Devin-Marks/pi-workbench` to
+  `Devin-Marks/pi-forge` after this release ships. GitHub permanent
+  redirects keep every old URL functional (clones, HTTP, API).
+- **GitHub Pages site** rebuilt under the new name. The Pages URL
+  follows the repo rename automatically.
+- **README, AGENTS.md, CLAUDE.md, all of `docs/`, all of `docs/site/`**
+  rewritten with the new identity. Historical CHANGELOG entries
+  (1.0.0 → 1.0.3) are not retroactively edited; they describe the
+  product as it shipped under the old name, and that history stays
+  intact.
+
+#### What did NOT change (intentionally)
+
+- **Pi SDK packages** (`@mariozechner/pi-coding-agent`,
+  `@mariozechner/pi-agent-core`, `@mariozechner/pi-ai`). Upstream;
+  not ours to rename.
+- **`PI_CONFIG_DIR`** env var and `~/.pi/agent` default. Owned by
+  the SDK.
+- **`.pi/sessions` JSONL session storage path**. SDK convention.
+- **Session JSONL contents and shape**. Sessions roll forward
+  unchanged.
 
 ## [1.0.3] — 2026-05-04
 
