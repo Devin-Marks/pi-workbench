@@ -3,7 +3,7 @@ import { useFileStore, type OpenFile } from "../store/file-store";
 import { useActiveProject } from "../store/project-store";
 import { WrapText, X, XSquare } from "lucide-react";
 
-const WRAP_KEY_PREFIX = "pi.editor.wrap.";
+const WRAP_KEY_PREFIX = "forge.editor.wrap.";
 
 /**
  * Per-file-extension line-wrap preference, persisted across sessions.

@@ -11,7 +11,7 @@
  * to clear `isAuthenticated` and surface the login screen. Exported so the
  * SSE reader uses the same constant — keeps the wire-name in one place.
  */
-export const UNAUTHORIZED_EVENT = "pi-workbench:unauthorized";
+export const UNAUTHORIZED_EVENT = "pi-forge:unauthorized";
 
 export class ApiError extends Error {
   readonly status: number;

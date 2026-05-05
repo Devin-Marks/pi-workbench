@@ -31,9 +31,9 @@ type RightPaneTab = "files" | "search" | "changes" | "git" | "context";
 /* Persisted pane widths. Stored in localStorage so the user-tuned
    layout survives reloads. Defaults err on the side of "the chat is the
    primary surface" — files is narrow, editor is medium. */
-const FILES_WIDTH_KEY = "pi-workbench/files-width";
-const EDITOR_WIDTH_KEY = "pi-workbench/editor-width";
-const TERMINAL_HEIGHT_KEY = "pi-workbench/terminal-height";
+const FILES_WIDTH_KEY = "pi-forge/files-width";
+const EDITOR_WIDTH_KEY = "pi-forge/editor-width";
+const TERMINAL_HEIGHT_KEY = "pi-forge/terminal-height";
 const DEFAULT_FILES_WIDTH = 280;
 const DEFAULT_EDITOR_WIDTH = 480;
 const DEFAULT_TERMINAL_HEIGHT = 280;
@@ -91,15 +91,15 @@ export function App() {
   // a strong signal the user wants it. localStorage > a session-scoped
   // boolean so a refresh doesn't snap back to "hidden".
   const [filesOpen, setFilesOpen] = useState<boolean>(
-    () => localStorage.getItem("pi-workbench/files-open") === "true",
+    () => localStorage.getItem("pi-forge/files-open") === "true",
   );
   const setFilesOpenPersisted = (v: boolean): void => {
     setFilesOpen(v);
-    localStorage.setItem("pi-workbench/files-open", v ? "true" : "false");
+    localStorage.setItem("pi-forge/files-open", v ? "true" : "false");
   };
 
   const [rightTab, setRightTab] = useState<RightPaneTab>(() => {
-    const raw = localStorage.getItem("pi-workbench/right-tab");
+    const raw = localStorage.getItem("pi-forge/right-tab");
     return raw === "files" ||
       raw === "search" ||
       raw === "changes" ||
@@ -110,15 +110,15 @@ export function App() {
   });
   const setRightTabPersisted = (next: RightPaneTab): void => {
     setRightTab(next);
-    localStorage.setItem("pi-workbench/right-tab", next);
+    localStorage.setItem("pi-forge/right-tab", next);
   };
 
   const [terminalOpen, setTerminalOpen] = useState<boolean>(
-    () => localStorage.getItem("pi-workbench/terminal-open") === "true",
+    () => localStorage.getItem("pi-forge/terminal-open") === "true",
   );
   const setTerminalOpenPersisted = (v: boolean): void => {
     setTerminalOpen(v);
-    localStorage.setItem("pi-workbench/terminal-open", v ? "true" : "false");
+    localStorage.setItem("pi-forge/terminal-open", v ? "true" : "false");
   };
 
   // Chat pane visibility — defaults to OPEN (the chat is the workbench's
@@ -126,11 +126,11 @@ export function App() {
   // user who has never touched the toggle gets the chat. Hide is for the
   // "I just want to use the file editor + terminal" focus mode.
   const [chatOpen, setChatOpen] = useState<boolean>(
-    () => localStorage.getItem("pi-workbench/chat-open") !== "false",
+    () => localStorage.getItem("pi-forge/chat-open") !== "false",
   );
   const setChatOpenPersisted = (v: boolean): void => {
     setChatOpen(v);
-    localStorage.setItem("pi-workbench/chat-open", v ? "true" : "false");
+    localStorage.setItem("pi-forge/chat-open", v ? "true" : "false");
   };
 
   // Editor pane visibility — independent of `filesOpen` (the file
@@ -139,11 +139,11 @@ export function App() {
   // in sessionStorage via file-store; this toggle just controls
   // visibility of the rendered pane.
   const [editorOpen, setEditorOpen] = useState<boolean>(
-    () => localStorage.getItem("pi-workbench/editor-open") !== "false",
+    () => localStorage.getItem("pi-forge/editor-open") !== "false",
   );
   const setEditorOpenPersisted = (v: boolean): void => {
     setEditorOpen(v);
-    localStorage.setItem("pi-workbench/editor-open", v ? "true" : "false");
+    localStorage.setItem("pi-forge/editor-open", v ? "true" : "false");
   };
 
   // First-run picker dismissal. When no projects exist we render the
@@ -351,7 +351,7 @@ export function App() {
               the parent gap-3 used between brand and project picker). */}
           <div className="flex items-center gap-1.5">
             <img src="/icons/icon.svg" alt="" className="h-8 w-8" aria-hidden="true" />
-            <span className="text-sm font-semibold tracking-tight">pi-workbench</span>
+            <span className="text-sm font-semibold tracking-tight">pi-forge</span>
           </div>
         </div>
         <div className="flex items-center gap-2">

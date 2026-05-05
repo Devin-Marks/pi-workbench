@@ -3,7 +3,7 @@ import { api, ApiError, type SessionSummary, type UnifiedSession } from "../lib/
 import { streamSSE } from "../lib/sse-client";
 import { postCrossTab, subscribeCrossTab } from "../lib/cross-tab";
 
-const ACTIVE_SESSION_KEY = "pi-workbench/active-session-id";
+const ACTIVE_SESSION_KEY = "pi-forge/active-session-id";
 
 /**
  * Stable empty constants for Zustand selectors. React 18's useSyncExternalStore

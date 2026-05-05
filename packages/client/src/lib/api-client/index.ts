@@ -1290,7 +1290,7 @@ export const api = {
    * settings.json, models.json — auth.json deliberately excluded).
    * Returns a blob plus the filename the server suggested via
    * Content-Disposition AND the names actually packed (from the
-   * `X-Pi-Workbench-Files` header). The caller is responsible for
+   * `X-Pi-Forge-Files` header). The caller is responsible for
    * triggering the browser download (createObjectURL + anchor click).
    */
   exportConfig: async (): Promise<{ blob: Blob; filename: string; files: string[] }> => {
@@ -1315,8 +1315,8 @@ export const api = {
     }
     const blob = await res.blob();
     const cd = res.headers.get("Content-Disposition") ?? "";
-    const filename = parseContentDispositionFilename(cd) ?? "pi-workbench-config.tar.gz";
-    const filesHeader = res.headers.get("X-Pi-Workbench-Files") ?? "";
+    const filename = parseContentDispositionFilename(cd) ?? "pi-forge-config.tar.gz";
+    const filesHeader = res.headers.get("X-Pi-Forge-Files") ?? "";
     const files = filesHeader.split(",").filter((s) => s.length > 0);
     return { blob, filename, files };
   },
@@ -1385,8 +1385,8 @@ export const api = {
     }
     const blob = await res.blob();
     const cd = res.headers.get("Content-Disposition") ?? "";
-    const filename = parseContentDispositionFilename(cd) ?? "pi-workbench-skills.tar.gz";
-    const countHeader = res.headers.get("X-Pi-Workbench-File-Count") ?? "0";
+    const filename = parseContentDispositionFilename(cd) ?? "pi-forge-skills.tar.gz";
+    const countHeader = res.headers.get("X-Pi-Forge-File-Count") ?? "0";
     const fileCount = Number.parseInt(countHeader, 10) || 0;
     return { blob, filename, fileCount };
   },

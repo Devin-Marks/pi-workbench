@@ -59,7 +59,7 @@ export interface OpenFile {
  * Per-project key so switching projects doesn't pull the previous
  * project's files into view.
  */
-const TABS_KEY_PREFIX = "pi.editor.tabs.v1:";
+const TABS_KEY_PREFIX = "forge.editor.tabs.v1:";
 
 interface PersistedTabs {
   paths: string[];

@@ -204,7 +204,7 @@ export function GitPanel() {
   // they're committing but unified for the per-turn agent activity).
   const [diffViewType, setDiffViewType] = useState<"unified" | "split">(() => {
     try {
-      return localStorage.getItem("pi.gitPanel.viewType") === "split" ? "split" : "unified";
+      return localStorage.getItem("forge.gitPanel.viewType") === "split" ? "split" : "unified";
     } catch {
       // Private-mode storage — fall back to the default unified view.
       return "unified";
@@ -213,7 +213,7 @@ export function GitPanel() {
   const setAndPersistDiffView = (next: "unified" | "split"): void => {
     setDiffViewType(next);
     try {
-      localStorage.setItem("pi.gitPanel.viewType", next);
+      localStorage.setItem("forge.gitPanel.viewType", next);
     } catch {
       // ignore — choice still applies for this session
     }
