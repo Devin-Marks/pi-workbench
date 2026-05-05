@@ -35,7 +35,7 @@ interface ClosableTransport {
  * `loadProject()` so the status badge has something honest to show.
  *
  * v1 supports remote transports only (StreamableHTTP + SSE). stdio
- * deferred — the workbench is container-native and arbitrary
+ * deferred — the pi-forge is container-native and arbitrary
  * subprocess spawning has different security trade-offs.
  */
 
@@ -436,7 +436,7 @@ async function readProjectMcpJson(projectPath: string): Promise<Record<string, M
     if (raw.trim().length === 0) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (typeof parsed !== "object" || parsed === null) return {};
-    // Accept both `{ servers: {...} }` (workbench shape) and
+    // Accept both `{ servers: {...} }` (pi-forge shape) and
     // `{ mcpServers: {...} }` (Claude Desktop / pi-mcp-adapter shape)
     // so a project that already speaks the standard MCP file format
     // works without rewriting.

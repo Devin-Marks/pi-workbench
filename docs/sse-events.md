@@ -241,7 +241,7 @@ The tool's result message has been added to the session.
 ```
 
 `details` is tool-specific. For `edit` tools it includes a unified diff
-string under a tool-specific field — the workbench's
+string under a tool-specific field — the pi-forge's
 `turn-diff-builder.ts` extracts these for the Last Turn pane.
 
 ## Steering / queue events

@@ -8,7 +8,7 @@ import {
   SettingsManager,
   type SessionInfo,
 } from "@mariozechner/pi-coding-agent";
-import { buildWorkbenchResourceLoader } from "./agent-resource-loader.js";
+import { buildForgeResourceLoader } from "./agent-resource-loader.js";
 import { config } from "./config.js";
 import { makeDedupe, makeLock } from "./concurrency.js";
 import { effectiveSkillsForProject } from "./config-manager.js";
@@ -236,7 +236,7 @@ function makeSubscribeHandler(live: LiveSession): () => void {
     // upstream HTTP failures into events rather than throwing — so a 401
     // from a bad apiKey, a network reset, an invalid endpoint, etc.
     // surface only via these events and are otherwise invisible to
-    // operators. The TUI renders this directly in chat; the workbench
+    // operators. The TUI renders this directly in chat; the pi-forge
     // did not, leaving "no response" as the only signal.
     //
     // We hook every event the SDK emits when something goes wrong,
@@ -368,7 +368,7 @@ export async function createSession(
   // for Phase 6's prompt route.
   const customTools = await resolveMcpCustomTools(projectId, workspacePath);
   const settingsManager = await buildSessionSettingsManager(workspacePath, projectId);
-  const resourceLoader = await buildWorkbenchResourceLoader(
+  const resourceLoader = await buildForgeResourceLoader(
     workspacePath,
     config.piConfigDir,
     settingsManager,
@@ -520,7 +520,7 @@ export async function resumeSession(
     const sessionManager = SessionManager.open(match.path, dir, workspacePath);
     const customTools = await resolveMcpCustomTools(projectId, workspacePath);
     const settingsManager = await buildSessionSettingsManager(workspacePath, projectId);
-    const resourceLoader = await buildWorkbenchResourceLoader(
+    const resourceLoader = await buildForgeResourceLoader(
       workspacePath,
       config.piConfigDir,
       settingsManager,
@@ -893,7 +893,7 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
   const sessionManager = SessionManager.open(newPath, dir, source.workspacePath);
   const customTools = await resolveMcpCustomTools(source.projectId, source.workspacePath);
   const settingsManager = await buildSessionSettingsManager(source.workspacePath, source.projectId);
-  const resourceLoader = await buildWorkbenchResourceLoader(
+  const resourceLoader = await buildForgeResourceLoader(
     source.workspacePath,
     config.piConfigDir,
     settingsManager,
@@ -972,7 +972,7 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
         source.workspacePath,
         source.projectId,
       );
-      const restoredResourceLoader = await buildWorkbenchResourceLoader(
+      const restoredResourceLoader = await buildForgeResourceLoader(
         source.workspacePath,
         config.piConfigDir,
         restoredSettingsManager,
@@ -1039,7 +1039,7 @@ export async function disposeAllSessions(): Promise<void> {
 /**
  * Build a SettingsManager whose `getGlobalSettings()` and
  * `getProjectSettings()` return augmented `skills` patterns reflecting
- * the workbench's per-project overrides.
+ * the pi-forge's per-project overrides.
  *
  * Why we don't use `applyOverrides({ skills })`: pi's package-manager
  * (the thing that auto-discovers and filters skills) reads

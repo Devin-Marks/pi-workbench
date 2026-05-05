@@ -1,7 +1,7 @@
 /**
  * Phase 4/15 fork integration test.
  *
- * Pins the SDK in-place mutation behavior + the workbench's per-source
+ * Pins the SDK in-place mutation behavior + the pi-forge's per-source
  * lock + source-restore dance. These are the bits with the longest
  * "this is subtle, here's why" comment block in `session-registry.ts`,
  * and the most likely to silently corrupt sessions on an SDK upgrade.
@@ -21,7 +21,7 @@
  *      to the wrong path).
  *
  * This test does NOT exercise the SDK's createBranchedSession beyond
- * what's needed to verify the workbench's wrapper. It uses the
+ * what's needed to verify the pi-forge's wrapper. It uses the
  * setSessionName + appendMessage trick from test-session.ts to get the
  * source session's JSONL into a non-empty state so the SDK has
  * something to fork from.

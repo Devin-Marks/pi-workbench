@@ -2,12 +2,12 @@
 
 pi-forge's runtime behavior is shaped by **two** layers of configuration:
 
-1. **Workbench env vars** — read by `packages/server/src/config.ts` at
+1. **pi-forge env vars** — read by `packages/server/src/config.ts` at
    startup. Controls ports, paths, auth, and the `MINIMAL_UI` frontend
    gate. Documented in [Environment variables](#environment-variables) below.
 2. **Pi SDK config files** — JSON files under `${PI_CONFIG_DIR}` (default
    `~/.pi/agent`, container `/home/pi/.pi/agent`). Owned by the pi SDK,
-   surfaced by the workbench's Settings panel and the
+   surfaced by the pi-forge's Settings panel and the
    `/api/v1/config/*` routes. See [Pi SDK config files](#pi-sdk-config-files)
    below.
 
@@ -20,7 +20,7 @@ pi-forge's runtime behavior is shaped by **two** layers of configuration:
 | `LOG_LEVEL` | `info` | Pino log level. |
 | `WORKSPACE_PATH` | `~/.pi-forge/workspace` | Where project code lives. Docker image overrides to `/workspace` (mounted from host). Point at an existing dir (e.g. `~/Code`) to reuse code you already have on disk. |
 | `PI_CONFIG_DIR` | `~/.pi/agent` | Pi SDK config dir (auth.json, models.json, settings.json — owned by the SDK). The Docker image overrides this to `/home/pi/.pi/agent` (mounted from the host's `~/.pi/agent`). |
-| `FORGE_DATA_DIR` | `~/.pi-forge` | Workbench-owned state (projects.json). Defaults to the same dotdir as the workspace (`projects.json` sits alongside `workspace/`). Kept separate from `PI_CONFIG_DIR` so we don't mix our state into the pi SDK's directory. Docker image points this at `/home/pi/.pi-forge` (mounted from the host's `~/.pi-forge-docker` by default — container has its own project list). |
+| `FORGE_DATA_DIR` | `~/.pi-forge` | pi-forge-owned state (projects.json). Defaults to the same dotdir as the workspace (`projects.json` sits alongside `workspace/`). Kept separate from `PI_CONFIG_DIR` so we don't mix our state into the pi SDK's directory. Docker image points this at `/home/pi/.pi-forge` (mounted from the host's `~/.pi-forge-docker` by default — container has its own project list). |
 | `CLIENT_DIST_PATH` | `<server-dist>/../../client/dist` | Built Vite output served by Fastify in production. |
 | `SERVE_CLIENT` | `true` | Set to `false` to skip static-serving (useful when running the dev Vite server in front of the API). |
 | `SESSION_DIR` | `${WORKSPACE_PATH}/.pi/sessions` | JSONL session storage. |
@@ -41,7 +41,7 @@ posture) lives in [`deployment.md`](./deployment.md).
 ## Pi SDK config files
 
 This section covers layer 2 — what each pi config file does, how the
-workbench reads/writes it, and how to wire up a custom provider.
+pi-forge reads/writes it, and how to wire up a custom provider.
 
 ## File layout
 
@@ -54,7 +54,7 @@ ${PI_CONFIG_DIR}/
 
 Skills (per-project Markdown files) live elsewhere — under `.pi/skills/`
 inside each project directory and inside `~/.pi/agent/skills/` for global
-skills. The workbench surfaces them but doesn't own their storage.
+skills. The pi-forge surfaces them but doesn't own their storage.
 
 ## auth.json — provider API keys
 
@@ -71,9 +71,9 @@ schematically:
 ```
 
 Some providers use OAuth and store tokens here instead of bare API keys.
-Pi handles the format; the workbench doesn't parse it.
+Pi handles the format; the pi-forge doesn't parse it.
 
-### How the workbench surfaces it
+### How the pi-forge surfaces it
 
 The Settings → Providers tab shows every provider that has a key
 configured (a green dot) or doesn't (an "Add key" button). It uses
@@ -161,7 +161,7 @@ Each provider entry's `api` field tells pi-ai which protocol adapter to use:
 For most third-party endpoints you'll use `openai-completions`. Check the
 endpoint's docs to confirm wire-format compatibility.
 
-### How the workbench surfaces it
+### How the pi-forge surfaces it
 
 Settings → Providers shows a collapsible "Custom providers (models.json)"
 section with a raw-JSON editor. The editor is gated behind a `<details>`
@@ -201,7 +201,7 @@ Pi-side defaults that apply to new sessions:
 Other SDK keys (less commonly tuned) are accepted by the
 `PUT /api/v1/config/settings` route and persist in this file.
 
-### How the workbench surfaces it
+### How the pi-forge surfaces it
 
 Settings → Agent is a typed form for the common fields plus an
 "Edit as JSON" toggle for the long tail of SDK keys. Form changes
@@ -220,7 +220,7 @@ on session switch. It does NOT modify `settings.json`.
 
 (See the commit history around `routes/control.ts:setModel` for the
 gory details — the SDK's `setModel` writes the global default as a
-side effect, which the workbench undoes by snapshot-and-restore around
+side effect, which the pi-forge undoes by snapshot-and-restore around
 the call so per-session selection doesn't mutate the global default.)
 
 ## Per-project skills
@@ -232,7 +232,7 @@ under:
 - **Project-local:** `<project-path>/.pi/skills/*.md`
 - **Global:** `~/.pi/agent/skills/*.md` — available across all projects
 
-The workbench's Settings → Skills tab shows the merged list (global +
+The pi-forge's Settings → Skills tab shows the merged list (global +
 project-local) for the active project, with a toggle per skill to
 enable/disable for THIS project. Disable state writes to the project's
 `settings.json`; the skill files themselves are untouched.
@@ -269,7 +269,7 @@ auth model, and troubleshooting.
 
 ## See also
 
-- [`README.md`](../README.md) — workbench env vars + Docker quickstart
+- [`README.md`](../README.md) — pi-forge env vars + Docker quickstart
 - [`docs/deployment.md`](./deployment.md) — production deploy with TLS +
   reverse proxy + auth
 - [`docs/CONTAINERS.md`](./CONTAINERS.md) — container internals + bind

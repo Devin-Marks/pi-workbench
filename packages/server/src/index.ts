@@ -459,7 +459,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   // so /mcp/settings reports honest connection counts before the
   // first session is created. Project-scope servers load lazily on
   // first session-create per project. Failure here is non-fatal —
-  // a bad mcp.json shouldn't keep the workbench from booting.
+  // a bad mcp.json shouldn't keep pi-forge from booting.
   loadGlobalMcp().catch((err: unknown) => {
     fastify.log.error({ err }, "mcp: initial load failed");
   });

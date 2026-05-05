@@ -24,7 +24,7 @@ export function LoginScreen() {
             <img src="/icons/icon.svg" alt="" className="h-6 w-6" aria-hidden="true" />
             <h1 className="text-xl font-semibold tracking-tight">pi-forge</h1>
           </div>
-          <p className="text-sm text-neutral-400">Enter the workbench password to continue.</p>
+          <p className="text-sm text-neutral-400">Enter the pi-forge password to continue.</p>
         </header>
         <label className="block space-y-1.5">
           <span className="text-sm font-medium text-neutral-300">Password</span>

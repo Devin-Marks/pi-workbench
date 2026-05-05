@@ -66,7 +66,7 @@ For non-container reverse-proxy + TLS recipes, see
 <p>pi-forge is <strong>single-tenant by design</strong> and the container is the unit of
 isolation. The agent&#39;s <code>bash</code> tool is a real shell, the <code>write</code> and <code>edit</code>
 tools touch the workspace filesystem, and the integrated terminal spawns
-a PTY with the workbench process&#39;s permissions. Running in a container:</p>
+a PTY with the pi-forge process&#39;s permissions. Running in a container:</p>
 <ul>
 <li>Bounds what the agent can damage (only the bind-mounted workspace + the
 container&#39;s filesystem, which is rebuilt on rebuild)</li>
@@ -114,7 +114,7 @@ it, code search inside the agent silently degrades</li>
 </ul>
 <h3>User and permissions</h3>
 <p>The image creates a <code>pi</code> user (uid/gid configurable via <code>PUID</code> / <code>PGID</code>
-build args; default <code>1000:1000</code>) and runs the workbench as that user.</p>
+build args; default <code>1000:1000</code>) and runs the pi-forge as that user.</p>
 <p>For bind mounts to be writable, the <code>pi</code> user inside the container must
 match the host user that owns the mounted directory. On Linux:</p>
 <pre><code class="language-bash">PUID=$(id -u) PGID=$(id -g) docker compose -f docker/docker-compose.yml up -d --build
@@ -144,7 +144,7 @@ usually work.</p>
 <tr>
 <td><code>/home/pi/.pi-forge</code></td>
 <td><code>FORGE_DATA_HOST_PATH</code> (default <code>~/.pi-forge-docker</code>)</td>
-<td>Workbench-owned state — <code>projects.json</code>. <strong>Different default</strong> than <code>PI_CONFIG_HOST_PATH</code> so the container has its own project list independent of host CLI use.</td>
+<td>pi-forge-owned state — <code>projects.json</code>. <strong>Different default</strong> than <code>PI_CONFIG_HOST_PATH</code> so the container has its own project list independent of host CLI use.</td>
 </tr>
 </tbody></table>
 <h3>Why three volumes</h3>
@@ -152,7 +152,7 @@ usually work.</p>
 <li><strong>Workspace</strong> is your code; you back it up.</li>
 <li><strong><code>pi</code> config</strong> is your provider credentials; sharing with the host means
 you don&#39;t have to re-enter API keys after rebuild.</li>
-<li><strong>Workbench data</strong> is the project registry — sharing host vs container
+<li><strong>pi-forge data</strong> is the project registry — sharing host vs container
 means coordinating two project lists. Defaulting to a separate host path
 (<code>~/.pi-forge-docker</code>) keeps them isolated. Set both to the same
 path if you want a shared registry.</li>
@@ -285,7 +285,7 @@ history, which lives in memory until the SSE clients drain it</li>
 <li><strong>Have very long running sessions</strong> — pi accumulates message history in
 memory; compaction trims it but cycles in and out</li>
 </ul>
-<p>CPU is rarely the bottleneck — most workbench CPU is forwarding bytes
+<p>CPU is rarely the bottleneck — most pi-forge CPU is forwarding bytes
 between the LLM provider and the browser.</p>
 <h2>Networking</h2>
 <p>The container exposes port 3000 internally. The compose file maps it to
@@ -295,9 +295,9 @@ interface to limit exposure:</p>
   - &quot;127.0.0.1:${HOST_PORT}:3000&quot;   # loopback only
 </code></pre>
 <p>For production behind a reverse proxy on the same host, this is the
-recommended posture: only the proxy can reach the workbench, and the
+recommended posture: only the proxy can reach the pi-forge, and the
 proxy terminates TLS + handles auth headers.</p>
-<p>For multi-host deployments, put the workbench on a private network the
+<p>For multi-host deployments, put the pi-forge on a private network the
 proxy can reach. Avoid <code>0.0.0.0:3000:3000</code> on a host whose port 3000 is
 internet-routable.</p>
 <h3>SSE through proxies</h3>
@@ -316,7 +316,7 @@ the proxy side; both nginx and Caddy do this transparently in their
 default reverse-proxy directives.</p>
 <h2>Security inside the container</h2>
 <ul>
-<li><strong>Non-root user.</strong> The workbench runs as <code>pi:pi</code>, never as root. The
+<li><strong>Non-root user.</strong> The pi-forge runs as <code>pi:pi</code>, never as root. The
 <code>tini</code> init handles signal forwarding so the container shuts down
 cleanly on <code>docker stop</code>.</li>
 <li><strong>No new privileges.</strong> The image has no capabilities beyond what the

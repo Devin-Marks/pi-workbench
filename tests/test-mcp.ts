@@ -3,7 +3,7 @@
  *
  * Spins up an in-process MCP server using the SDK's
  * `@modelcontextprotocol/sdk/server/mcp.js` + StreamableHTTP transport
- * bound to a random port, then drives the workbench's MCP manager
+ * bound to a random port, then drives the pi-forge's MCP manager
  * against it and exercises:
  *   - global config load → connect → list tools
  *   - bridged ToolDefinition execute → MCP server tool ran

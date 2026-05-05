@@ -8,7 +8,7 @@ assignees: ''
 
 ## The problem
 
-<!-- What can't you do today, or what is awkward about how the workbench
+<!-- What can't you do today, or what is awkward about how the pi-forge
 behaves? Describe the situation, not the solution. -->
 
 ## What you'd want instead

@@ -23,16 +23,16 @@ A short checklist that catches the common foot-guns:
       Rotating (delete the file or change the env) invalidates all
       sessions immediately, which is what you want after a key leak.
 - [ ] Reverse proxy (Caddy / nginx / Traefik) terminates TLS in front of
-      the workbench. Plain HTTP is fine on `127.0.0.1`; never on a routable
+      the pi-forge. Plain HTTP is fine on `127.0.0.1`; never on a routable
       interface.
 - [ ] `TRUST_PROXY=true` so the login rate-limit applies per real client
       IP rather than per proxy hop.
 - [ ] `CORS_ORIGIN` pinned to your actual domain (e.g.
       `https://pi.example.com`) — do not leave it reflecting whatever
       the request claims.
-- [ ] Workspace + pi config + workbench data on backed-up storage. The
+- [ ] Workspace + pi config + pi-forge data on backed-up storage. The
       container is replaceable; your sessions and provider keys are not.
-- [ ] LLM provider account has a spending limit set. The workbench
+- [ ] LLM provider account has a spending limit set. The pi-forge
       surfaces token + cost telemetry in the Context Inspector but does
       not enforce caps.
 
@@ -62,7 +62,7 @@ A short checklist that catches the common foot-guns:
 ```
 
 The proxy handles TLS, HSTS, and (optionally) request logging. The
-workbench handles app-level auth. Bind the container's port 3000 to
+pi-forge handles app-level auth. Bind the container's port 3000 to
 `127.0.0.1` only on the host so nothing besides the proxy can reach it.
 
 ## Reverse-proxy snippets
@@ -115,7 +115,7 @@ server {
         proxy_pass         http://127.0.0.1:3000;
         proxy_http_version 1.1;
 
-        # Forwarded headers — TRUST_PROXY=true on the workbench reads these
+        # Forwarded headers — TRUST_PROXY=true on the pi-forge reads these
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
@@ -130,7 +130,7 @@ server {
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
 
-        # File upload cap matches the workbench's 50 MB per-file
+        # File upload cap matches the pi-forge's 50 MB per-file
         client_max_body_size 100M;
     }
 }
@@ -322,7 +322,7 @@ curl -s http://localhost:3000/api/v1/health
 The container's `HEALTHCHECK` directive uses this (see
 [`docs/CONTAINERS.md`](./CONTAINERS.md#health-check)).
 
-For deeper observability, the workbench logs to stdout in pino's JSON
+For deeper observability, the pi-forge logs to stdout in pino's JSON
 format. Pipe through your log aggregator of choice:
 
 ```bash

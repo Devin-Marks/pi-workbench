@@ -1,10 +1,10 @@
 /**
- * Workbench-customized ResourceLoader for the agent.
+ * pi-forge-customized ResourceLoader for the agent.
  *
  * Why this exists: pi's `DefaultResourceLoader` accepts an
  * `appendSystemPrompt: string[]` that gets concatenated onto the
  * agent's base system prompt. We optionally use this hook to inject
- * one workbench-specific behavioral rule about secret hygiene — a
+ * one pi-forge-specific behavioral rule about secret hygiene — a
  * soft safeguard that tells the model to treat env-var values as
  * credentials by default and not echo them back into responses /
  * tool output.
@@ -55,7 +55,7 @@ import { config } from "./config.js";
  * the resulting string the model sees is normal prose with paragraph
  * breaks at the intentional `\n\n`s.
  */
-export const WORKBENCH_SECRET_HYGIENE_RULE =
+export const FORGE_SECRET_HYGIENE_RULE =
   "When running shell commands on behalf of the user, treat the contents of " +
   "environment variables as credentials by default. Do not echo, print, or " +
   "paste env-var *values* into your responses or tool outputs unless the user " +
@@ -71,7 +71,7 @@ export const WORKBENCH_SECRET_HYGIENE_RULE =
   "or pasted into bug reports.";
 
 /**
- * Build a ResourceLoader pre-loaded with the workbench's optional
+ * Build a ResourceLoader pre-loaded with the pi-forge's optional
  * `appendSystemPrompt` addendum. Mirrors the SDK's own internal
  * construction at sdk.js:87 (instantiate + await reload()), so the
  * loader is ready to hand to `createAgentSession` as-is.
@@ -80,12 +80,12 @@ export const WORKBENCH_SECRET_HYGIENE_RULE =
  * loader is built with no addendum and behaves identically to the
  * SDK's own default loader — opt-in only, see the file header.
  */
-export async function buildWorkbenchResourceLoader(
+export async function buildForgeResourceLoader(
   cwd: string,
   agentDir: string,
   settingsManager: SettingsManager,
 ): Promise<ResourceLoader> {
-  const appendSystemPrompt = config.agentSecretHygieneRule ? [WORKBENCH_SECRET_HYGIENE_RULE] : [];
+  const appendSystemPrompt = config.agentSecretHygieneRule ? [FORGE_SECRET_HYGIENE_RULE] : [];
   const loader = new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -110,7 +110,7 @@ export function logSecretHygieneState(): void {
   if (config.agentSecretHygieneRule) {
     console.log(
       "[agent-resource-loader] AGENT_SECRET_HYGIENE_RULE=true — appending " +
-        `secret-hygiene rule to every agent system prompt (${WORKBENCH_SECRET_HYGIENE_RULE.length} chars)`,
+        `secret-hygiene rule to every agent system prompt (${FORGE_SECRET_HYGIENE_RULE.length} chars)`,
     );
   } else {
     console.log(

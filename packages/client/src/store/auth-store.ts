@@ -119,22 +119,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 // evaluation. import.meta.hot.dispose clears the flag and unregisters the old
 // listener so the next evaluation registers against the new store.
 declare global {
-  var __piWorkbenchAuthListenerRegistered: boolean | undefined;
-  var __piWorkbenchAuthListenerCleanup: (() => void) | undefined;
+  var __piForgeAuthListenerRegistered: boolean | undefined;
+  var __piForgeAuthListenerCleanup: (() => void) | undefined;
 }
-if (!globalThis.__piWorkbenchAuthListenerRegistered) {
-  globalThis.__piWorkbenchAuthListenerCleanup = onUnauthorized(() =>
+if (!globalThis.__piForgeAuthListenerRegistered) {
+  globalThis.__piForgeAuthListenerCleanup = onUnauthorized(() =>
     useAuthStore.setState({ isAuthenticated: false }),
   );
-  globalThis.__piWorkbenchAuthListenerRegistered = true;
+  globalThis.__piForgeAuthListenerRegistered = true;
 }
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    if (globalThis.__piWorkbenchAuthListenerCleanup) {
-      globalThis.__piWorkbenchAuthListenerCleanup();
+    if (globalThis.__piForgeAuthListenerCleanup) {
+      globalThis.__piForgeAuthListenerCleanup();
     }
-    globalThis.__piWorkbenchAuthListenerRegistered = false;
-    globalThis.__piWorkbenchAuthListenerCleanup = undefined;
+    globalThis.__piForgeAuthListenerRegistered = false;
+    globalThis.__piForgeAuthListenerCleanup = undefined;
   });
 }

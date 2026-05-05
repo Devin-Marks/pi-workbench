@@ -404,7 +404,7 @@ async function main(): Promise<void> {
       );
 
       // pi's settings.json should NOT have absorbed the project
-      // override — project state lives in the workbench-private
+      // override — project state lives in the pi-forge-private
       // overrides file. In the new pattern model, "global view
       // unaffected" means the global file does NOT pick up a
       // `!hello` exclude pattern as a side-effect of the project-

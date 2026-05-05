@@ -13,7 +13,7 @@ For non-container reverse-proxy + TLS recipes, see
 pi-forge is **single-tenant by design** and the container is the unit of
 isolation. The agent's `bash` tool is a real shell, the `write` and `edit`
 tools touch the workspace filesystem, and the integrated terminal spawns
-a PTY with the workbench process's permissions. Running in a container:
+a PTY with the pi-forge process's permissions. Running in a container:
 
 - Bounds what the agent can damage (only the bind-mounted workspace + the
   container's filesystem, which is rebuilt on rebuild)
@@ -51,7 +51,7 @@ toolchain or devDeps in the runtime image.
 ### User and permissions
 
 The image creates a `pi` user (uid/gid configurable via `PUID` / `PGID`
-build args; default `1000:1000`) and runs the workbench as that user.
+build args; default `1000:1000`) and runs the pi-forge as that user.
 
 For bind mounts to be writable, the `pi` user inside the container must
 match the host user that owns the mounted directory. On Linux:
@@ -71,14 +71,14 @@ The container expects three bind-mounted volumes:
 |---|---|---|
 | `/workspace` | `WORKSPACE_HOST_PATH` (default `../workspace`) | User's project source code. Projects live as subfolders. |
 | `/home/pi/.pi/agent` | `PI_CONFIG_HOST_PATH` (default `~/.pi/agent`) | Pi SDK config — `auth.json`, `models.json`, `settings.json`. Bind-mounting from the host means the container inherits provider auth without copying secrets into the image. |
-| `/home/pi/.pi-forge` | `FORGE_DATA_HOST_PATH` (default `~/.pi-forge-docker`) | Workbench-owned state — `projects.json`. **Different default** than `PI_CONFIG_HOST_PATH` so the container has its own project list independent of host CLI use. |
+| `/home/pi/.pi-forge` | `FORGE_DATA_HOST_PATH` (default `~/.pi-forge-docker`) | Forge-owned state — `projects.json`. **Different default** than `PI_CONFIG_HOST_PATH` so the container has its own project list independent of host CLI use. |
 
 ### Why three volumes
 
 - **Workspace** is your code; you back it up.
 - **`pi` config** is your provider credentials; sharing with the host means
   you don't have to re-enter API keys after rebuild.
-- **Workbench data** is the project registry — sharing host vs container
+- **pi-forge data** is the project registry — sharing host vs container
   means coordinating two project lists. Defaulting to a separate host path
   (`~/.pi-forge-docker`) keeps them isolated. Set both to the same
   path if you want a shared registry.
@@ -179,7 +179,7 @@ Bump if you:
 - **Have very long running sessions** — pi accumulates message history in
   memory; compaction trims it but cycles in and out
 
-CPU is rarely the bottleneck — most workbench CPU is forwarding bytes
+CPU is rarely the bottleneck — most pi-forge CPU is forwarding bytes
 between the LLM provider and the browser.
 
 ## Networking
@@ -194,10 +194,10 @@ ports:
 ```
 
 For production behind a reverse proxy on the same host, this is the
-recommended posture: only the proxy can reach the workbench, and the
+recommended posture: only the proxy can reach the pi-forge, and the
 proxy terminates TLS + handles auth headers.
 
-For multi-host deployments, put the workbench on a private network the
+For multi-host deployments, put the pi-forge on a private network the
 proxy can reach. Avoid `0.0.0.0:3000:3000` on a host whose port 3000 is
 internet-routable.
 
@@ -219,7 +219,7 @@ default reverse-proxy directives.
 
 ## Security inside the container
 
-- **Non-root user.** The workbench runs as `pi:pi`, never as root. The
+- **Non-root user.** The pi-forge runs as `pi:pi`, never as root. The
   `tini` init handles signal forwarding so the container shuts down
   cleanly on `docker stop`.
 - **No new privileges.** The image has no capabilities beyond what the

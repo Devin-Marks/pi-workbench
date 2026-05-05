@@ -66,14 +66,14 @@ spec:
               mountPath: /workspace
             - name: pi-config
               mountPath: /home/pi/.pi/agent
-            - name: workbench-data
+            - name: pi-forge-data
               mountPath: /home/pi/.pi-forge
       containers:
         - name: pi-forge
           image: pi-forge:latest
           imagePullPolicy: IfNotPresent
           # Container-level security context. The application only writes
-          # to bind-mounted volumes (workspace, pi-config, workbench-data),
+          # to bind-mounted volumes (workspace, pi-config, pi-forge-data),
           # so the root filesystem can be read-only.
           securityContext:
             allowPrivilegeEscalation: false
@@ -183,7 +183,7 @@ spec:
               mountPath: /workspace
             - name: pi-config
               mountPath: /home/pi/.pi/agent
-            - name: workbench-data
+            - name: pi-forge-data
               mountPath: /home/pi/.pi-forge
             # /tmp is required by the agent's bash tool — `mktemp`,
             # `pip install`, `npm install`, `git clone` all write here.
@@ -198,7 +198,7 @@ spec:
         - name: pi-config
           persistentVolumeClaim:
             claimName: pi-forge-pi-config
-        - name: workbench-data
+        - name: pi-forge-data
           persistentVolumeClaim:
             claimName: pi-forge-data
         # emptyDir for /tmp because the container has

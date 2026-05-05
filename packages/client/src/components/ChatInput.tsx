@@ -362,9 +362,9 @@ export function ChatInput({ sessionId }: Props) {
         run: () => {
           setAttachmentError(
             minimalUi
-              ? "/<cmd> runs a workbench command (compact, abort, settings, …). " +
+              ? "/<cmd> runs a pi-forge command (compact, abort, settings, …). " +
                   "@<path> references a project file (autocomplete from the popover)."
-              : "/<cmd> runs a workbench command (compact, abort, settings, …). " +
+              : "/<cmd> runs a pi-forge command (compact, abort, settings, …). " +
                   "!cmd runs bash (output → next LLM context); !!cmd runs bash local-only. " +
                   "@<path> references a project file (autocomplete from the popover).",
           );

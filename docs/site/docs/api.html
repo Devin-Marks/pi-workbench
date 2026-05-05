@@ -245,7 +245,7 @@ returns 403 if outside, 409 if a project with that path already exists.</p>
   $BASE/api/v1/projects/$PROJECT_ID \
   -d &#39;{&quot;name&quot;:&quot;new-name&quot;}&#39;
 
-# Plain delete: removes the workbench&#39;s record, leaves session JSONLs orphaned
+# Plain delete: removes the pi-forge&#39;s record, leaves session JSONLs orphaned
 curl -s -X DELETE -H &quot;Authorization: Bearer $KEY&quot; $BASE/api/v1/projects/$PROJECT_ID
 
 # Cascade delete: also rm -rf the project&#39;s session directory

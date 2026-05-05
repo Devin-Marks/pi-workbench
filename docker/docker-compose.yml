@@ -40,7 +40,7 @@ services:
       # auth and models.json without duplication. Inside the container
       # this resolves to /home/pi/.pi/agent (matching PI_CONFIG_DIR).
       - ${PI_CONFIG_HOST_PATH:-~/.pi/agent}:/home/pi/.pi/agent
-      # Workbench-owned state (projects.json). Kept in its own dir so
+      # Forge-owned state (projects.json). Kept in its own dir so
       # we don't mix our state into the pi SDK's config layout. Default
       # gives the container its OWN project list — host vs container
       # are isolated. Point both at the same host path if you want the
@@ -91,7 +91,7 @@ services:
     # raise these via override or a docker-compose.override.yml.
     mem_limit: 2g
     cpus: "1.0"
-    # ~/.pi/agent is bind-mounted read-write so the workbench can update
+    # ~/.pi/agent is bind-mounted read-write so pi-forge can update
     # auth.json. This means a container escape (kernel CVE, runc CVE)
     # would gain write access to every provider key the operator has
     # configured. Documented trade-off; the alternative (read-only mount

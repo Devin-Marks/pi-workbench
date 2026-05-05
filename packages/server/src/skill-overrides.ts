@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 
 /**
- * Workbench-private per-project skill overrides at
+ * pi-forge-private per-project skill overrides at
  * `${FORGE_DATA_DIR}/skills-overrides.json`. Each project keeps a
  * tri-state position on every skill: enabled / disabled / inherit
  * (the absent case). The effective skills list a session sees is
@@ -15,7 +15,7 @@ import { config } from "./config.js";
  * single global list — we can't safely share that file with the pi
  * TUI when per-project semantics differ. Lives outside the project
  * tree (NOT in `<project>/.pi/`) because the user picked the
- * workbench-private location: per-installation preference, not
+ * pi-forge-private location: per-installation preference, not
  * checked-in team policy.
  *
  * Single file (vs a dir of per-project files): simpler atomic write,

@@ -103,7 +103,7 @@ COPY --from=builder --chown=pi:pi /app/packages/server/dist ./packages/server/di
 COPY --from=builder --chown=pi:pi /app/packages/client/package.json ./packages/client/package.json
 COPY --from=builder --chown=pi:pi /app/packages/client/dist ./packages/client/dist
 
-# Workspace + pi config + workbench data dirs are mounted at runtime;
+# Workspace + pi config + pi-forge data dirs are mounted at runtime;
 # create them so non-root `pi` can read them on first start even if the
 # host bind is currently empty.
 RUN mkdir -p /workspace /home/pi/.pi/agent /home/pi/.pi-forge \

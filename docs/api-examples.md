@@ -229,7 +229,7 @@ curl -s -X PATCH -H "Authorization: Bearer $KEY" -H "Content-Type: application/j
   $BASE/api/v1/projects/$PROJECT_ID \
   -d '{"name":"new-name"}'
 
-# Plain delete: removes the workbench's record, leaves session JSONLs orphaned
+# Plain delete: removes the pi-forge's record, leaves session JSONLs orphaned
 curl -s -X DELETE -H "Authorization: Bearer $KEY" $BASE/api/v1/projects/$PROJECT_ID
 
 # Cascade delete: also rm -rf the project's session directory

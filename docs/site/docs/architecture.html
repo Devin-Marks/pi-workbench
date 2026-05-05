@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Architecture — pi-forge</title>
-  <meta name="description" content="How requests flow through the workbench, from the browser to the pi SDK.">
+  <meta name="description" content="How requests flow through the pi-forge, from the browser to the pi SDK.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -55,7 +55,7 @@
 
     <main class="docs-main">
       <h1>Architecture</h1>
-      <p class="docs-subtitle">How requests flow through the workbench, from the browser to the pi SDK.</p>
+      <p class="docs-subtitle">How requests flow through the pi-forge, from the browser to the pi SDK.</p>
 <p>This document is the deeper dive that the <a href="../README.md"><code>README.md</code></a> ASCII
 diagram refers out to. For contributor-focused architecture rules
 (conventions, &quot;where does X live&quot;, code-organization invariants), see
@@ -64,7 +64,7 @@ diagram refers out to. For contributor-focused architecture rules
 <p>A self-hosted HTTP server + browser UI that wraps the
 <a href="https://github.com/badlogic/pi-mono" target="_blank" rel="noopener noreferrer"><code>pi-coding-agent</code></a> SDK. It is <strong>not</strong>
 a reimplementation of the agent loop — all of that is the SDK. The
-workbench is the bridge:</p>
+pi-forge is the bridge:</p>
 <ul>
 <li>Fastify HTTP server hosts the SDK as an in-process embedding</li>
 <li>REST routes for project / session / file / git / config / terminal /
@@ -214,7 +214,7 @@ registry is rebuilt <strong>lazily</strong> as clients reconnect their SSE strea
 first line</strong> of each <code>.jsonl</code> (the session header) to populate the
 sidebar&#39;s session list — no full sessions land in memory eagerly.</p>
 <h2>Persistence model</h2>
-<p>The workbench is stateless on the server side <strong>except for</strong>:</p>
+<p>The pi-forge is stateless on the server side <strong>except for</strong>:</p>
 <table>
 <thead>
 <tr>

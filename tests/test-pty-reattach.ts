@@ -1,7 +1,7 @@
 /**
  * pty-manager reattach + idle-reaper integration test.
  *
- * Pins the PTY lifecycle that's the most fiddly bit of the workbench:
+ * Pins the PTY lifecycle that's the most fiddly bit of the pi-forge:
  *   - spawn → attach (sink #1) → detach (idle timer arms) → reattach
  *     (sink #2 receives buffered replay + new output) → input flows.
  *   - same-tabId attach replaces the previous active sink AND closes

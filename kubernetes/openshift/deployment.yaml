@@ -52,7 +52,7 @@ spec:
               mountPath: /workspace
             - name: pi-config
               mountPath: /home/pi/.pi/agent
-            - name: workbench-data
+            - name: pi-forge-data
               mountPath: /home/pi/.pi-forge
       containers:
         - name: pi-forge
@@ -164,7 +164,7 @@ spec:
               mountPath: /workspace
             - name: pi-config
               mountPath: /home/pi/.pi/agent
-            - name: workbench-data
+            - name: pi-forge-data
               mountPath: /home/pi/.pi-forge
             # /tmp emptyDir because readOnlyRootFilesystem:true on the
             # container blocks writes there. The agent's bash tool needs
@@ -178,7 +178,7 @@ spec:
         - name: pi-config
           persistentVolumeClaim:
             claimName: pi-forge-pi-config
-        - name: workbench-data
+        - name: pi-forge-data
           persistentVolumeClaim:
             claimName: pi-forge-data
         - name: tmp

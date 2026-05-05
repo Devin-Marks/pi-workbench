@@ -108,7 +108,7 @@ All reads are centralized in `packages/server/src/config.ts`. Never read
 | `PORT` | `3000` | Fastify listen port |
 | `WORKSPACE_PATH` | `~/.pi-forge/workspace` | Where project code lives. Docker image overrides to `/workspace` (host bind-mount). Point at an existing dir like `~/Code` to reuse code already on disk. |
 | `PI_CONFIG_DIR` | `~/.pi/agent` | Pi SDK config dir (auth/models/settings — owned by the SDK). Docker image points this at `/home/pi/.pi/agent`. |
-| `FORGE_DATA_DIR` | `~/.pi-forge` | Workbench-owned state (projects.json). Separated from `PI_CONFIG_DIR` so we don't write our state into the SDK's directory. Docker image points this at `/home/pi/.pi-forge`. |
+| `FORGE_DATA_DIR` | `~/.pi-forge` | Forge-owned state (projects.json). Separated from `PI_CONFIG_DIR` so we don't write our state into the SDK's directory. Docker image points this at `/home/pi/.pi-forge`. |
 | `SESSION_DIR` | `${WORKSPACE_PATH}/.pi/sessions` | JSONL session storage |
 | `UI_PASSWORD` | (unset) | If set, enables browser JWT auth |
 | `API_KEY` | (unset) | If set, enables static bearer token for programmatic access |
@@ -384,7 +384,7 @@ These are facts about the pi SDK that are easy to get wrong:
 
 ## Config Files
 
-The SDK and pi-forge own DIFFERENT directories. Never put workbench
+The SDK and pi-forge own DIFFERENT directories. Never put pi-forge
 state into `PI_CONFIG_DIR` or vice versa.
 
 **`PI_CONFIG_DIR` — pi SDK territory.** Managed by `config-manager.ts`.

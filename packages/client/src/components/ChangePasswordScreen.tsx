@@ -58,7 +58,7 @@ export function ChangePasswordScreen() {
           </div>
           <p className="text-sm text-neutral-400">
             You signed in with the deployment-supplied initial password. Pick a new one before
-            continuing — it will be stored as a hash on the workbench data volume.
+            continuing — it will be stored as a hash on the pi-forge data volume.
           </p>
         </header>
         <label className="block space-y-1.5">

@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { config } from "../config.js";
 
 /**
- * Workbench-owned MCP server registry. Lives at
+ * pi-forge-owned MCP server registry. Lives at
  * `${FORGE_DATA_DIR}/mcp.json` (mode 0600). The pi SDK has no
  * native MCP support — this file is read by `mcp/manager.ts`, the
  * configured servers are connected to via @modelcontextprotocol/sdk,

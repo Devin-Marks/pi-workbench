@@ -4,7 +4,7 @@ pi-forge can connect to MCP servers and surface their tools to the
 agent. Configure servers from **Settings → MCP** in the browser, or by
 editing config files directly.
 
-> Pi itself has no native MCP support. The integration is workbench-
+> Pi itself has no native MCP support. The integration is pi-forge-
 > internal — see [`packages/server/src/mcp/manager.ts`](../packages/server/src/mcp/manager.ts)
 > for the contract.
 
@@ -15,10 +15,10 @@ editing config files directly.
   `streamable-http` first and falls back to `sse` — covers
   [fastmcp](https://github.com/jlowin/fastmcp) servers regardless of
   which transport you exposed.
-- **stdio is not supported.** The workbench is container-native and
+- **stdio is not supported.** The pi-forge is container-native and
   arbitrary subprocess spawning has different security trade-offs.
   Run stdio MCP servers as a separate process and expose them over
-  HTTP/SSE if you need them in the workbench.
+  HTTP/SSE if you need them in the pi-forge.
 - **Static-header auth only.** Bearer tokens, custom auth headers —
   whatever your MCP server expects. OAuth (per-server consent flow,
   callback handling) is deferred.
@@ -39,7 +39,7 @@ specific one inside that project's sessions.
 
 ## File format
 
-`mcp.json` (workbench-native shape, written by the UI):
+`mcp.json` (pi-forge-native shape, written by the UI):
 
 ```json
 {
@@ -57,7 +57,7 @@ specific one inside that project's sessions.
 }
 ```
 
-Project `.mcp.json` accepts both shapes — workbench-native and the
+Project `.mcp.json` accepts both shapes — pi-forge-native and the
 Claude Desktop / pi-mcp-adapter standard:
 
 ```json
@@ -107,11 +107,11 @@ content shape:
 
 - **Boot.** The server eagerly loads `${FORGE_DATA_DIR}/mcp.json`
   and connects every enabled global server. Connection failures are
-  non-fatal — the server stays in `error` state and the workbench
+  non-fatal — the server stays in `error` state and the pi-forge
   comes up regardless.
 - **Project sessions.** `<projectPath>/.mcp.json` is read lazily on
   the first `createAgentSession` for that project, then cached. A
-  config change to that file requires either restarting the workbench
+  config change to that file requires either restarting the pi-forge
   or hitting the project's "Probe" button to pick up changes.
 - **Save.** A `PUT` from the Settings UI rewrites `mcp.json`
   atomically (`.tmp` + `rename`, mode 0600), then re-syncs the pool
@@ -156,7 +156,7 @@ write-merge pattern as `models.json`).
 
 **Tools don't show up after editing project `.mcp.json`** — the file
 is read once per project per server lifetime. Hit Probe on the row,
-or restart the workbench, to pick up edits.
+or restart the pi-forge, to pick up edits.
 
 ## API surface
 
@@ -176,7 +176,7 @@ The Swagger UI at `/api/docs` has the request/response schemas.
 
 ## See also
 
-- [`docs/configuration.md`](./configuration.md) — workbench env vars
+- [`docs/configuration.md`](./configuration.md) — pi-forge env vars
   including `FORGE_DATA_DIR`
 - [`docs/architecture.md`](./architecture.md) — where the manager
   sits in the request flow

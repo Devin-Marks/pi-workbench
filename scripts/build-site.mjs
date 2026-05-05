@@ -47,13 +47,13 @@ const SOURCES = [
     src: "docs/architecture.md",
     out: "architecture.html",
     title: "Architecture",
-    subtitle: "How requests flow through the workbench, from the browser to the pi SDK.",
+    subtitle: "How requests flow through the pi-forge, from the browser to the pi SDK.",
   },
   {
     src: "docs/configuration.md",
     out: "configuration.html",
     title: "Configuration",
-    subtitle: "Every environment variable the workbench reads, with defaults and intent.",
+    subtitle: "Every environment variable the pi-forge reads, with defaults and intent.",
   },
   {
     src: "docs/CONTAINERS.md",
@@ -65,7 +65,7 @@ const SOURCES = [
     src: "docs/deployment.md",
     out: "deployment.html",
     title: "Deployment",
-    subtitle: "Getting the workbench running in production: TLS, auth, reverse proxies.",
+    subtitle: "Getting the pi-forge running in production: TLS, auth, reverse proxies.",
   },
   {
     src: "docs/api-examples.md",
@@ -77,7 +77,7 @@ const SOURCES = [
     src: "docs/mcp.md",
     out: "mcp.html",
     title: "MCP Servers",
-    subtitle: "Connecting external Model Context Protocol servers to the workbench.",
+    subtitle: "Connecting external Model Context Protocol servers to the pi-forge.",
   },
   {
     src: "docs/sse-events.md",
@@ -224,8 +224,8 @@ const LANDING = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>pi-forge — Browser workbench for the pi coding agent</title>
-  <meta name="description" content="A self-hosted browser workbench for the pi coding agent. Chat with the agent against your code, browse files, run a terminal, review diffs — all from one tab.">
+  <title>pi-forge — Browser pi-forge for the pi coding agent</title>
+  <meta name="description" content="A self-hosted browser pi-forge for the pi coding agent. Chat with the agent against your code, browse files, run a terminal, review diffs — all from one tab.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -253,7 +253,7 @@ ${HEADER_NAV_LANDING}
       <span class="gradient-text">in your browser</span>
     </h1>
     <p>
-      A self-hosted browser workbench for the
+      A self-hosted browser pi-forge for the
       <a href="https://github.com/badlogic/pi-mono" target="_blank" rel="noopener noreferrer">pi coding agent</a>.
       Chat with the agent against your code, browse files, run a terminal,
       review diffs — all from one tab. Your container, your provider keys,
@@ -299,7 +299,7 @@ ${HEADER_NAV_LANDING}
   <section class="section" id="features">
     <div class="section-label">Features</div>
     <h2>Everything you need to drive the agent from a browser</h2>
-    <p>The workbench wraps the pi SDK with the affordances most coding workflows want — and keeps every surface scriptable behind the same REST + SSE API the UI calls.</p>
+    <p>The pi-forge wraps the pi SDK with the affordances most coding workflows want — and keeps every surface scriptable behind the same REST + SSE API the UI calls.</p>
 
     <div class="feature-grid">
       <div class="feature-card">

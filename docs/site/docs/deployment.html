@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Deployment — pi-forge</title>
-  <meta name="description" content="Getting the workbench running in production: TLS, auth, reverse proxies.">
+  <meta name="description" content="Getting the pi-forge running in production: TLS, auth, reverse proxies.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -55,7 +55,7 @@
 
     <main class="docs-main">
       <h1>Deployment</h1>
-      <p class="docs-subtitle">Getting the workbench running in production: TLS, auth, reverse proxies.</p>
+      <p class="docs-subtitle">Getting the pi-forge running in production: TLS, auth, reverse proxies.</p>
 <p>This document covers production deployment of pi-forge: TLS termination,
 reverse-proxy configuration, auth setup, and the per-environment-variable
 guidance for going from &quot;works on localhost&quot; to &quot;works on a public domain
@@ -76,16 +76,16 @@ overriding, from <code>openssl rand -hex 32</code> — not a memorable string.
 Rotating (delete the file or change the env) invalidates all
 sessions immediately, which is what you want after a key leak.</li>
 <li><input disabled="" type="checkbox"> Reverse proxy (Caddy / nginx / Traefik) terminates TLS in front of
-the workbench. Plain HTTP is fine on <code>127.0.0.1</code>; never on a routable
+the pi-forge. Plain HTTP is fine on <code>127.0.0.1</code>; never on a routable
 interface.</li>
 <li><input disabled="" type="checkbox"> <code>TRUST_PROXY=true</code> so the login rate-limit applies per real client
 IP rather than per proxy hop.</li>
 <li><input disabled="" type="checkbox"> <code>CORS_ORIGIN</code> pinned to your actual domain (e.g.
 <code>https://pi.example.com</code>) — do not leave it reflecting whatever
 the request claims.</li>
-<li><input disabled="" type="checkbox"> Workspace + pi config + workbench data on backed-up storage. The
+<li><input disabled="" type="checkbox"> Workspace + pi config + pi-forge data on backed-up storage. The
 container is replaceable; your sessions and provider keys are not.</li>
-<li><input disabled="" type="checkbox"> LLM provider account has a spending limit set. The workbench
+<li><input disabled="" type="checkbox"> LLM provider account has a spending limit set. The pi-forge
 surfaces token + cost telemetry in the Context Inspector but does
 not enforce caps.</li>
 </ul>
@@ -112,7 +112,7 @@ not enforce caps.</li>
                                     (workspace, config)
 </code></pre>
 <p>The proxy handles TLS, HSTS, and (optionally) request logging. The
-workbench handles app-level auth. Bind the container&#39;s port 3000 to
+pi-forge handles app-level auth. Bind the container&#39;s port 3000 to
 <code>127.0.0.1</code> only on the host so nothing besides the proxy can reach it.</p>
 <h2>Reverse-proxy snippets</h2>
 <h3>Caddy (recommended for simplicity)</h3>
@@ -157,7 +157,7 @@ TLS certificates from Let&#39;s Encrypt — no manual cert handling.</p>
         proxy_pass         http://127.0.0.1:3000;
         proxy_http_version 1.1;
 
-        # Forwarded headers — TRUST_PROXY=true on the workbench reads these
+        # Forwarded headers — TRUST_PROXY=true on the pi-forge reads these
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
@@ -172,7 +172,7 @@ TLS certificates from Let&#39;s Encrypt — no manual cert handling.</p>
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
 
-        # File upload cap matches the workbench&#39;s 50 MB per-file
+        # File upload cap matches the pi-forge&#39;s 50 MB per-file
         client_max_body_size 100M;
     }
 }
@@ -378,7 +378,7 @@ projects, its own session history. Zero shared state.</p>
 </code></pre>
 <p>The container&#39;s <code>HEALTHCHECK</code> directive uses this (see
 <a href="./CONTAINERS.md#health-check"><code>docs/CONTAINERS.md</code></a>).</p>
-<p>For deeper observability, the workbench logs to stdout in pino&#39;s JSON
+<p>For deeper observability, the pi-forge logs to stdout in pino&#39;s JSON
 format. Pipe through your log aggregator of choice:</p>
 <pre><code class="language-bash"># Promtail / Loki
 docker compose logs -f pi-forge | promtail-pipe

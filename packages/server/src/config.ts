@@ -264,7 +264,7 @@ export const config = Object.freeze({
   corsOrigin: CORS_ORIGIN,
   /**
    * Extra env-var names the operator wants the integrated terminal
-   * (and the `!` exec route) to inherit from the workbench process.
+   * (and the `!` exec route) to inherit from the pi-forge process.
    *
    * The terminal env starts from a small allowlist of harmless system
    * vars (PATH, HOME, USER, SHELL, TERM, locales — see
@@ -283,17 +283,17 @@ export const config = Object.freeze({
    */
   terminalPassthroughEnv: Object.freeze(readStringList("TERMINAL_PASSTHROUGH_ENV")),
   /**
-   * Opt-in: append a workbench-defined "secret hygiene" rule to the
+   * Opt-in: append a pi-forge-defined "secret hygiene" rule to the
    * agent's system prompt. The rule asks the model to treat env-var
    * values as credentials by default and not echo them into responses
    * or tool outputs unless explicitly asked. See
-   * `agent-resource-loader.ts#WORKBENCH_SECRET_HYGIENE_RULE` for the
+   * `agent-resource-loader.ts#FORGE_SECRET_HYGIENE_RULE` for the
    * exact wording and `SECURITY.md` for the threat-model framing
    * (behavioral nudge, not a security control).
    *
    * Default OFF. Operators who want it explicitly opt in by setting
    * `AGENT_SECRET_HYGIENE_RULE=true`. Kept opt-in (rather than
-   * default-on) so the workbench doesn't ship invisible behavioral
+   * default-on) so the pi-forge doesn't ship invisible behavioral
    * rules that constrain the agent in ways the user never asked for.
    * Deliberately not surfaced in `docker-compose.yml` or
    * `.env.example` — this is an advanced knob, intentionally

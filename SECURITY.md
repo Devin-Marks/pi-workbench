@@ -18,15 +18,15 @@ no LTS branch.
 pi-forge is **single-tenant** by design — one deploy, one user, one
 workspace root. The threat model assumes:
 
-- The workbench process trusts its own user. There is no isolation between
+- The pi-forge process trusts its own user. There is no isolation between
   the user and the agent's filesystem / shell access; the agent runs with
-  full permissions of the workbench process.
+  full permissions of the pi-forge process.
 - The container is the unit of isolation. Run pi-forge in Docker (or
   another container runtime) so the agent's bash tool can't damage the
   host outside the bind-mounted workspace.
 - The HTTP surface is **not** safe to expose to the public internet over
   plain HTTP. Always terminate TLS at a reverse proxy (Caddy, nginx,
-  Traefik) when network-exposing the workbench, and always set
+  Traefik) when network-exposing pi-forge, and always set
   `UI_PASSWORD` (or `API_KEY`) for any non-loopback deployment.
   `JWT_SECRET` is auto-generated and persisted to the data-dir PVC /
   bind-mount on first boot — set it explicitly only to override.
@@ -65,7 +65,7 @@ workspace root. The threat model assumes:
 - **Host env-var inheritance into the spawned shell**. The integrated
   terminal and the `!` exec route start from a small allowlist of harmless
   system vars (`PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `LANG`/`LC_*`, `TZ`,
-  …). Everything else — workbench secrets (`JWT_SECRET`, `API_KEY`,
+  …). Everything else — pi-forge secrets (`JWT_SECRET`, `API_KEY`,
   `UI_PASSWORD`), provider keys (`*_API_KEY`), cloud credentials (`AWS_*`,
   `KUBECONFIG`, `GH_TOKEN`, …), or any other host-env var — is dropped
   before spawn so an authenticated user can't `printenv` / `echo $X` to read
@@ -73,7 +73,7 @@ workspace root. The threat model assumes:
   in via `TERMINAL_PASSTHROUGH_ENV` (comma- or whitespace-separated). The
   list lives in `packages/server/src/pty-manager.ts#TERMINAL_ENV_ALLOWLIST`.
 - **Accidental secret disclosure by the agent (opt-in).** The agent's
-  autonomous `bash` tool DOES inherit the workbench process env
+  autonomous `bash` tool DOES inherit the pi-forge process env
   (deliberately — skills often legitimately need `$GITHUB_TOKEN`,
   `$AWS_*`, etc. to do their job). The realistic failure mode is the
   model deciding on its own to `printenv` while debugging and dumping
@@ -88,7 +88,7 @@ workspace root. The threat model assumes:
   ```
 
   The exact rule text lives in
-  `packages/server/src/agent-resource-loader.ts#WORKBENCH_SECRET_HYGIENE_RULE`.
+  `packages/server/src/agent-resource-loader.ts#FORGE_SECRET_HYGIENE_RULE`.
 
   **Important caveats — read before enabling.** This is a *behavioral
   nudge, not a control*. The model can be talked out of it by a
@@ -111,19 +111,19 @@ These are documented gaps, not bugs — they reflect deliberate scope
 choices that operators should know about when planning a deployment.
 
 - **Terminal can read pi config files.** The integrated terminal runs as a
-  real shell with the workbench process's filesystem access. The pi-coding-
-  agent SDK requires the workbench process to read its own config dir
+  real shell with the pi-forge process's filesystem access. The pi-coding-
+  agent SDK requires the pi-forge process to read its own config dir
   (`PI_CONFIG_DIR`, default `~/.pi/agent`: `auth.json`, `models.json`,
   `settings.json`), so a shell running under the same UID can also read
   them — meaning an authenticated user can `cat ~/.pi/agent/auth.json` and
   see any persisted provider API keys / OAuth tokens. Path-based blocking
   inside the shell is trivially bypassable (`cat $(echo ~)/.pi/...`,
   `python -c "print(open('...').read())"`, `dd if=...`) and would offer
-  false confidence. The actual mitigation is OS-level: run the workbench
+  false confidence. The actual mitigation is OS-level: run pi-forge
   process and the shell as **separate UIDs**, with `auth.json` mode 600
-  owned by the workbench UID. This is achievable in custom Docker
+  owned by the pi-forge UID. This is achievable in custom Docker
   deployments today; pi-forge's stock image runs both as the same
-  user. If your threat model includes "an authenticated workbench user
+  user. If your threat model includes "an authenticated pi-forge user
   must not be able to read provider credentials," prefer OAuth (where
   losing a token costs you a re-auth, not a key rotation) and rotate API
   keys whenever you suspect terminal access has been abused.
@@ -133,7 +133,7 @@ choices that operators should know about when planning a deployment.
 - **A trusted user running malicious commands.** The agent's `bash` tool
   is a real shell. If your workspace has secrets you don't want the agent
   to read, don't add it as a project.
-- **A compromised provider.** The workbench passes user prompts to whichever
+- **A compromised provider.** The pi-forge passes user prompts to whichever
   LLM provider you've configured. If that provider is malicious or
   compromised, model output can include arbitrary content.
 - **Mass user / cross-tenant attacks.** There IS no multi-user model.

@@ -140,7 +140,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     {
       schema: {
         description:
-          "List the GLOBAL MCP server registry (workbench-owned at " +
+          "List the GLOBAL MCP server registry (pi-forge-owned at " +
           "${FORGE_DATA_DIR}/mcp.json). Header values are redacted with " +
           "the same '***REDACTED***' sentinel pattern as models.json. Pass " +
           "?projectId=<id> to also include the project-scoped registry " +

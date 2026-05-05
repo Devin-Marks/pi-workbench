@@ -1,5 +1,5 @@
 /**
- * Single-process concurrency helpers. The workbench is single-tenant and
+ * Single-process concurrency helpers. The pi-forge is single-tenant and
  * single-process by design, so these are intentionally in-memory only —
  * cross-process coordination is out of scope.
  */

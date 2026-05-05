@@ -87,7 +87,7 @@ export function ProjectPicker({ onClose, required = false }: Props) {
 
   const select = async (selected: string): Promise<void> => {
     if (submitting) return;
-    // Refuse the workspace root itself as a project folder. Pi-workbench
+    // Refuse the workspace root itself as a project folder. pi-forge
     // expects each project to be a sub-tree of WORKSPACE_PATH; the
     // root is the boundary, not a project. Picking it would let the
     // agent see every other project's files in one session.

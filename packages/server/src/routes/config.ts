@@ -458,7 +458,7 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
         description:
           "Toggle a skill's enabled state. Default scope=`global` mutates " +
           "pi's `settings.skills` (canonical enable/disable list shared with " +
-          "the pi TUI). scope=`project` writes to the workbench-private " +
+          "the pi TUI). scope=`project` writes to the pi-forge-private " +
           "overrides file at `${FORGE_DATA_DIR}/skills-overrides.json` " +
           "for the project named in `?projectId=`. Project-scope overrides " +
           "follow tri-state semantics: `enabled` adds, `disabled` removes; " +
@@ -571,7 +571,7 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   // ---------------------- export / import ----------------------
-  // Two routes that round-trip the workbench's portable config
+  // Two routes that round-trip the pi-forge's portable config
   // (mcp.json + settings.json + models.json — see config-export.ts
   // header for what's in and what's out).
   fastify.get(
@@ -579,7 +579,7 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
     {
       schema: {
         description:
-          "Stream a `.tar.gz` of the portable workbench config: " +
+          "Stream a `.tar.gz` of the portable pi-forge config: " +
           "`mcp.json`, `settings.json`, and `models.json`. Excludes " +
           "`auth.json` (provider keys / OAuth tokens) and any " +
           "installation-bound files (jwt-secret, password-hash). " +

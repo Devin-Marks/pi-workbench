@@ -10,7 +10,7 @@ diagram refers out to. For contributor-focused architecture rules
 A self-hosted HTTP server + browser UI that wraps the
 [`pi-coding-agent`](https://github.com/badlogic/pi-mono) SDK. It is **not**
 a reimplementation of the agent loop — all of that is the SDK. The
-workbench is the bridge:
+pi-forge is the bridge:
 
 - Fastify HTTP server hosts the SDK as an in-process embedding
 - REST routes for project / session / file / git / config / terminal /
@@ -175,7 +175,7 @@ sidebar's session list — no full sessions land in memory eagerly.
 
 ## Persistence model
 
-The workbench is stateless on the server side **except for**:
+The pi-forge is stateless on the server side **except for**:
 
 | State | Storage | Survives restart? |
 |---|---|---|

@@ -322,7 +322,7 @@ async function main(): Promise<void> {
       assert("socket still open after resize", term.ws.readyState === WebSocket.OPEN);
 
       // ---- Env allowlist: secrets dropped, harmless vars passed through ----
-      // The workbench server process has API_KEY set (we passed it
+      // The pi-forge server process has API_KEY set (we passed it
       // above), but the PTY shell must NOT inherit it. Wrap the
       // expansion with two sentinels: if API_KEY expanded to empty,
       // the sentinels appear adjacent in the printf OUTPUT line

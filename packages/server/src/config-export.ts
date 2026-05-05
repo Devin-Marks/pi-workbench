@@ -2,13 +2,13 @@
  * Config export / import as a flat `.tar.gz`.
  *
  * What's included (and why):
- *   - `mcp.json`       — workbench-owned MCP server registry
+ *   - `mcp.json`       — pi-forge-owned MCP server registry
  *   - `settings.json`  — pi-owned defaults (model, thinking level, skills patterns)
  *   - `models.json`    — pi-owned custom providers
  *
  * What's deliberately EXCLUDED:
  *   - `auth.json` — provider API keys + OAuth tokens. OAuth tokens are
- *     installation-bound (a token issued for one workbench instance is
+ *     installation-bound (a token issued for one pi-forge instance is
  *     not portable), and inline API keys are sensitive enough that
  *     bundling them into a download the user might forward by accident
  *     (Slack, Drive, ticket attachment) outweighs the convenience. The
@@ -71,13 +71,13 @@ export interface ImportSummary {
    * (a) the entry name isn't in `ALLOWED_FILES`; (b) the entry isn't a
    * regular file (directories, symlinks, hard links, devices). We don't
    * distinguish — the reason isn't actionable for the user beyond
-   * "re-export with a real workbench instance."
+   * "re-export with a real pi-forge instance."
    */
   skipped: string[];
   /**
    * Allowed-name entries that PARSED but FAILED VALIDATION (e.g. not
    * valid JSON). These are NOT imported — partial imports can leave
-   * the workbench in worse shape than no import.
+   * the pi-forge in worse shape than no import.
    */
   errors: { file: string; reason: string }[];
 }
@@ -149,7 +149,7 @@ export async function buildExportTar(): Promise<ExportResult> {
  *
  * The "validate before any disk write" ordering matters: a partial
  * import (e.g. `mcp.json` good, `settings.json` corrupt) would leave
- * the workbench in worse shape than before the user clicked Import.
+ * the pi-forge in worse shape than before the user clicked Import.
  * Either everything valid lands, or nothing does — per file, ALL
  * pass validation before ANY rename runs.
  *

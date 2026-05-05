@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Configuration — pi-forge</title>
-  <meta name="description" content="Every environment variable the workbench reads, with defaults and intent.">
+  <meta name="description" content="Every environment variable the pi-forge reads, with defaults and intent.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -55,15 +55,15 @@
 
     <main class="docs-main">
       <h1>Configuration</h1>
-      <p class="docs-subtitle">Every environment variable the workbench reads, with defaults and intent.</p>
+      <p class="docs-subtitle">Every environment variable the pi-forge reads, with defaults and intent.</p>
 <p>pi-forge&#39;s runtime behavior is shaped by <strong>two</strong> layers of configuration:</p>
 <ol>
-<li><strong>Workbench env vars</strong> — read by <code>packages/server/src/config.ts</code> at
+<li><strong>pi-forge env vars</strong> — read by <code>packages/server/src/config.ts</code> at
 startup. Controls ports, paths, auth, and the <code>MINIMAL_UI</code> frontend
 gate. Documented in <a href="#environment-variables">Environment variables</a> below.</li>
 <li><strong>Pi SDK config files</strong> — JSON files under <code>${PI_CONFIG_DIR}</code> (default
 <code>~/.pi/agent</code>, container <code>/home/pi/.pi/agent</code>). Owned by the pi SDK,
-surfaced by the workbench&#39;s Settings panel and the
+surfaced by the pi-forge&#39;s Settings panel and the
 <code>/api/v1/config/*</code> routes. See <a href="#pi-sdk-config-files">Pi SDK config files</a>
 below.</li>
 </ol>
@@ -104,7 +104,7 @@ below.</li>
 <tr>
 <td><code>FORGE_DATA_DIR</code></td>
 <td><code>~/.pi-forge</code></td>
-<td>Workbench-owned state (projects.json). Defaults to the same dotdir as the workspace (<code>projects.json</code> sits alongside <code>workspace/</code>). Kept separate from <code>PI_CONFIG_DIR</code> so we don&#39;t mix our state into the pi SDK&#39;s directory. Docker image points this at <code>/home/pi/.pi-forge</code> (mounted from the host&#39;s <code>~/.pi-forge-docker</code> by default — container has its own project list).</td>
+<td>pi-forge-owned state (projects.json). Defaults to the same dotdir as the workspace (<code>projects.json</code> sits alongside <code>workspace/</code>). Kept separate from <code>PI_CONFIG_DIR</code> so we don&#39;t mix our state into the pi SDK&#39;s directory. Docker image points this at <code>/home/pi/.pi-forge</code> (mounted from the host&#39;s <code>~/.pi-forge-docker</code> by default — container has its own project list).</td>
 </tr>
 <tr>
 <td><code>CLIENT_DIST_PATH</code></td>
@@ -176,7 +176,7 @@ below.</li>
 posture) lives in <a href="./deployment.md"><code>deployment.md</code></a>.</p>
 <h2>Pi SDK config files</h2>
 <p>This section covers layer 2 — what each pi config file does, how the
-workbench reads/writes it, and how to wire up a custom provider.</p>
+pi-forge reads/writes it, and how to wire up a custom provider.</p>
 <h2>File layout</h2>
 <pre><code>${PI_CONFIG_DIR}/
 ├── auth.json          — provider API keys + OAuth tokens
@@ -185,7 +185,7 @@ workbench reads/writes it, and how to wire up a custom provider.</p>
 </code></pre>
 <p>Skills (per-project Markdown files) live elsewhere — under <code>.pi/skills/</code>
 inside each project directory and inside <code>~/.pi/agent/skills/</code> for global
-skills. The workbench surfaces them but doesn&#39;t own their storage.</p>
+skills. The pi-forge surfaces them but doesn&#39;t own their storage.</p>
 <h2>auth.json — provider API keys</h2>
 <p>The pi SDK stores provider credentials here. Format is owned by the SDK;
 schematically:</p>
@@ -197,8 +197,8 @@ schematically:</p>
 }
 </code></pre>
 <p>Some providers use OAuth and store tokens here instead of bare API keys.
-Pi handles the format; the workbench doesn&#39;t parse it.</p>
-<h3>How the workbench surfaces it</h3>
+Pi handles the format; the pi-forge doesn&#39;t parse it.</p>
+<h3>How the pi-forge surfaces it</h3>
 <p>The Settings → Providers tab shows every provider that has a key
 configured (a green dot) or doesn&#39;t (an &quot;Add key&quot; button). It uses
 <strong>presence-only</strong> information from <code>GET /api/v1/config/auth</code> — the
@@ -309,7 +309,7 @@ LiteLLM, Ollama, llama.cpp)</li>
 </ul>
 <p>For most third-party endpoints you&#39;ll use <code>openai-completions</code>. Check the
 endpoint&#39;s docs to confirm wire-format compatibility.</p>
-<h3>How the workbench surfaces it</h3>
+<h3>How the pi-forge surfaces it</h3>
 <p>Settings → Providers shows a collapsible &quot;Custom providers (models.json)&quot;
 section with a raw-JSON editor. The editor is gated behind a <code>&lt;details&gt;</code>
 to keep casual users from accidentally clobbering it; a typed form per
@@ -366,7 +366,7 @@ and restart.</p>
 </tbody></table>
 <p>Other SDK keys (less commonly tuned) are accepted by the
 <code>PUT /api/v1/config/settings</code> route and persist in this file.</p>
-<h3>How the workbench surfaces it</h3>
+<h3>How the pi-forge surfaces it</h3>
 <p>Settings → Agent is a typed form for the common fields plus an
 &quot;Edit as JSON&quot; toggle for the long tail of SDK keys. Form changes
 fire <code>PUT /api/v1/config/settings</code> with a partial patch (Fastify
@@ -380,7 +380,7 @@ browser localStorage (<code>pi-forge/model/&lt;sessionId&gt;</code>) and re-appl
 on session switch. It does NOT modify <code>settings.json</code>.</p>
 <p>(See the commit history around <code>routes/control.ts:setModel</code> for the
 gory details — the SDK&#39;s <code>setModel</code> writes the global default as a
-side effect, which the workbench undoes by snapshot-and-restore around
+side effect, which the pi-forge undoes by snapshot-and-restore around
 the call so per-session selection doesn&#39;t mutate the global default.)</p>
 <h2>Per-project skills</h2>
 <p>Pi supports project-scoped skill files (Markdown files with YAML
@@ -390,7 +390,7 @@ under:</p>
 <li><strong>Project-local:</strong> <code>&lt;project-path&gt;/.pi/skills/*.md</code></li>
 <li><strong>Global:</strong> <code>~/.pi/agent/skills/*.md</code> — available across all projects</li>
 </ul>
-<p>The workbench&#39;s Settings → Skills tab shows the merged list (global +
+<p>The pi-forge&#39;s Settings → Skills tab shows the merged list (global +
 project-local) for the active project, with a toggle per skill to
 enable/disable for THIS project. Disable state writes to the project&#39;s
 <code>settings.json</code>; the skill files themselves are untouched.</p>
@@ -438,7 +438,7 @@ and <code>&lt;projectPath&gt;/.mcp.json</code> (project-scoped). Manage them fro
 auth model, and troubleshooting.</p>
 <h2>See also</h2>
 <ul>
-<li><a href="../README.md"><code>README.md</code></a> — workbench env vars + Docker quickstart</li>
+<li><a href="../README.md"><code>README.md</code></a> — pi-forge env vars + Docker quickstart</li>
 <li><a href="./deployment.md"><code>docs/deployment.md</code></a> — production deploy with TLS +
 reverse proxy + auth</li>
 <li><a href="./CONTAINERS.md"><code>docs/CONTAINERS.md</code></a> — container internals + bind

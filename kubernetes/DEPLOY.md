@@ -21,7 +21,7 @@ PersistentVolumes:
 |---|---|---|
 | `/workspace` | User code (projects live as subfolders) | `pi-forge-workspace` (10 Gi) |
 | `/home/pi/.pi/agent` | pi SDK config (auth.json, models.json, settings.json) | `pi-forge-pi-config` (1 Gi) |
-| `/home/pi/.pi-forge` | Workbench state (projects.json) | `pi-forge-data` (1 Gi) |
+| `/home/pi/.pi-forge` | pi-forge state (projects.json) | `pi-forge-data` (1 Gi) |
 
 All three are `ReadWriteMany` so OpenShift `DeploymentConfig` rolling
 updates can mount the volumes from the new pod before the old one

@@ -121,7 +121,7 @@ export function App() {
     localStorage.setItem("pi-forge/terminal-open", v ? "true" : "false");
   };
 
-  // Chat pane visibility — defaults to OPEN (the chat is the workbench's
+  // Chat pane visibility — defaults to OPEN (the chat is the pi-forge's
   // primary surface), and the persistence key is absence-means-open so a
   // user who has never touched the toggle gets the chat. Hide is for the
   // "I just want to use the file editor + terminal" focus mode.
@@ -148,7 +148,7 @@ export function App() {
 
   // First-run picker dismissal. When no projects exist we render the
   // ProjectPicker by default, but the user can dismiss it to take a
-  // look around the empty workbench. Re-opens via the sidebar's
+  // look around the empty pi-forge. Re-opens via the sidebar's
   // "+ New project" button. Reset whenever a project is created so
   // the picker doesn't reappear if the user later deletes all
   // projects in the same browser tab.
