@@ -24,7 +24,7 @@ happened instead? -->
 
 ## Environment
 
-- pi-workbench version / commit SHA:
+- pi-forge version / commit SHA:
 - Install method: [ ] Docker compose  [ ] `npm run dev`  [ ] Kubernetes  [ ] other:
 - Host OS + version:
 - Node version (if running outside Docker): `node --version`
@@ -34,7 +34,7 @@ happened instead? -->
 
 ## Logs / screenshots
 
-<!-- Server logs (`docker compose logs pi-workbench` or your terminal),
+<!-- Server logs (`docker compose logs pi-forge` or your terminal),
 browser devtools console output, screenshots — whatever helps.
 
 PLEASE redact API keys, JWTs, and any private code or paths before
@@ -53,6 +53,6 @@ happen for some sessions / projects / models? Any local patches applied? -->
 
 ### Before submitting
 
-- [ ] I searched [open and closed issues](https://github.com/Devin-Marks/pi-workbench/issues?q=) for duplicates
+- [ ] I searched [open and closed issues](https://github.com/Devin-Marks/pi-forge/issues?q=) for duplicates
 - [ ] I redacted API keys, tokens, and private code from logs/screenshots
 - [ ] If this is a security vulnerability, I am using the [private vulnerability reporting](../../security/advisories/new) flow instead — see [`SECURITY.md`](../../SECURITY.md)

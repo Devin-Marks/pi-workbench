@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Bump pi-workbench to a new version.
+# Bump pi-forge to a new version.
 #
 # What it does, in order:
 #   1. Validates the new version is SemVer-shaped (x.y.z, optionally

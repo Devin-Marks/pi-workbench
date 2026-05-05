@@ -133,14 +133,14 @@ const HEADER_NAV = `      <nav class="nav-links" id="navLinks">
         <a href="../index.html#features">Features</a>
         <a href="../index.html#quickstart">Quick Start</a>
         <a href="architecture.html">Docs</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench" class="nav-cta">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-forge" class="nav-cta">GitHub</a>
       </nav>`;
 
 const HEADER_NAV_LANDING = `      <nav class="nav-links" id="navLinks">
         <a href="#features">Features</a>
         <a href="#quickstart">Quick Start</a>
         <a href="docs/architecture.html">Docs</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench" class="nav-cta">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-forge" class="nav-cta">GitHub</a>
       </nav>`;
 
 function chromeDocs({ title, subtitle, body, activeOut }) {
@@ -149,7 +149,7 @@ function chromeDocs({ title, subtitle, body, activeOut }) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title} — pi-workbench</title>
+  <title>${title} — pi-forge</title>
   <meta name="description" content="${escapeAttr(subtitle)}">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -162,7 +162,7 @@ function chromeDocs({ title, subtitle, body, activeOut }) {
     <div class="header-inner">
       <a href="../index.html" class="logo">
         ${LOGO_SVG}
-        pi-workbench
+        pi-forge
       </a>
 ${HEADER_NAV}
       <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">&#9776;</button>
@@ -174,9 +174,9 @@ ${HEADER_NAV}
 ${sidebar(activeOut)}
       <div class="sidebar-section">
         <h4>Project</h4>
-        <a href="https://github.com/Devin-Marks/pi-workbench">GitHub</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/CHANGELOG.md">Changelog</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/SECURITY.md">Security</a>
+        <a href="https://github.com/Devin-Marks/pi-forge">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-forge/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/Devin-Marks/pi-forge/blob/main/SECURITY.md">Security</a>
       </div>
     </aside>
 
@@ -224,7 +224,7 @@ const LANDING = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>pi-workbench — Browser workbench for the pi coding agent</title>
+  <title>pi-forge — Browser workbench for the pi coding agent</title>
   <meta name="description" content="A self-hosted browser workbench for the pi coding agent. Chat with the agent against your code, browse files, run a terminal, review diffs — all from one tab.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -237,7 +237,7 @@ const LANDING = `<!DOCTYPE html>
     <div class="header-inner">
       <a href="index.html" class="logo">
         ${LOGO_SVG}
-        pi-workbench
+        pi-forge
       </a>
 ${HEADER_NAV_LANDING}
       <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">&#9776;</button>
@@ -261,7 +261,7 @@ ${HEADER_NAV_LANDING}
     </p>
     <div class="hero-buttons">
       <a href="#quickstart" class="btn-primary">Get Started &darr;</a>
-      <a href="https://github.com/Devin-Marks/pi-workbench" class="btn-secondary" target="_blank" rel="noopener noreferrer">
+      <a href="https://github.com/Devin-Marks/pi-forge" class="btn-secondary" target="_blank" rel="noopener noreferrer">
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
         View on GitHub
       </a>
@@ -279,7 +279,7 @@ ${HEADER_NAV_LANDING}
         <div class="carousel" id="carousel">
           <div class="carousel-viewport">
             <div class="carousel-track" id="carouselTrack">
-              <img class="carousel-slide active" src="images/img0.png" alt="pi-workbench overview" loading="eager"/>
+              <img class="carousel-slide active" src="images/img0.png" alt="pi-forge overview" loading="eager"/>
               <img class="carousel-slide" src="images/img1.png" alt="Screenshot" loading="lazy"/>
               <img class="carousel-slide" src="images/img2.png" alt="Screenshot" loading="lazy"/>
               <img class="carousel-slide" src="images/img3.png" alt="Screenshot" loading="lazy"/>
@@ -375,8 +375,8 @@ ${HEADER_NAV_LANDING}
         <div class="qs-number">1</div>
         <div class="qs-content">
           <h3>Clone the repo</h3>
-          <pre><span class="code-cmd">git</span> clone https://github.com/Devin-Marks/pi-workbench.git
-<span class="code-cmd">cd</span> pi-workbench</pre>
+          <pre><span class="code-cmd">git</span> clone https://github.com/Devin-Marks/pi-forge.git
+<span class="code-cmd">cd</span> pi-forge</pre>
         </div>
       </div>
 
@@ -458,7 +458,7 @@ curl -N -H <span class="code-string">"Authorization: Bearer $KEY"</span> \\
   </section>
 
   <section class="section" id="why">
-    <div class="section-label">Why pi-workbench</div>
+    <div class="section-label">Why pi-forge</div>
     <h2>Self-hosted, single-tenant, scriptable</h2>
 
     <div class="comparison-grid">
@@ -490,7 +490,7 @@ curl -N -H <span class="code-string">"Authorization: Bearer $KEY"</span> \\
     <p style="margin-left: auto; margin-right: auto;">The architecture, configuration, and API references all live in the docs. The full source is on GitHub.</p>
     <div class="hero-buttons" style="margin-top: 32px;">
       <a href="docs/architecture.html" class="btn-primary">Read the Docs &rarr;</a>
-      <a href="https://github.com/Devin-Marks/pi-workbench" class="btn-secondary" target="_blank" rel="noopener noreferrer">
+      <a href="https://github.com/Devin-Marks/pi-forge" class="btn-secondary" target="_blank" rel="noopener noreferrer">
         View Source
       </a>
     </div>
@@ -498,12 +498,12 @@ curl -N -H <span class="code-string">"Authorization: Bearer $KEY"</span> \\
 
   <footer class="site-footer">
     <div class="footer-inner">
-      <p>pi-workbench &mdash; MIT licensed, no warranty.</p>
+      <p>pi-forge &mdash; MIT licensed, no warranty.</p>
       <div class="footer-links">
         <a href="docs/architecture.html">Docs</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench">GitHub</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench/issues">Issues</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/Devin-Marks/pi-forge">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-forge/issues">Issues</a>
+        <a href="https://github.com/Devin-Marks/pi-forge/blob/main/CHANGELOG.md">Changelog</a>
       </div>
     </div>
   </footer>

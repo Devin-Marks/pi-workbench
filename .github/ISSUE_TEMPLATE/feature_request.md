@@ -17,9 +17,9 @@ behaves? Describe the situation, not the solution. -->
 specific UI / API in mind, sketch it — but the problem matters more
 than the solution. -->
 
-## Why this fits pi-workbench
+## Why this fits pi-forge
 
-<!-- pi-workbench is intentionally single-tenant, container-native, and
+<!-- pi-forge is intentionally single-tenant, container-native, and
 a thin bridge over the pi SDK. Features that require multi-tenant auth,
 re-implement SDK behavior, or expand the threat model are usually
 deferred — see the **Known Limitations & Deferred Work** section of
@@ -43,6 +43,6 @@ upstream pi SDK tickets — anything that gives the idea more shape. -->
 
 ### Before submitting
 
-- [ ] I searched [open and closed issues](https://github.com/Devin-Marks/pi-workbench/issues?q=) for similar requests
+- [ ] I searched [open and closed issues](https://github.com/Devin-Marks/pi-forge/issues?q=) for similar requests
 - [ ] I checked the **Known Limitations & Deferred Work** section of [`CLAUDE.md`](../../CLAUDE.md)
 - [ ] This is a feature, not a bug (use the bug report template instead) and not a security report (use the [private vulnerability reporting](../../security/advisories/new) flow)
