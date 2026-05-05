@@ -583,7 +583,7 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
           "`mcp.json`, `settings.json`, and `models.json`. Excludes " +
           "`auth.json` (provider keys / OAuth tokens) and any " +
           "installation-bound files (jwt-secret, password-hash). " +
-          "The header `X-Pi-Workbench-Files` lists the names actually " +
+          "The header `X-Pi-Forge-Files` lists the names actually " +
           "included so a client can warn when a file was missing on " +
           "disk and therefore omitted from the export.",
         tags: ["config"],

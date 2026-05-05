@@ -10,7 +10,7 @@ const MIN_PASSWORD_LENGTH = 8;
  * 403 `must_change_password` until the user picks a new password.
  *
  * Once the user submits a new password the server hashes it, persists
- * it to `${WORKBENCH_DATA_DIR}/password-hash`, and issues a fresh
+ * it to `${FORGE_DATA_DIR}/password-hash`, and issues a fresh
  * full-access token. Subsequent logins use the stored hash and ignore
  * the env value entirely.
  */

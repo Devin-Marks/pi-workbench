@@ -857,7 +857,7 @@ function SkillsTab({ onError }: { onError: (msg: string | undefined) => void }) 
         <code className="font-mono">{project.path}/.pi/skills/</code>. The global toggle writes to
         pi&apos;s <code className="font-mono">settings.skills</code>; per-project overrides write to
         the workbench-private file at{" "}
-        <code className="font-mono">{`\${WORKBENCH_DATA_DIR}/skills-overrides.json`}</code>.
+        <code className="font-mono">{`\${FORGE_DATA_DIR}/skills-overrides.json`}</code>.
       </p>
       <div className="rounded border border-amber-700/40 bg-amber-900/10 px-3 py-2 text-[11px] text-amber-200">
         Skill changes apply to the <strong>next session</strong> you start in the affected project.
