@@ -260,3 +260,31 @@
 .pi-diff-block .token.italic {
   font-style: italic;
 }
+
+/* ----------------------------- chat selection -----------------------------
+   Constrain text selection so each message bubble is its own selection
+   root. Without these rules, dragging a selection from inside one
+   message into the next picks up everything in between (including the
+   raw/copy/toggle controls and the visible gap), and on Safari the
+   selection highlight visually extends past the bubble's rounded
+   border. The combo below keeps selection cleanly within a single
+   bubble:
+   - The chat scroll container disables selection by default.
+   - Each `.message-bubble` re-enables it, and `isolation: isolate`
+     forces a new stacking / paint context so Safari draws the
+     selection highlight inside the bubble rather than bleeding it
+     across siblings.
+*/
+.chat-message-list {
+  user-select: none;
+  -webkit-user-select: none;
+}
+.message-bubble {
+  user-select: text;
+  -webkit-user-select: text;
+  isolation: isolate;
+  /* Long unbroken tokens (URLs, hashes, code snippets) wrap inside
+     the bubble instead of pushing the selection rectangle out past
+     the right edge. */
+  overflow-wrap: anywhere;
+}

@@ -38,10 +38,59 @@
  *   here.
  */
 import { Highlight, themes as prismThemes } from "prism-react-renderer";
-import type { HTMLAttributes, ReactNode } from "react";
+import { useState, type HTMLAttributes, type ReactNode } from "react";
+import { Check, Copy } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+
+/**
+ * Small copy-to-clipboard control rendered in the top-right corner of
+ * each fenced code block. Async clipboard API with a synthetic-textarea
+ * fallback for old Safari / insecure HTTP origins. Two-step state:
+ * idle → copied (1.2s) → idle, so the user gets a visible confirmation.
+ */
+function CodeCopyButton({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  const onClick = (): void => {
+    if (code.length === 0) return;
+    const flash = (): void => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    };
+    const writeAsync = navigator.clipboard?.writeText?.bind(navigator.clipboard);
+    if (writeAsync !== undefined) {
+      void writeAsync(code).then(flash).catch(fallback);
+      return;
+    }
+    fallback();
+    function fallback(): void {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = code;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        flash();
+      } catch {
+        // No clipboard available; user can still select + Cmd+C.
+      }
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="absolute right-1 top-1 rounded bg-neutral-800/80 p-1 text-neutral-400 opacity-0 transition-opacity hover:text-neutral-100 group-hover:opacity-100 focus:opacity-100"
+      title="Copy code block"
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+    </button>
+  );
+}
 
 interface Props {
   text: string;
@@ -112,26 +161,31 @@ const CodeRenderer = ({ className, children, ...rest }: HTMLAttributes<HTMLEleme
   const language = langMatch?.[1] ?? "text";
 
   return (
-    <Highlight code={code} language={language} theme={prismThemes.vsDark}>
-      {({ style, tokens, getLineProps, getTokenProps }) => (
-        <pre
-          className="overflow-x-auto rounded border border-neutral-800 p-2 font-mono text-[12px]"
-          style={{ ...style, background: "#0d0d0d" }}
-        >
-          {tokens.map((line, i) => {
-            const lineProps = getLineProps({ line });
-            return (
-              <div key={i} {...lineProps}>
-                {line.map((token, key) => {
-                  const tokenProps = getTokenProps({ token });
-                  return <span key={key} {...tokenProps} />;
-                })}
-              </div>
-            );
-          })}
-        </pre>
-      )}
-    </Highlight>
+    // `group` enables the hover-revealed copy button positioned via
+    // `group-hover:opacity-100` inside CodeCopyButton.
+    <div className="group relative">
+      <CodeCopyButton code={code} />
+      <Highlight code={code} language={language} theme={prismThemes.vsDark}>
+        {({ style, tokens, getLineProps, getTokenProps }) => (
+          <pre
+            className="overflow-x-auto rounded border border-neutral-800 p-2 font-mono text-[12px]"
+            style={{ ...style, background: "#0d0d0d" }}
+          >
+            {tokens.map((line, i) => {
+              const lineProps = getLineProps({ line });
+              return (
+                <div key={i} {...lineProps}>
+                  {line.map((token, key) => {
+                    const tokenProps = getTokenProps({ token });
+                    return <span key={key} {...tokenProps} />;
+                  })}
+                </div>
+              );
+            })}
+          </pre>
+        )}
+      </Highlight>
+    </div>
   );
 };
 
