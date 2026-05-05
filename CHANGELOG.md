@@ -41,16 +41,21 @@ breaking surface operators upgrading from v1.0.3 must know about.
 - **Env var (compose only)**: `WORKBENCH_DATA_HOST_PATH` →
   `FORGE_DATA_HOST_PATH` in the compose env. Default now points at
   `~/.pi-forge-docker`.
-- **Default data dir**: `~/.pi-workbench/` → `~/.pi-forge/`. **An
-  auto-migration runs on first boot of v1.1.0**: if `~/.pi-forge/`
-  does not exist and `~/.pi-workbench/` does, the entire directory is
-  atomically renamed (`fs.rename`), carrying `projects.json`,
-  `mcp.json`, `tool-overrides.json`, `skills-overrides.json`,
-  `password-hash`, `jwt-secret`, and the workspace subdir in a single
-  step. Cross-filesystem fallback is `cp -a` + `rm -rf`. The migration
-  is skipped (with a warn-level log) if both directories exist —
-  resolve manually in that case. Skipped entirely if `FORGE_DATA_DIR`
-  is pinned away from the default (operator owns their own path).
+- **Default data dir**: `~/.pi-workbench/` → `~/.pi-forge/`. **No
+  auto-migration**: before first boot of v1.1.0, move your data dir
+  manually:
+
+  ```sh
+  mv ~/.pi-workbench ~/.pi-forge
+  ```
+
+  The directory carries `projects.json`, `mcp.json`,
+  `tool-overrides.json`, `skills-overrides.json`, `password-hash`,
+  `jwt-secret`, and the workspace subdir as a unit, so a single `mv`
+  is sufficient. (For Docker bind-mounts, do the equivalent on the
+  host path you use for `FORGE_DATA_HOST_PATH`; for k8s, rename the
+  PVC.) Skipping this step on a fresh install of v1.1.0 produces a
+  workbench with no projects / no saved password / no MCP servers.
 - **HTTP response headers**:
   - `X-Pi-Workbench-Files` → `X-Pi-Forge-Files` (config export
     download)

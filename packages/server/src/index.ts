@@ -29,7 +29,6 @@ import { disposeAll as disposeAllMcp, loadGlobal as loadGlobalMcp } from "./mcp/
 import { disposeAllSessions } from "./session-registry.js";
 import { disposeAllPtys, installPtyExitHandler } from "./pty-manager.js";
 import { logSecretHygieneState } from "./agent-resource-loader.js";
-import { migrateLegacyDataDir } from "./data-dir-migration.js";
 
 /**
  * Per-route auth metadata. Routes that should skip the auth preHandler set
@@ -468,23 +467,6 @@ export async function buildServer(): Promise<FastifyInstance> {
 }
 
 async function start(): Promise<void> {
-  // v1.0.x → v1.1.0 one-shot: rename ~/.pi-workbench/ → ~/.pi-forge/
-  // before anything reads from the data dir. Idempotent; no-op on
-  // fresh installs and on subsequent boots once the rename is done.
-  // Uses the bare console here because Fastify's logger isn't built
-  // until later in start(); failure to migrate is fatal — operators
-  // need the loud signal, not a buried log line.
-  try {
-    await migrateLegacyDataDir({
-      info: (obj, msg) => console.log(`[pi-forge] ${msg ?? "info"}`, JSON.stringify(obj)),
-      warn: (obj, msg) => console.warn(`[pi-forge] ${msg ?? "warn"}`, JSON.stringify(obj)),
-    });
-  } catch (err) {
-    console.error(`[pi-forge] data dir migration failed:`, (err as Error).message);
-    console.error(`[pi-forge] hint: move ~/.pi-workbench → ~/.pi-forge manually, then restart`);
-    process.exit(1);
-  }
-
   // Ensure the workspace + forge data dirs exist before anything
   // tries to write under them. mkdir(recursive:true) is a no-op on an
   // existing dir, so this is safe to run on every boot. We do NOT
