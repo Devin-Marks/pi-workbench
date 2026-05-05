@@ -231,18 +231,21 @@ export async function buildServer(): Promise<FastifyInstance> {
     },
   });
 
-  // Bootstrap script injected into the swagger UI page. Three jobs:
-  //   1. Capture the `?token=...` from the URL on load and stash it in
-  //      sessionStorage (so it survives intra-page nav within swagger
-  //      UI but not other tabs).
-  //   2. Strip the token from the URL via history.replaceState the
-  //      moment the page mounts so it doesn't sit in the URL bar /
-  //      browser history.
-  //   3. Patch fetch() so every same-origin request swagger UI makes
-  //      to /api/v1/* carries the bearer header automatically. Means
-  //      the user doesn't have to copy-paste their JWT into the
-  //      swagger "Authorize" dialog after navigating from the UI.
-  // No-op when no token is in the URL (e.g. when auth is disabled).
+  // Bootstrap script injected into the swagger UI page. Resolves an
+  // auth token in priority order — URL ?token=, then sessionStorage
+  // (set by an earlier visit), then localStorage["pi-workbench/auth-
+  // token"] (the JWT the main UI persisted on login). Same-origin so
+  // the localStorage read is allowed. Then patches fetch() to attach
+  // the token as a Bearer header on every call swagger UI makes to
+  // /api/v1/*.
+  //
+  // Cleanup: if the token came from ?token=, strip it from the URL
+  // via history.replaceState so it doesn't sit in the URL bar /
+  // browser history. The sessionStorage stash is for in-tab nav only;
+  // closing the tab clears it.
+  //
+  // No-op when no token is found anywhere (e.g. unauthenticated
+  // visitor with auth disabled — fetch is left unpatched).
   const swaggerThemeJs = `(function () {
     try {
       var url = new URL(window.location.href);
@@ -252,7 +255,9 @@ export async function buildServer(): Promise<FastifyInstance> {
         url.searchParams.delete("token");
         window.history.replaceState({}, document.title, url.toString());
       }
-      var token = sessionStorage.getItem("pi-workbench/docs-token");
+      var token =
+        sessionStorage.getItem("pi-workbench/docs-token") ||
+        localStorage.getItem("pi-workbench/auth-token");
       if (token && window.fetch) {
         var origFetch = window.fetch.bind(window);
         window.fetch = function (input, init) {
@@ -307,28 +312,22 @@ export async function buildServer(): Promise<FastifyInstance> {
         reply.code(404).send({ error: "not_found" });
         return;
       }
-      if (!authEnabled()) return;
-      // Browsers can't attach an Authorization header on top-level
-      // navigation, so the swagger UI page itself accepts a token
-      // from the `?token=<jwt-or-api-key>` query string as well.
-      // The injected swagger UI bootstrap (see swaggerThemeJs)
-      // strips the token from the URL via history.replaceState the
-      // moment the page loads and re-presents it via a Bearer header
-      // on every subsequent API call, so the token only appears in
-      // the URL bar for the initial GET.
-      const headerToken = extractBearer(req.headers.authorization);
-      const queryToken =
-        typeof (req.query as Record<string, unknown>).token === "string"
-          ? ((req.query as Record<string, string>).token ?? "")
-          : "";
-      const presented = headerToken ?? (queryToken.length > 0 ? queryToken : undefined);
-      if (
-        presented === undefined ||
-        (verifyToken(presented) === undefined && !verifyApiKey(presented))
-      ) {
-        reply.code(401).send({ error: "auth_required" });
-        return;
-      }
+      // The /api/docs static UI (HTML / JS / CSS / OpenAPI spec) is
+      // open when EXPOSE_DOCS=true, regardless of auth. Browsers
+      // can't attach an Authorization header on top-level
+      // navigation, so gating the UI page itself on a Bearer header
+      // would 401 every logged-in user who hits /api/docs from a
+      // new tab. The route catalog the docs page exposes is the
+      // same one this project's CLAUDE.md / repo already publish, so
+      // the asset-level exposure is the same as before.
+      //
+      // Real protection lives at the actual API surface: every
+      // /api/v1/* call swagger UI makes still goes through the
+      // auth gate below. The injected theme bootstrap (see
+      // swaggerThemeJs) reads the JWT/API-key out of localStorage
+      // (same-origin) — or the one-shot ?token=<...> query param
+      // the Settings → "API Docs ↗" button passes — and injects
+      // it as a Bearer header on every fetch swagger UI issues.
       return;
     }
 
