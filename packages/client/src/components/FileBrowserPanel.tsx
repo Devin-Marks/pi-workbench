@@ -15,7 +15,7 @@ import {
 import { useFileStore } from "../store/file-store";
 import { useActiveProject } from "../store/project-store";
 import { useUiStore } from "../store/ui-store";
-import { api, type FileTreeNode } from "../lib/api-client";
+import { api, ApiError, type FileTreeNode } from "../lib/api-client";
 import { ConfirmDialog, PromptDialog } from "./Modal";
 
 /**
@@ -26,7 +26,8 @@ import { ConfirmDialog, PromptDialog } from "./Modal";
  */
 type DialogState =
   | { kind: "create"; entryKind: "file" | "folder" }
-  | { kind: "delete"; absPath: string; name: string; isDir: boolean }
+  | { kind: "delete"; absPath: string; name: string; isDir: boolean; recursive: boolean }
+  | { kind: "deleteMany"; paths: string[] }
   | undefined;
 
 /**
@@ -76,6 +77,11 @@ export function FileBrowserPanel() {
     { x: number; y: number; absPath: string; isDir: boolean } | undefined
   >(undefined);
   const requestChatInsert = useUiStore((s) => s.requestChatInsert);
+  // Selected paths for the multiselect / bulk-delete affordance.
+  // Cmd/Ctrl+click on a row toggles selection; plain click clears and
+  // opens/expands as before. Hoisted above the early-return below so
+  // hook ordering stays stable across renders (rules-of-hooks).
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (project !== undefined) void loadTree(project.id);
@@ -121,19 +127,56 @@ export function FileBrowserPanel() {
     }
   };
 
+  const clearSelection = (): void => setSelectedPaths(new Set());
+  const toggleSelected = (absPath: string): void => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(absPath)) next.delete(absPath);
+      else next.add(absPath);
+      return next;
+    });
+  };
+
   const requestDelete = (absPath: string, name: string, isDir: boolean): void => {
-    setDialog({ kind: "delete", absPath, name, isDir });
+    setDialog({ kind: "delete", absPath, name, isDir, recursive: false });
   };
 
   const submitDelete = async (): Promise<void> => {
     if (dialog?.kind !== "delete") return;
-    const { absPath } = dialog;
+    const { absPath, name, isDir, recursive } = dialog;
     setDialog(undefined);
     try {
-      await deleteEntry(project.id, absPath);
-    } catch {
+      await deleteEntry(project.id, absPath, recursive ? { recursive: true } : undefined);
+    } catch (err) {
+      // If the folder turned out to be non-empty, re-open the dialog
+      // in "recursive" mode with a stronger message instead of just
+      // surfacing the error code. The user already wanted to delete
+      // it; we just need a second confirmation that they accept the
+      // contents going too.
+      if (err instanceof ApiError && err.code === "directory_not_empty") {
+        setDialog({ kind: "delete", absPath, name, isDir, recursive: true });
+        return;
+      }
       // store.error renders
     }
+  };
+
+  const submitDeleteMany = async (): Promise<void> => {
+    if (dialog?.kind !== "deleteMany") return;
+    const { paths } = dialog;
+    setDialog(undefined);
+    // Bulk delete is always recursive — the user explicitly opted into
+    // a multi-item action, so re-prompting per non-empty directory
+    // would be obnoxious.
+    for (const p of paths) {
+      try {
+        await deleteEntry(project.id, p, { recursive: true });
+      } catch {
+        // store.error renders the first failure; keep going so a single
+        // missing path doesn't strand the rest of the selection.
+      }
+    }
+    clearSelection();
   };
 
   const onClickEntry = async (node: FileTreeNode): Promise<void> => {
@@ -348,6 +391,28 @@ export function FileBrowserPanel() {
           {error}
         </div>
       )}
+      {selectedPaths.size > 0 && (
+        <div className="flex items-center justify-between gap-2 border-b border-neutral-800 bg-neutral-900/60 px-3 py-1.5 text-[11px] text-neutral-300">
+          <span>
+            {selectedPaths.size} selected
+            <span className="ml-2 text-neutral-500">(Cmd/Ctrl+click rows to add or remove)</span>
+          </span>
+          <div className="flex gap-1">
+            <button
+              onClick={() => setDialog({ kind: "deleteMany", paths: Array.from(selectedPaths) })}
+              className="rounded border border-red-700/50 px-2 py-0.5 text-red-300 hover:bg-red-900/20"
+            >
+              Delete selected
+            </button>
+            <button
+              onClick={clearSelection}
+              className="rounded border border-neutral-700 px-2 py-0.5 text-neutral-300 hover:border-neutral-500"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
       <div
         className="flex-1 overflow-y-auto py-1"
         // Empty-area drop = move/upload to the project root. dragover
@@ -387,6 +452,8 @@ export function FileBrowserPanel() {
             onDropTargetChange={setDropTarget}
             onDrop={(e, dir) => void handleDrop(e, dir)}
             onContextMenu={openContextMenu}
+            selectedPaths={selectedPaths}
+            onToggleSelect={toggleSelected}
           />
         )}
       </div>
@@ -414,13 +481,40 @@ export function FileBrowserPanel() {
         open={dialog?.kind === "delete"}
         onClose={() => setDialog(undefined)}
         onConfirm={() => void submitDelete()}
-        title={dialog?.kind === "delete" && dialog.isDir ? "Delete directory" : "Delete file"}
-        message={
+        title={
           dialog?.kind === "delete"
-            ? `Delete ${dialog.isDir ? "directory" : "file"} "${dialog.name}"? This cannot be undone.`
+            ? dialog.recursive
+              ? `"${dialog.name}" is not empty`
+              : dialog.isDir
+                ? "Delete directory"
+                : "Delete file"
             : ""
         }
-        primaryLabel="Delete"
+        message={
+          dialog?.kind === "delete"
+            ? dialog.recursive
+              ? `"${dialog.name}" contains files. Delete the directory and ALL its contents? This cannot be undone.`
+              : `Delete ${dialog.isDir ? "directory" : "file"} "${dialog.name}"? This cannot be undone.`
+            : ""
+        }
+        primaryLabel={dialog?.kind === "delete" && dialog.recursive ? "Delete contents" : "Delete"}
+        tone="danger"
+      />
+      <ConfirmDialog
+        open={dialog?.kind === "deleteMany"}
+        onClose={() => setDialog(undefined)}
+        onConfirm={() => void submitDeleteMany()}
+        title={
+          dialog?.kind === "deleteMany"
+            ? `Delete ${dialog.paths.length} item${dialog.paths.length === 1 ? "" : "s"}`
+            : ""
+        }
+        message={
+          dialog?.kind === "deleteMany"
+            ? `Delete the ${dialog.paths.length} selected file${dialog.paths.length === 1 ? "" : "s"} / folder${dialog.paths.length === 1 ? "" : "s"}? Folders are deleted recursively. This cannot be undone.`
+            : ""
+        }
+        primaryLabel="Delete all"
         tone="danger"
       />
       {contextMenu !== undefined && (
@@ -513,6 +607,10 @@ interface TreeProps {
   onDrop: (e: DragEvent<HTMLElement>, targetDirAbsPath: string) => void;
   /** Right-click handler — opens the per-row context menu. */
   onContextMenu: (e: React.MouseEvent, absPath: string, isDir: boolean) => void;
+  /** Set of absolute paths currently selected (for bulk actions). */
+  selectedPaths: Set<string>;
+  /** Toggle one path in the selection set. */
+  onToggleSelect: (absPath: string) => void;
 }
 
 function Tree(props: TreeProps) {
@@ -533,12 +631,13 @@ function Tree(props: TreeProps) {
   const open = isDir && (props.expanded[node.path] ?? false);
   const isRenaming = props.renaming === absPath;
   const isDropTarget = isDir && props.dropTarget === absPath;
+  const isSelected = props.selectedPaths.has(absPath);
   return (
     <li>
       <div
         className={`group flex items-center gap-1 px-2 py-0.5 hover:bg-neutral-900 ${
-          isDropTarget ? "bg-emerald-900/30 ring-1 ring-emerald-700/50" : ""
-        }`}
+          isSelected ? "bg-emerald-900/20" : ""
+        } ${isDropTarget ? "bg-emerald-900/30 ring-1 ring-emerald-700/50" : ""}`}
         style={{ paddingLeft: `${depth * 12 + 6}px` }}
         // Right-click → context menu. Skip while renaming so the input
         // keeps its native context menu (paste, etc.).
@@ -585,7 +684,19 @@ function Tree(props: TreeProps) {
         }
       >
         <button
-          onClick={() => props.onOpen(node)}
+          onClick={(e) => {
+            // Cmd (mac) / Ctrl (win/linux) toggles selection without
+            // opening or expanding the row, so users can build up a
+            // multi-row selection for the bulk-delete action without
+            // navigating away. Plain click keeps the open / expand
+            // behavior; meta-click never touches the editor / tree
+            // expansion state.
+            if (e.metaKey || e.ctrlKey) {
+              props.onToggleSelect(absPath);
+              return;
+            }
+            props.onOpen(node);
+          }}
           className="flex flex-1 items-center gap-1 truncate text-left"
           title={absPath}
         >

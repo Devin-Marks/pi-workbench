@@ -1358,6 +1358,77 @@ export const api = {
     );
   },
 
+  /**
+   * Download a `.tar.gz` of the skills directory (`${piConfigDir}/
+   * skills/`). Same blob+filename shape as `exportConfig` so the
+   * download trigger logic in the UI can be shared.
+   */
+  exportSkills: async (): Promise<{ blob: Blob; filename: string; fileCount: number }> => {
+    const headers: Record<string, string> = {};
+    const stored = getStoredToken();
+    if (stored !== undefined) headers.Authorization = `Bearer ${stored.token}`;
+    const res = await fetch("/api/v1/config/skills/export", { headers });
+    if (res.status === 401) {
+      clearStoredToken();
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+      throw new ApiError(401, "unauthorized");
+    }
+    if (!res.ok) {
+      let code = "request_failed";
+      try {
+        const body = (await res.json()) as { error?: unknown };
+        if (typeof body.error === "string") code = body.error;
+      } catch {
+        // body wasn't JSON — keep generic code
+      }
+      throw new ApiError(res.status, code);
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") ?? "";
+    const filename = parseContentDispositionFilename(cd) ?? "pi-workbench-skills.tar.gz";
+    const countHeader = res.headers.get("X-Pi-Workbench-File-Count") ?? "0";
+    const fileCount = Number.parseInt(countHeader, 10) || 0;
+    return { blob, filename, fileCount };
+  },
+
+  /**
+   * Upload skills to the server. Accepts either a single tar.gz
+   * (auto-detected by `.tar.gz` / `.tgz` suffix) OR a list of files
+   * from a folder picker (`<input webkitdirectory>`); each file's
+   * `webkitRelativePath` is sent as the multipart `filename` so the
+   * server can preserve directory shape inside the skills tree.
+   * Existing files at colliding paths are overwritten.
+   */
+  importSkills: (
+    files: File[],
+  ): Promise<{
+    imported: string[];
+    skipped: { name: string; reason: string }[];
+  }> => {
+    const fd = new FormData();
+    for (const f of files) {
+      // `webkitRelativePath` is non-empty only for entries from a
+      // directory picker. Falls back to `f.name` for plain file
+      // pickers (the tar.gz case).
+      const relPath = (f as File & { webkitRelativePath?: string }).webkitRelativePath;
+      const name = relPath !== undefined && relPath.length > 0 ? relPath : f.name;
+      fd.append("file", f, name);
+    }
+    return request(
+      "/api/v1/config/skills/import",
+      (v) => {
+        if (!isObject(v) || !Array.isArray(v.imported) || !Array.isArray(v.skipped)) {
+          throw new ApiError(0, "invalid_response_body");
+        }
+        return v as {
+          imported: string[];
+          skipped: { name: string; reason: string }[];
+        };
+      },
+      { method: "POST", body: fd },
+    );
+  },
+
   // ---------------- files ----------------
   filesTree: (projectId: string, maxDepth?: number) => {
     const qs = new URLSearchParams({ projectId });
@@ -1388,8 +1459,9 @@ export const api = {
       method: "POST",
       body: { projectId, src, dest },
     }),
-  filesDelete: (projectId: string, path: string) => {
+  filesDelete: (projectId: string, path: string, opts?: { recursive?: boolean }) => {
     const qs = new URLSearchParams({ projectId, path });
+    if (opts?.recursive === true) qs.set("recursive", "true");
     return request(`/api/v1/files/delete?${qs.toString()}`, vVoid, { method: "DELETE" });
   },
   /**
