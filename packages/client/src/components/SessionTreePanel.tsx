@@ -130,13 +130,18 @@ export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
   }, [tree]);
 
   // View toggle persists across mounts so users who prefer the
-  // graph don't have to flip it every time they open the panel.
+  // other mode don't have to flip it every time they open the
+  // panel. Default is the branching graph — it's the more useful
+  // view for sessions with multiple branches and reads fine for
+  // linear sessions too. Honours an explicitly-stored "list"
+  // preference; anything else (including absent / corrupt) falls
+  // back to graph.
   const [view, setView] = useState<"list" | "graph">(() => {
     try {
-      return localStorage.getItem(VIEW_KEY) === "graph" ? "graph" : "list";
+      return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "graph";
     } catch {
-      // Private-mode storage — fall back to the default list view.
-      return "list";
+      // Private-mode storage — fall back to the default graph view.
+      return "graph";
     }
   });
   const setViewPersisted = (next: "list" | "graph"): void => {
