@@ -49,8 +49,8 @@ async function setupEnv(): Promise<{
   configDir: string;
   sessionDir: string;
 }> {
-  const workspacePath = await mkdtemp(join(tmpdir(), "pi-workbench-fork-ws-"));
-  const configDir = await mkdtemp(join(tmpdir(), "pi-workbench-fork-cfg-"));
+  const workspacePath = await mkdtemp(join(tmpdir(), "pi-forge-fork-ws-"));
+  const configDir = await mkdtemp(join(tmpdir(), "pi-forge-fork-cfg-"));
   const sessionDir = join(workspacePath, ".pi", "sessions");
   process.env.WORKSPACE_PATH = workspacePath;
   process.env.PI_CONFIG_DIR = configDir;

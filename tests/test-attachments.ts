@@ -56,7 +56,7 @@ async function main(): Promise<void> {
   // Set env BEFORE importing modules — config.ts reads it at module load.
   process.env.WORKSPACE_PATH = workspacePath;
   process.env.PI_CONFIG_DIR = configDir;
-  process.env.WORKBENCH_DATA_DIR = dataDir;
+  process.env.FORGE_DATA_DIR = dataDir;
   process.env.SESSION_DIR = join(workspacePath, ".pi", "sessions");
   process.env.NODE_ENV = "test";
   process.env.LOG_LEVEL = "warn";

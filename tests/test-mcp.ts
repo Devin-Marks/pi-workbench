@@ -16,7 +16,7 @@
  *     speaks it; SSE fallback path exercised by pinning `transport: "sse"`
  *     against the SSE legacy route the SDK exposes.
  *
- * Self-contained: temp WORKBENCH_DATA_DIR, in-process server, no
+ * Self-contained: temp FORGE_DATA_DIR, in-process server, no
  * network listener besides 127.0.0.1 random port. ~3s runtime.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -56,7 +56,7 @@ interface FixtureServer {
  * SSE is used instead of StreamableHTTP because the SDK's
  * StreamableHTTP server transport interacts poorly with @hono/node-server
  * on Node 25 — `notifications/initialized` consistently 500s
- * (reproduced 2026-04-30; not pi-workbench's bug). The manager's
+ * (reproduced 2026-04-30; not pi-forge's bug). The manager's
  * `auto` transport tries StreamableHTTP first then falls back to
  * SSE on failure, so this also exercises the fallback path
  * end-to-end against a live network listener.
@@ -153,12 +153,12 @@ async function spawnFixtureServer(opts?: { toolPrefix?: string }): Promise<Fixtu
 }
 
 async function main(): Promise<void> {
-  // Isolate WORKBENCH_DATA_DIR + WORKSPACE_PATH so the manager doesn't
+  // Isolate FORGE_DATA_DIR + WORKSPACE_PATH so the manager doesn't
   // touch the real user's mcp.json. Set env BEFORE importing the
   // manager — config.ts reads env at module-load time.
   const dataDir = await mkdtemp(join(tmpdir(), "pi-mcp-data-"));
   const workspacePath = await mkdtemp(join(tmpdir(), "pi-mcp-ws-"));
-  process.env.WORKBENCH_DATA_DIR = dataDir;
+  process.env.FORGE_DATA_DIR = dataDir;
   process.env.WORKSPACE_PATH = workspacePath;
   process.env.PI_CONFIG_DIR = join(dataDir, ".pi-cfg");
   process.env.NODE_ENV = "test";

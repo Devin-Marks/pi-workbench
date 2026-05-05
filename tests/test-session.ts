@@ -46,8 +46,8 @@ async function setupEnv(): Promise<{
   configDir: string;
   sessionDir: string;
 }> {
-  const workspacePath = await mkdtemp(join(tmpdir(), "pi-workbench-ws-"));
-  const configDir = await mkdtemp(join(tmpdir(), "pi-workbench-cfg-"));
+  const workspacePath = await mkdtemp(join(tmpdir(), "pi-forge-ws-"));
+  const configDir = await mkdtemp(join(tmpdir(), "pi-forge-cfg-"));
   const sessionDir = join(workspacePath, ".pi", "sessions");
   // Set env BEFORE importing the registry so `config.ts` sees these values.
   process.env.WORKSPACE_PATH = workspacePath;

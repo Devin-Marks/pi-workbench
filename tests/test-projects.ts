@@ -71,13 +71,13 @@ interface RunningServer {
 }
 
 async function startServer(): Promise<RunningServer> {
-  const workspacePath = await mkdtemp(join(tmpdir(), "pi-workbench-ws-"));
-  const configDir = await mkdtemp(join(tmpdir(), "pi-workbench-cfg-"));
-  // WORKBENCH_DATA_DIR isolates the projects.json this test reads
+  const workspacePath = await mkdtemp(join(tmpdir(), "pi-forge-ws-"));
+  const configDir = await mkdtemp(join(tmpdir(), "pi-forge-cfg-"));
+  // FORGE_DATA_DIR isolates the projects.json this test reads
   // and writes. Without it the test would touch the dev's actual
-  // ~/.pi-workbench/projects.json, leaking state across test runs
+  // ~/.pi-forge/projects.json, leaking state across test runs
   // (and clobbering the user's real project list).
-  const dataDir = await mkdtemp(join(tmpdir(), "pi-workbench-data-"));
+  const dataDir = await mkdtemp(join(tmpdir(), "pi-forge-data-"));
   const port = await pickFreePort();
   const child = spawn(process.execPath, [serverEntry], {
     cwd: repoRoot,
@@ -88,7 +88,7 @@ async function startServer(): Promise<RunningServer> {
       NODE_ENV: "test",
       WORKSPACE_PATH: workspacePath,
       PI_CONFIG_DIR: configDir,
-      WORKBENCH_DATA_DIR: dataDir,
+      FORGE_DATA_DIR: dataDir,
       UI_PASSWORD: undefined,
       JWT_SECRET: undefined,
       API_KEY: undefined,
@@ -416,7 +416,7 @@ async function main(): Promise<void> {
           NODE_ENV: "test",
           WORKSPACE_PATH: workspacePath,
           PI_CONFIG_DIR: configDir,
-          WORKBENCH_DATA_DIR: srv.dataDir,
+          FORGE_DATA_DIR: srv.dataDir,
           // Ambient auth env from the dev's shell would otherwise enable auth
           // on the restarted server, turning the rename-survives assertion
           // into a confusing 401-vs-200 mismatch.

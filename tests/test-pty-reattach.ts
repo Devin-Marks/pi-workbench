@@ -64,7 +64,7 @@ interface PtyManagerModule {
 }
 
 async function main(): Promise<void> {
-  const cwd = await mkdtemp(join(tmpdir(), "pi-workbench-pty-"));
+  const cwd = await mkdtemp(join(tmpdir(), "pi-forge-pty-"));
   process.env.NODE_ENV = "test";
   // Don't import installPtyExitHandler — test isolation: the module
   // load must NOT install a process-wide exit handler.

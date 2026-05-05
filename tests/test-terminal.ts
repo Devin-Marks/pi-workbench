@@ -216,7 +216,7 @@ async function main(): Promise<void> {
       NODE_ENV: "test",
       WORKSPACE_PATH: workspacePath,
       PI_CONFIG_DIR: configDir,
-      WORKBENCH_DATA_DIR: dataDir,
+      FORGE_DATA_DIR: dataDir,
       SESSION_DIR: join(workspacePath, ".pi", "sessions"),
       API_KEY: apiKey,
       UI_PASSWORD: undefined,
@@ -310,7 +310,7 @@ async function main(): Promise<void> {
       assert("shell flushed initial output", ready, `output: ${term.output.slice(-200)}`);
 
       // Use a unique sentinel to avoid matching the user's PS1 echo.
-      const sentinel = "pi-workbench-marker-" + randomBytes(4).toString("hex");
+      const sentinel = "pi-forge-marker-" + randomBytes(4).toString("hex");
       send(term.ws, { type: "input", data: `echo ${sentinel}\n` });
       const sawSentinel = await waitForOutput(term, sentinel, 5_000);
       assert("echo output reaches client", sawSentinel, `output: ${term.output.slice(-200)}`);
@@ -457,7 +457,7 @@ async function runRateLimitTest(): Promise<void> {
       NODE_ENV: "test",
       WORKSPACE_PATH: workspacePath,
       PI_CONFIG_DIR: configDir,
-      WORKBENCH_DATA_DIR: dataDir,
+      FORGE_DATA_DIR: dataDir,
       SESSION_DIR: join(workspacePath, ".pi", "sessions"),
       API_KEY: apiKey,
       UI_PASSWORD: undefined,

@@ -2,7 +2,7 @@
  * Per-tool overrides integration test.
  *
  * Boots the server in-process with a temp PI_CONFIG_DIR /
- * WORKBENCH_DATA_DIR, exercises the GET /config/tools and
+ * FORGE_DATA_DIR, exercises the GET /config/tools and
  * PUT /config/tools/:family/:name/enabled routes, and verifies the
  * on-disk override file mutates correctly.
  *
@@ -17,7 +17,7 @@
  *   - PUT with an invalid family → 400 (Fastify schema validation).
  *   - PUT with malformed body → 400.
  *   - On-disk file shape — the override file at
- *     ${WORKBENCH_DATA_DIR}/tool-overrides.json contains the
+ *     ${FORGE_DATA_DIR}/tool-overrides.json contains the
  *     disabled name and nothing else.
  *   - Per-project overrides:
  *       - PUT with scope=project + projectId writes to the project
@@ -83,7 +83,7 @@ async function main(): Promise<void> {
   const dataDir = await mkdtemp(join(tmpdir(), "pi-tools-data-"));
   process.env.WORKSPACE_PATH = workspacePath;
   process.env.PI_CONFIG_DIR = configDir;
-  process.env.WORKBENCH_DATA_DIR = dataDir;
+  process.env.FORGE_DATA_DIR = dataDir;
   process.env.SESSION_DIR = join(workspacePath, ".pi", "sessions");
   process.env.NODE_ENV = "test";
   delete process.env.UI_PASSWORD;
