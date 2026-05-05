@@ -1,6 +1,6 @@
 # Containers
 
-This document covers everything you need to know about running pi-workbench
+This document covers everything you need to know about running pi-forge
 in a container — the shipped Docker image, the compose recipe, the volume
 layout, the security model, and how to tune resources for your workload.
 
@@ -10,7 +10,7 @@ For non-container reverse-proxy + TLS recipes, see
 
 ## Why containers
 
-pi-workbench is **single-tenant by design** and the container is the unit of
+pi-forge is **single-tenant by design** and the container is the unit of
 isolation. The agent's `bash` tool is a real shell, the `write` and `edit`
 tools touch the workspace filesystem, and the integrated terminal spawns
 a PTY with the workbench process's permissions. Running in a container:
@@ -71,7 +71,7 @@ The container expects three bind-mounted volumes:
 |---|---|---|
 | `/workspace` | `WORKSPACE_HOST_PATH` (default `../workspace`) | User's project source code. Projects live as subfolders. |
 | `/home/pi/.pi/agent` | `PI_CONFIG_HOST_PATH` (default `~/.pi/agent`) | Pi SDK config — `auth.json`, `models.json`, `settings.json`. Bind-mounting from the host means the container inherits provider auth without copying secrets into the image. |
-| `/home/pi/.pi-workbench` | `WORKBENCH_DATA_HOST_PATH` (default `~/.pi-workbench-docker`) | Workbench-owned state — `projects.json`. **Different default** than `PI_CONFIG_HOST_PATH` so the container has its own project list independent of host CLI use. |
+| `/home/pi/.pi-forge` | `FORGE_DATA_HOST_PATH` (default `~/.pi-forge-docker`) | Workbench-owned state — `projects.json`. **Different default** than `PI_CONFIG_HOST_PATH` so the container has its own project list independent of host CLI use. |
 
 ### Why three volumes
 
@@ -80,7 +80,7 @@ The container expects three bind-mounted volumes:
   you don't have to re-enter API keys after rebuild.
 - **Workbench data** is the project registry — sharing host vs container
   means coordinating two project lists. Defaulting to a separate host path
-  (`~/.pi-workbench-docker`) keeps them isolated. Set both to the same
+  (`~/.pi-forge-docker`) keeps them isolated. Set both to the same
   path if you want a shared registry.
 
 ### Sessions live inside the workspace
@@ -92,7 +92,7 @@ with the `SESSION_DIR` env var if you want them elsewhere.
 
 ## Environment variables
 
-The compose file forwards every env var pi-workbench reads. See the full
+The compose file forwards every env var pi-forge reads. See the full
 reference in [`configuration.md`](./configuration.md#environment-variables); the
 container-relevant ones:
 
@@ -101,9 +101,9 @@ container-relevant ones:
 | `PORT` | `3000` | Internal port; map to host via `HOST_PORT`. |
 | `WORKSPACE_PATH` | `/workspace` | Fixed inside the container. |
 | `PI_CONFIG_DIR` | `/home/pi/.pi/agent` | Fixed inside the container. |
-| `WORKBENCH_DATA_DIR` | `/home/pi/.pi-workbench` | Fixed inside the container. |
+| `FORGE_DATA_DIR` | `/home/pi/.pi-forge` | Fixed inside the container. |
 | `UI_PASSWORD` | (unset) | Browser login password. `JWT_SECRET` auto-generates if not set. |
-| `JWT_SECRET` | (unset, auto-generated) | HS256 signing key. When `UI_PASSWORD` is set and this is empty, persisted to `${WORKBENCH_DATA_DIR}/jwt-secret` on first boot. Override by setting this env (`openssl rand -hex 32`). |
+| `JWT_SECRET` | (unset, auto-generated) | HS256 signing key. When `UI_PASSWORD` is set and this is empty, persisted to `${FORGE_DATA_DIR}/jwt-secret` on first boot. Override by setting this env (`openssl rand -hex 32`). |
 | `API_KEY` | (unset) | Static bearer token for programmatic clients. |
 | `LOG_LEVEL` | `info` | Pino level: `trace` / `debug` / `info` / `warn` / `error`. |
 | `TRUST_PROXY` | `false` | Set to `true` when behind a reverse proxy so login rate-limit applies per real client IP. |
@@ -154,13 +154,13 @@ health state.
 
 ## Resource recommendations
 
-Default `docker-compose.yml` doesn't pin CPU / memory limits — pi-workbench
+Default `docker-compose.yml` doesn't pin CPU / memory limits — pi-forge
 is lightweight at idle and the agent's resource use depends entirely on
 what your prompts ask for. Reasonable starting points:
 
 ```yaml
 services:
-  pi-workbench:
+  pi-forge:
     deploy:
       resources:
         limits:
@@ -286,7 +286,7 @@ the running process. Either match UIDs (per the bind-mount section
 above) or run inside the container:
 
 ```bash
-docker compose exec pi-workbench git config --global --add safe.directory /workspace/<project>
+docker compose exec pi-forge git config --global --add safe.directory /workspace/<project>
 ```
 
 The setting persists across container restarts because it lives in the

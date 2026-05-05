@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-pi-workbench follows a rolling-release model from `main`. The latest
+pi-forge follows a rolling-release model from `main`. The latest
 tagged release receives security fixes; older releases do not.
 
 | Version | Supported |
@@ -15,13 +15,13 @@ no LTS branch.
 
 ## Threat model
 
-pi-workbench is **single-tenant** by design — one deploy, one user, one
+pi-forge is **single-tenant** by design — one deploy, one user, one
 workspace root. The threat model assumes:
 
 - The workbench process trusts its own user. There is no isolation between
   the user and the agent's filesystem / shell access; the agent runs with
   full permissions of the workbench process.
-- The container is the unit of isolation. Run pi-workbench in Docker (or
+- The container is the unit of isolation. Run pi-forge in Docker (or
   another container runtime) so the agent's bash tool can't damage the
   host outside the bind-mounted workspace.
 - The HTTP surface is **not** safe to expose to the public internet over
@@ -122,7 +122,7 @@ choices that operators should know about when planning a deployment.
   false confidence. The actual mitigation is OS-level: run the workbench
   process and the shell as **separate UIDs**, with `auth.json` mode 600
   owned by the workbench UID. This is achievable in custom Docker
-  deployments today; pi-workbench's stock image runs both as the same
+  deployments today; pi-forge's stock image runs both as the same
   user. If your threat model includes "an authenticated workbench user
   must not be able to read provider credentials," prefer OAuth (where
   losing a token costs you a re-auth, not a key rotation) and rotate API
@@ -162,7 +162,7 @@ Encrypt with the project's PGP key if one is published in the GitHub profile.
 
 ### Response window
 
-pi-workbench is maintained on a best-effort basis. The maintainer aims for
+pi-forge is maintained on a best-effort basis. The maintainer aims for
 the following response targets, but they are guidelines rather than
 guarantees — actual timing depends on maintainer availability, severity,
 upstream dependencies, and the complexity of the fix:

@@ -5,7 +5,7 @@ diagram refers out to. For contributor-focused architecture rules
 (conventions, "where does X live", code-organization invariants), see
 [`CLAUDE.md`](../CLAUDE.md) at the repo root.
 
-## What pi-workbench is
+## What pi-forge is
 
 A self-hosted HTTP server + browser UI that wraps the
 [`pi-coding-agent`](https://github.com/badlogic/pi-mono) SDK. It is **not**
@@ -81,7 +81,7 @@ workbench is the bridge:
 │                                                                      │
 │  ${WORKSPACE_PATH}/<project>/         — user code                    │
 │  ${SESSION_DIR}/<projectId>/*.jsonl   — session transcripts          │
-│  ${WORKBENCH_DATA_DIR}/projects.json  — project registry             │
+│  ${FORGE_DATA_DIR}/projects.json  — project registry             │
 │  ${PI_CONFIG_DIR}/auth.json           — provider API keys            │
 │  ${PI_CONFIG_DIR}/models.json         — custom provider definitions  │
 │  ${PI_CONFIG_DIR}/settings.json       — agent defaults               │
@@ -179,7 +179,7 @@ The workbench is stateless on the server side **except for**:
 
 | State | Storage | Survives restart? |
 |---|---|---|
-| Project registry | `${WORKBENCH_DATA_DIR}/projects.json` | Yes |
+| Project registry | `${FORGE_DATA_DIR}/projects.json` | Yes |
 | Session transcripts | `${SESSION_DIR}/<projectId>/*.jsonl` | Yes |
 | Pi auth + models + settings | `${PI_CONFIG_DIR}/*.json` (SDK-owned) | Yes |
 | Live AgentSession instances | In-memory `session-registry.ts` Map | **No** — lazy-rebuilt on next SSE connect |

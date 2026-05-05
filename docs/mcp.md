@@ -1,6 +1,6 @@
 # MCP (Model Context Protocol)
 
-pi-workbench can connect to MCP servers and surface their tools to the
+pi-forge can connect to MCP servers and surface their tools to the
 agent. Configure servers from **Settings → MCP** in the browser, or by
 editing config files directly.
 
@@ -29,7 +29,7 @@ Two layers, merged at session create time:
 
 | Scope | File | Editable from UI? |
 |---|---|---|
-| Global | `${WORKBENCH_DATA_DIR}/mcp.json` | Yes (Settings → MCP) |
+| Global | `${FORGE_DATA_DIR}/mcp.json` | Yes (Settings → MCP) |
 | Project | `<projectPath>/.mcp.json` | No — edit in your repo |
 
 Project entries **override** global entries when the server names
@@ -105,7 +105,7 @@ content shape:
 
 ## Lifecycle
 
-- **Boot.** The server eagerly loads `${WORKBENCH_DATA_DIR}/mcp.json`
+- **Boot.** The server eagerly loads `${FORGE_DATA_DIR}/mcp.json`
   and connects every enabled global server. Connection failures are
   non-fatal — the server stays in `error` state and the workbench
   comes up regardless.
@@ -177,7 +177,7 @@ The Swagger UI at `/api/docs` has the request/response schemas.
 ## See also
 
 - [`docs/configuration.md`](./configuration.md) — workbench env vars
-  including `WORKBENCH_DATA_DIR`
+  including `FORGE_DATA_DIR`
 - [`docs/architecture.md`](./architecture.md) — where the manager
   sits in the request flow
 - [`packages/server/src/mcp/manager.ts`](../packages/server/src/mcp/manager.ts)

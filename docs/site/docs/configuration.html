@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Configuration — pi-workbench</title>
+  <title>Configuration — pi-forge</title>
   <meta name="description" content="Every environment variable the workbench reads, with defaults and intent.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -21,13 +21,13 @@
   <path d="M23 11 L26 16 L23 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
   <path d="M12 13 H20 M14 13 V21 M18 13 V21" stroke="#e6e7eb" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </svg>
-        pi-workbench
+        pi-forge
       </a>
       <nav class="nav-links" id="navLinks">
         <a href="../index.html#features">Features</a>
         <a href="../index.html#quickstart">Quick Start</a>
         <a href="architecture.html">Docs</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench" class="nav-cta">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-forge" class="nav-cta">GitHub</a>
       </nav>
       <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">&#9776;</button>
     </div>
@@ -47,16 +47,16 @@
       </div>
       <div class="sidebar-section">
         <h4>Project</h4>
-        <a href="https://github.com/Devin-Marks/pi-workbench">GitHub</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/CHANGELOG.md">Changelog</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/SECURITY.md">Security</a>
+        <a href="https://github.com/Devin-Marks/pi-forge">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-forge/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/Devin-Marks/pi-forge/blob/main/SECURITY.md">Security</a>
       </div>
     </aside>
 
     <main class="docs-main">
       <h1>Configuration</h1>
       <p class="docs-subtitle">Every environment variable the workbench reads, with defaults and intent.</p>
-<p>pi-workbench&#39;s runtime behavior is shaped by <strong>two</strong> layers of configuration:</p>
+<p>pi-forge&#39;s runtime behavior is shaped by <strong>two</strong> layers of configuration:</p>
 <ol>
 <li><strong>Workbench env vars</strong> — read by <code>packages/server/src/config.ts</code> at
 startup. Controls ports, paths, auth, and the <code>MINIMAL_UI</code> frontend
@@ -93,7 +93,7 @@ below.</li>
 </tr>
 <tr>
 <td><code>WORKSPACE_PATH</code></td>
-<td><code>~/.pi-workbench/workspace</code></td>
+<td><code>~/.pi-forge/workspace</code></td>
 <td>Where project code lives. Docker image overrides to <code>/workspace</code> (mounted from host). Point at an existing dir (e.g. <code>~/Code</code>) to reuse code you already have on disk.</td>
 </tr>
 <tr>
@@ -102,9 +102,9 @@ below.</li>
 <td>Pi SDK config dir (auth.json, models.json, settings.json — owned by the SDK). The Docker image overrides this to <code>/home/pi/.pi/agent</code> (mounted from the host&#39;s <code>~/.pi/agent</code>).</td>
 </tr>
 <tr>
-<td><code>WORKBENCH_DATA_DIR</code></td>
-<td><code>~/.pi-workbench</code></td>
-<td>Workbench-owned state (projects.json). Defaults to the same dotdir as the workspace (<code>projects.json</code> sits alongside <code>workspace/</code>). Kept separate from <code>PI_CONFIG_DIR</code> so we don&#39;t mix our state into the pi SDK&#39;s directory. Docker image points this at <code>/home/pi/.pi-workbench</code> (mounted from the host&#39;s <code>~/.pi-workbench-docker</code> by default — container has its own project list).</td>
+<td><code>FORGE_DATA_DIR</code></td>
+<td><code>~/.pi-forge</code></td>
+<td>Workbench-owned state (projects.json). Defaults to the same dotdir as the workspace (<code>projects.json</code> sits alongside <code>workspace/</code>). Kept separate from <code>PI_CONFIG_DIR</code> so we don&#39;t mix our state into the pi SDK&#39;s directory. Docker image points this at <code>/home/pi/.pi-forge</code> (mounted from the host&#39;s <code>~/.pi-forge-docker</code> by default — container has its own project list).</td>
 </tr>
 <tr>
 <td><code>CLIENT_DIST_PATH</code></td>
@@ -124,7 +124,7 @@ below.</li>
 <tr>
 <td><code>UI_PASSWORD</code></td>
 <td>(unset)</td>
-<td>If set, enables browser JWT auth. <code>JWT_SECRET</code> is auto-generated on first boot if not supplied. After the user changes it via the UI, a scrypt hash is persisted to <code>${WORKBENCH_DATA_DIR}/password-hash</code> and this env var is ignored on subsequent logins.</td>
+<td>If set, enables browser JWT auth. <code>JWT_SECRET</code> is auto-generated on first boot if not supplied. After the user changes it via the UI, a scrypt hash is persisted to <code>${FORGE_DATA_DIR}/password-hash</code> and this env var is ignored on subsequent logins.</td>
 </tr>
 <tr>
 <td><code>REQUIRE_PASSWORD_CHANGE</code></td>
@@ -134,7 +134,7 @@ below.</li>
 <tr>
 <td><code>JWT_SECRET</code></td>
 <td>(unset, auto-generated)</td>
-<td>HS256 signing key. <strong>Optional</strong> — when <code>UI_PASSWORD</code> is set and <code>JWT_SECRET</code> is not, the server generates one and persists it to <code>${WORKBENCH_DATA_DIR}/jwt-secret</code> (mode 0600). The data dir is already a PVC / bind-mount in K8s and Docker, so tokens survive restarts with no extra wiring. Set this env var to override (e.g. <code>openssl rand -hex 32</code>). Delete the file to rotate.</td>
+<td>HS256 signing key. <strong>Optional</strong> — when <code>UI_PASSWORD</code> is set and <code>JWT_SECRET</code> is not, the server generates one and persists it to <code>${FORGE_DATA_DIR}/jwt-secret</code> (mode 0600). The data dir is already a PVC / bind-mount in K8s and Docker, so tokens survive restarts with no extra wiring. Set this env var to override (e.g. <code>openssl rand -hex 32</code>). Delete the file to rotate.</td>
 </tr>
 <tr>
 <td><code>API_KEY</code></td>
@@ -376,7 +376,7 @@ versions — you won&#39;t lose data by editing through the form.</p>
 <h3>Per-session model override</h3>
 <p>The Settings → Agent default is the <strong>fallback</strong>. The chat input has a
 model picker that overrides per-session. The override persists in
-browser localStorage (<code>pi-workbench/model/&lt;sessionId&gt;</code>) and re-applies
+browser localStorage (<code>pi-forge/model/&lt;sessionId&gt;</code>) and re-applies
 on session switch. It does NOT modify <code>settings.json</code>.</p>
 <p>(See the commit history around <code>routes/control.ts:setModel</code> for the
 gory details — the SDK&#39;s <code>setModel</code> writes the global default as a
@@ -410,9 +410,9 @@ enable/disable for THIS project. Disable state writes to the project&#39;s
 <td><code>auth.json</code>, <code>models.json</code>, <code>settings.json</code> (shared with host pi CLI by default)</td>
 </tr>
 <tr>
-<td><code>/home/pi/.pi-workbench</code></td>
-<td><code>~/.pi-workbench-docker</code></td>
-<td><code>projects.json</code> (separate from host&#39;s <code>~/.pi-workbench</code>)</td>
+<td><code>/home/pi/.pi-forge</code></td>
+<td><code>~/.pi-forge-docker</code></td>
+<td><code>projects.json</code> (separate from host&#39;s <code>~/.pi-forge</code>)</td>
 </tr>
 <tr>
 <td><code>/workspace</code></td>
@@ -431,7 +431,7 @@ they&#39;d resolve to invalid paths inside the container&#39;s filesystem.
 Setting both to the same host path requires also using the same
 workspace path semantics.</p>
 <h2>MCP servers</h2>
-<p>MCP server definitions live in <code>${WORKBENCH_DATA_DIR}/mcp.json</code> (global)
+<p>MCP server definitions live in <code>${FORGE_DATA_DIR}/mcp.json</code> (global)
 and <code>&lt;projectPath&gt;/.mcp.json</code> (project-scoped). Manage them from the
 <strong>Settings → MCP</strong> tab in the browser, or edit the files directly. See
 <a href="./mcp.md"><code>mcp.md</code></a> for the field reference, transport options,

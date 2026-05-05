@@ -585,7 +585,7 @@ timestamp. Refresh by logging in again before expiry.
 
 ```python
 #!/usr/bin/env python3
-"""Send a one-shot prompt to a pi-workbench session and print the response."""
+"""Send a one-shot prompt to a pi-forge session and print the response."""
 import json
 import sys
 import httpx

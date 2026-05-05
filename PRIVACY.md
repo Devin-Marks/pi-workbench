@@ -1,6 +1,6 @@
 # Privacy
 
-pi-workbench is open-source software you self-host. The project does not
+pi-forge is open-source software you self-host. The project does not
 operate any servers on your behalf and is designed not to send usage data
 back to the maintainer. This document describes, to the best of the
 maintainer's knowledge as of the current release, what data the software
@@ -8,7 +8,7 @@ stores locally and what flows out of it to third parties.
 
 This document is informational. It is not a privacy notice, not legal
 advice, and not a warranty about the software's behavior. If you operate
-a pi-workbench deploy that other people use, treat it as a starting point
+a pi-forge deploy that other people use, treat it as a starting point
 for your own privacy notice rather than a substitute for one. Audit the
 source for your release before relying on any specific behavior described
 here — see the project commit history for what has actually changed.
@@ -34,17 +34,17 @@ in your environment if any of this is load-bearing for your use case.
 
 ## What the software you operate stores locally
 
-When you run pi-workbench, the following data lands on disk:
+When you run pi-forge, the following data lands on disk:
 
 | Where | What | Lifetime |
 |---|---|---|
-| `${WORKSPACE_PATH}` (default `~/.pi-workbench/workspace`) | Your project source code, anything the agent writes | Until you delete it |
+| `${WORKSPACE_PATH}` (default `~/.pi-forge/workspace`) | Your project source code, anything the agent writes | Until you delete it |
 | `${SESSION_DIR}` (default `${WORKSPACE_PATH}/.pi/sessions`) | JSONL transcripts of every session: prompts, responses, tool calls + results, model + provider + timestamps + token usage per turn | Until you delete it |
-| `${WORKBENCH_DATA_DIR}/projects.json` (default `~/.pi-workbench/projects.json`) | Project registry: id, name, absolute path, createdAt | Until you delete it |
+| `${FORGE_DATA_DIR}/projects.json` (default `~/.pi-forge/projects.json`) | Project registry: id, name, absolute path, createdAt | Until you delete it |
 | `${PI_CONFIG_DIR}/auth.json` (default `~/.pi/agent/auth.json`) | LLM provider API keys (Anthropic, OpenAI, etc.) | Until you remove the key |
 | `${PI_CONFIG_DIR}/models.json` | Custom provider definitions (OpenAI-compatible endpoints) | Until you delete it |
 | `${PI_CONFIG_DIR}/settings.json` | Default model, default thinking level, steering / followUp mode | Until you delete it |
-| Browser localStorage | Per-session model selection (`pi-workbench/model/*`), terminal tab list, theme choice (`pi.theme`), right-pane tab, panel widths, view-mode preferences | Until you clear browser storage |
+| Browser localStorage | Per-session model selection (`pi-forge/model/*`), terminal tab list, theme choice (`pi.theme`), right-pane tab, panel widths, view-mode preferences | Until you clear browser storage |
 | Browser localStorage (auth) | JWT session token (when `UI_PASSWORD` is set) | Until expiry (default 7 days) or logout |
 | In-memory only | Active session message arrays, SSE client connections, live PTY processes | Until container restart |
 
@@ -56,7 +56,7 @@ search hits from `grep`, etc.
 
 ## What flows out to third parties
 
-When you use pi-workbench, the following network requests leave your deploy:
+When you use pi-forge, the following network requests leave your deploy:
 
 ### LLM provider API requests
 
@@ -70,7 +70,7 @@ Every chat turn sends to your configured provider:
 
 The provider's response (assistant text, thinking blocks if enabled, tool
 call requests, usage metadata) flows back. Provider terms govern what they
-do with this data — pi-workbench has no influence over provider retention,
+do with this data — pi-forge has no influence over provider retention,
 logging, or training. Read the policy of the provider you've configured:
 
 - **Anthropic:** <https://www.anthropic.com/legal/privacy>
@@ -90,9 +90,9 @@ add.
 
 ### Container image pull (one-time)
 
-Pulling the pi-workbench Docker image fetches it from your container
+Pulling the pi-forge Docker image fetches it from your container
 registry of choice (Docker Hub, GHCR, your own). The registry sees your
-public IP and the image tag. This is out of pi-workbench's control.
+public IP and the image tag. This is out of pi-forge's control.
 
 ### What is intended to stay local
 
@@ -117,12 +117,12 @@ capture or forward any of this.
 If you operate a deploy that other people use, you see the same data the
 software stores: workspace files, session JSONLs, browser-side state if
 they're using your machine. There is **no isolation between operator and
-user** — pi-workbench is single-tenant by design. Run separate deploys per
+user** — pi-forge is single-tenant by design. Run separate deploys per
 user if user-level privacy matters.
 
 ## Your responsibilities as an operator
 
-If you process other people's data through your pi-workbench deploy, you
+If you process other people's data through your pi-forge deploy, you
 become the data controller (GDPR), business (CCPA), or equivalent under
 your jurisdiction's law. You are responsible for:
 
@@ -136,11 +136,11 @@ your jurisdiction's law. You are responsible for:
 - **Sector-specific rules** (HIPAA, PCI DSS, GLBA, FERPA, etc.) if applicable
 
 The project ships no tooling for any of these. Build them yourself or
-deploy pi-workbench only for personal use.
+deploy pi-forge only for personal use.
 
 ## Children
 
-pi-workbench is not directed at users under 13 (or 16, in jurisdictions
+pi-forge is not directed at users under 13 (or 16, in jurisdictions
 where the GDPR applies). Operators are responsible for not deploying it
 in contexts where children would interact with it without appropriate
 parental / guardian arrangement.

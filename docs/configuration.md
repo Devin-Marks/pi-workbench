@@ -1,6 +1,6 @@
 # Configuration
 
-pi-workbench's runtime behavior is shaped by **two** layers of configuration:
+pi-forge's runtime behavior is shaped by **two** layers of configuration:
 
 1. **Workbench env vars** — read by `packages/server/src/config.ts` at
    startup. Controls ports, paths, auth, and the `MINIMAL_UI` frontend
@@ -18,15 +18,15 @@ pi-workbench's runtime behavior is shaped by **two** layers of configuration:
 | `PORT` | `3000` | Fastify listen port. |
 | `HOST` | `0.0.0.0` | Bind address. |
 | `LOG_LEVEL` | `info` | Pino log level. |
-| `WORKSPACE_PATH` | `~/.pi-workbench/workspace` | Where project code lives. Docker image overrides to `/workspace` (mounted from host). Point at an existing dir (e.g. `~/Code`) to reuse code you already have on disk. |
+| `WORKSPACE_PATH` | `~/.pi-forge/workspace` | Where project code lives. Docker image overrides to `/workspace` (mounted from host). Point at an existing dir (e.g. `~/Code`) to reuse code you already have on disk. |
 | `PI_CONFIG_DIR` | `~/.pi/agent` | Pi SDK config dir (auth.json, models.json, settings.json — owned by the SDK). The Docker image overrides this to `/home/pi/.pi/agent` (mounted from the host's `~/.pi/agent`). |
-| `WORKBENCH_DATA_DIR` | `~/.pi-workbench` | Workbench-owned state (projects.json). Defaults to the same dotdir as the workspace (`projects.json` sits alongside `workspace/`). Kept separate from `PI_CONFIG_DIR` so we don't mix our state into the pi SDK's directory. Docker image points this at `/home/pi/.pi-workbench` (mounted from the host's `~/.pi-workbench-docker` by default — container has its own project list). |
+| `FORGE_DATA_DIR` | `~/.pi-forge` | Workbench-owned state (projects.json). Defaults to the same dotdir as the workspace (`projects.json` sits alongside `workspace/`). Kept separate from `PI_CONFIG_DIR` so we don't mix our state into the pi SDK's directory. Docker image points this at `/home/pi/.pi-forge` (mounted from the host's `~/.pi-forge-docker` by default — container has its own project list). |
 | `CLIENT_DIST_PATH` | `<server-dist>/../../client/dist` | Built Vite output served by Fastify in production. |
 | `SERVE_CLIENT` | `true` | Set to `false` to skip static-serving (useful when running the dev Vite server in front of the API). |
 | `SESSION_DIR` | `${WORKSPACE_PATH}/.pi/sessions` | JSONL session storage. |
-| `UI_PASSWORD` | (unset) | If set, enables browser JWT auth. `JWT_SECRET` is auto-generated on first boot if not supplied. After the user changes it via the UI, a scrypt hash is persisted to `${WORKBENCH_DATA_DIR}/password-hash` and this env var is ignored on subsequent logins. |
+| `UI_PASSWORD` | (unset) | If set, enables browser JWT auth. `JWT_SECRET` is auto-generated on first boot if not supplied. After the user changes it via the UI, a scrypt hash is persisted to `${FORGE_DATA_DIR}/password-hash` and this env var is ignored on subsequent logins. |
 | `REQUIRE_PASSWORD_CHANGE` | `true` | When the user logs in with the env-supplied `UI_PASSWORD` and no on-disk hash exists yet, the issued token is scoped to `POST /auth/change-password` and the UI forces the user to pick a new password before continuing. Set to `false` to keep the env-supplied password as-is (useful when `UI_PASSWORD` is itself sourced from a sealed secret you rotate out-of-band). |
-| `JWT_SECRET` | (unset, auto-generated) | HS256 signing key. **Optional** — when `UI_PASSWORD` is set and `JWT_SECRET` is not, the server generates one and persists it to `${WORKBENCH_DATA_DIR}/jwt-secret` (mode 0600). The data dir is already a PVC / bind-mount in K8s and Docker, so tokens survive restarts with no extra wiring. Set this env var to override (e.g. `openssl rand -hex 32`). Delete the file to rotate. |
+| `JWT_SECRET` | (unset, auto-generated) | HS256 signing key. **Optional** — when `UI_PASSWORD` is set and `JWT_SECRET` is not, the server generates one and persists it to `${FORGE_DATA_DIR}/jwt-secret` (mode 0600). The data dir is already a PVC / bind-mount in K8s and Docker, so tokens survive restarts with no extra wiring. Set this env var to override (e.g. `openssl rand -hex 32`). Delete the file to rotate. |
 | `API_KEY` | (unset) | Static bearer token for programmatic access. |
 | `JWT_EXPIRES_IN_SECONDS` | `604800` | JWT lifetime (default 7 d). |
 | `RATE_LIMIT_LOGIN_MAX` | `10` | Max `/auth/login` attempts per window. |
@@ -215,7 +215,7 @@ versions — you won't lose data by editing through the form.
 
 The Settings → Agent default is the **fallback**. The chat input has a
 model picker that overrides per-session. The override persists in
-browser localStorage (`pi-workbench/model/<sessionId>`) and re-applies
+browser localStorage (`pi-forge/model/<sessionId>`) and re-applies
 on session switch. It does NOT modify `settings.json`.
 
 (See the commit history around `routes/control.ts:setModel` for the
@@ -244,7 +244,7 @@ Inside Docker, the bind mounts are:
 | Container path | Default host path | What lives here |
 |---|---|---|
 | `/home/pi/.pi/agent` | `~/.pi/agent` | `auth.json`, `models.json`, `settings.json` (shared with host pi CLI by default) |
-| `/home/pi/.pi-workbench` | `~/.pi-workbench-docker` | `projects.json` (separate from host's `~/.pi-workbench`) |
+| `/home/pi/.pi-forge` | `~/.pi-forge-docker` | `projects.json` (separate from host's `~/.pi-forge`) |
 | `/workspace` | `../workspace` (relative to compose file) | User code; sessions under `.pi/sessions/` here |
 
 Sharing `~/.pi/agent` with the host means the host CLI and the container
@@ -261,7 +261,7 @@ workspace path semantics.
 
 ## MCP servers
 
-MCP server definitions live in `${WORKBENCH_DATA_DIR}/mcp.json` (global)
+MCP server definitions live in `${FORGE_DATA_DIR}/mcp.json` (global)
 and `<projectPath>/.mcp.json` (project-scoped). Manage them from the
 **Settings → MCP** tab in the browser, or edit the files directly. See
 [`mcp.md`](./mcp.md) for the field reference, transport options,

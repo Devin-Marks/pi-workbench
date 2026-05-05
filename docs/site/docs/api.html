@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>API Examples — pi-workbench</title>
+  <title>API Examples — pi-forge</title>
   <meta name="description" content="End-to-end scripting recipes against the REST + SSE surface.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -21,13 +21,13 @@
   <path d="M23 11 L26 16 L23 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
   <path d="M12 13 H20 M14 13 V21 M18 13 V21" stroke="#e6e7eb" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </svg>
-        pi-workbench
+        pi-forge
       </a>
       <nav class="nav-links" id="navLinks">
         <a href="../index.html#features">Features</a>
         <a href="../index.html#quickstart">Quick Start</a>
         <a href="architecture.html">Docs</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench" class="nav-cta">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-forge" class="nav-cta">GitHub</a>
       </nav>
       <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">&#9776;</button>
     </div>
@@ -47,9 +47,9 @@
       </div>
       <div class="sidebar-section">
         <h4>Project</h4>
-        <a href="https://github.com/Devin-Marks/pi-workbench">GitHub</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/CHANGELOG.md">Changelog</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/SECURITY.md">Security</a>
+        <a href="https://github.com/Devin-Marks/pi-forge">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-forge/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/Devin-Marks/pi-forge/blob/main/SECURITY.md">Security</a>
       </div>
     </aside>
 
@@ -511,7 +511,7 @@ curl -s -X POST -H &quot;Content-Type: application/json&quot; \
 timestamp. Refresh by logging in again before expiry.</p>
 <h2>Putting it together: a script that opens a session, runs a prompt, and exits when done</h2>
 <pre><code class="language-python">#!/usr/bin/env python3
-&quot;&quot;&quot;Send a one-shot prompt to a pi-workbench session and print the response.&quot;&quot;&quot;
+&quot;&quot;&quot;Send a one-shot prompt to a pi-forge session and print the response.&quot;&quot;&quot;
 import json
 import sys
 import httpx

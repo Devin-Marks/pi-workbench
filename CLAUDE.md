@@ -9,7 +9,7 @@ conventions, critical rules, and known gotchas.
 
 ## What This Project Is
 
-pi-workbench is a browser UI for the pi coding agent (github.com/badlogic/pi-mono).
+pi-forge is a browser UI for the pi coding agent (github.com/badlogic/pi-mono).
 It is an HTTP server that embeds the `@mariozechner/pi-coding-agent` SDK and exposes
 it to a browser over REST + Server-Sent Events.
 
@@ -24,7 +24,7 @@ auth or isolation is needed or planned.
 ## Repository Layout
 
 ```
-pi-workbench/
+pi-forge/
 ├── packages/
 │   ├── server/               # Fastify HTTP server (Node.js + TypeScript)
 │   │   ├── src/
@@ -106,9 +106,9 @@ All reads are centralized in `packages/server/src/config.ts`. Never read
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | Fastify listen port |
-| `WORKSPACE_PATH` | `~/.pi-workbench/workspace` | Where project code lives. Docker image overrides to `/workspace` (host bind-mount). Point at an existing dir like `~/Code` to reuse code already on disk. |
+| `WORKSPACE_PATH` | `~/.pi-forge/workspace` | Where project code lives. Docker image overrides to `/workspace` (host bind-mount). Point at an existing dir like `~/Code` to reuse code already on disk. |
 | `PI_CONFIG_DIR` | `~/.pi/agent` | Pi SDK config dir (auth/models/settings — owned by the SDK). Docker image points this at `/home/pi/.pi/agent`. |
-| `WORKBENCH_DATA_DIR` | `~/.pi-workbench` | Workbench-owned state (projects.json). Separated from `PI_CONFIG_DIR` so we don't write our state into the SDK's directory. Docker image points this at `/home/pi/.pi-workbench`. |
+| `FORGE_DATA_DIR` | `~/.pi-forge` | Workbench-owned state (projects.json). Separated from `PI_CONFIG_DIR` so we don't write our state into the SDK's directory. Docker image points this at `/home/pi/.pi-forge`. |
 | `SESSION_DIR` | `${WORKSPACE_PATH}/.pi/sessions` | JSONL session storage |
 | `UI_PASSWORD` | (unset) | If set, enables browser JWT auth |
 | `API_KEY` | (unset) | If set, enables static bearer token for programmatic access |
@@ -373,7 +373,7 @@ These are facts about the pi SDK that are easy to get wrong:
 - `session.navigateTree()` operates IN-PLACE on the current session file. It does
   not create a new session.
 - Pi does NOT have native MCP (Model Context Protocol) support. MCP is provided
-  by pi-workbench itself: `packages/server/src/mcp/manager.ts` connects to
+  by pi-forge itself: `packages/server/src/mcp/manager.ts` connects to
   remote MCP servers via `@modelcontextprotocol/sdk`, translates each
   advertised tool into a pi `ToolDefinition`, and feeds the aggregate into
   every `createAgentSession` call as `customTools`. See
@@ -384,7 +384,7 @@ These are facts about the pi SDK that are easy to get wrong:
 
 ## Config Files
 
-The SDK and pi-workbench own DIFFERENT directories. Never put workbench
+The SDK and pi-forge own DIFFERENT directories. Never put workbench
 state into `PI_CONFIG_DIR` or vice versa.
 
 **`PI_CONFIG_DIR` — pi SDK territory.** Managed by `config-manager.ts`.
@@ -396,23 +396,23 @@ Never write directly from routes.
 | `PI_CONFIG_DIR/auth.json` | API keys and OAuth tokens for built-in providers |
 | `PI_CONFIG_DIR/settings.json` | Default model, thinking level, steering/followUp mode |
 
-**`WORKBENCH_DATA_DIR` — pi-workbench territory.** Managed by `project-manager.ts`.
+**`FORGE_DATA_DIR` — pi-forge territory.** Managed by `project-manager.ts`.
 
 | File | Purpose |
 |---|---|
-| `WORKBENCH_DATA_DIR/projects.json` | pi-workbench project registry (id/name/path/createdAt) |
+| `FORGE_DATA_DIR/projects.json` | pi-forge project registry (id/name/path/createdAt) |
 
-`PI_CONFIG_DIR` defaults to `~/.pi/agent`; `WORKBENCH_DATA_DIR` defaults
-to `~/.pi-workbench`. The Docker compose setup mounts the host's
+`PI_CONFIG_DIR` defaults to `~/.pi/agent`; `FORGE_DATA_DIR` defaults
+to `~/.pi-forge`. The Docker compose setup mounts the host's
 `~/.pi/agent` into `/home/pi/.pi/agent` so the container inherits the
 host's provider config and API keys, and binds a SEPARATE host path
-into `/home/pi/.pi-workbench` so the container has its own project
+into `/home/pi/.pi-forge` so the container has its own project
 list (host vs container projects don't bleed unless you point both
 mounts at the same host path on purpose).
 
 **Legacy migration:** earlier versions stored `projects.json` inside
 `PI_CONFIG_DIR`. `project-manager.ts` runs a one-time `rename()` on
-first read to move it into `WORKBENCH_DATA_DIR` if the new location
+first read to move it into `FORGE_DATA_DIR` if the new location
 is empty.
 
 **Export / import** (`config-export.ts`, `Settings → Backup` tab):
@@ -440,7 +440,7 @@ interface Project {
 }
 ```
 
-Projects are stored in `WORKBENCH_DATA_DIR/projects.json` as a JSON array.
+Projects are stored in `FORGE_DATA_DIR/projects.json` as a JSON array.
 A session belongs to a project when its `cwd` matches the project's `path`.
 `WORKSPACE_PATH` is the root that the folder picker defaults to and the boundary
 that all project paths must be inside. Reject any project path outside
@@ -573,7 +573,7 @@ No JS test framework. Each script under `tests/` is a standalone tsx file
 that boots its own server in-process (or imports the registry directly), drives
 it via fetch / WebSocket, prints PASS/FAIL per assertion, and exits 0 if all
 pass or 1 on any failure. Each script is self-contained — `mkdtemp`s its own
-WORKSPACE_PATH / PI_CONFIG_DIR / WORKBENCH_DATA_DIR, runs, and cleans up.
+WORKSPACE_PATH / PI_CONFIG_DIR / FORGE_DATA_DIR, runs, and cleans up.
 
 ### Running tests
 
@@ -651,7 +651,7 @@ should be green at PR-merge time, every time.
 
 Drop a `tests/test-<feature>.ts` that:
 1. `mkdtemp`s its own dirs and sets WORKSPACE_PATH / PI_CONFIG_DIR /
-   WORKBENCH_DATA_DIR / SESSION_DIR before importing `dist/index.js`.
+   FORGE_DATA_DIR / SESSION_DIR before importing `dist/index.js`.
 2. Boots the server via `buildServer()` from the compiled module (or spawns
    a child process — see `tests/test-terminal.ts` for the spawn pattern when
    the test needs env that's read at module load).

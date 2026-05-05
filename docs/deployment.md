@@ -1,6 +1,6 @@
 # Deployment
 
-This document covers production deployment of pi-workbench: TLS termination,
+This document covers production deployment of pi-forge: TLS termination,
 reverse-proxy configuration, auth setup, and the per-environment-variable
 guidance for going from "works on localhost" to "works on a public domain
 with no surprises."
@@ -15,7 +15,7 @@ A short checklist that catches the common foot-guns:
 
 - [ ] `UI_PASSWORD` set, OR `API_KEY` set, OR both — never run a
       network-exposed deploy with both unset. `JWT_SECRET` is
-      auto-generated and persisted to `${WORKBENCH_DATA_DIR}/jwt-secret`
+      auto-generated and persisted to `${FORGE_DATA_DIR}/jwt-secret`
       on first boot (override by setting `JWT_SECRET` env explicitly).
 - [ ] `JWT_SECRET` either auto-generated (recommended; the persisted
       file is mode 0600 inside your already-mounted data dir) or, if
@@ -51,7 +51,7 @@ A short checklist that catches the common foot-guns:
                                            │ or private network
                                            ▼
                                     ┌──────────────┐
-                                    │ pi-workbench │
+                                    │ pi-forge │
                                     │  container   │
                                     │   :3000      │
                                     └──────────────┘
@@ -85,14 +85,14 @@ pi.example.com {
     # Optional: stricter HSTS than Caddy's default
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
-        # Tighten if you control all the assets — pi-workbench has no
+        # Tighten if you control all the assets — pi-forge has no
         # external script deps post-build, so a strict CSP is feasible
         # Content-Security-Policy "default-src 'self'; img-src 'self' data:; ..."
     }
 
     # Optional: log to file
     log {
-        output file /var/log/caddy/pi-workbench.log
+        output file /var/log/caddy/pi-forge.log
     }
 }
 ```
@@ -156,13 +156,13 @@ auto-provisioning.
 ```yaml
 # docker/docker-compose.yml additions for Traefik
 services:
-  pi-workbench:
+  pi-forge:
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.pi-workbench.rule=Host(`pi.example.com`)"
-      - "traefik.http.routers.pi-workbench.entrypoints=websecure"
-      - "traefik.http.routers.pi-workbench.tls.certresolver=letsencrypt"
-      - "traefik.http.services.pi-workbench.loadbalancer.server.port=3000"
+      - "traefik.http.routers.pi-forge.rule=Host(`pi.example.com`)"
+      - "traefik.http.routers.pi-forge.entrypoints=websecure"
+      - "traefik.http.routers.pi-forge.tls.certresolver=letsencrypt"
+      - "traefik.http.services.pi-forge.loadbalancer.server.port=3000"
 
       # SSE / long-running response support
       - "traefik.http.middlewares.long-timeout.forwardauth.responseheaders=Cache-Control,X-Accel-Buffering"
@@ -181,7 +181,7 @@ Production-relevant guidance:
 | Variable | Production value | Why |
 |---|---|---|
 | `UI_PASSWORD` | A strong shared secret if multiple humans share the deploy, OR a personal password for solo use | Required for browser login. |
-| `JWT_SECRET` | (leave empty for auto-generation) or `$(openssl rand -hex 32)` to override | Signing key for browser session JWTs. When `UI_PASSWORD` is set and `JWT_SECRET` is empty, the server generates one and persists it to `${WORKBENCH_DATA_DIR}/jwt-secret` (mode 0600); the data dir is already a PVC / bind-mount so tokens survive restarts. Rotate by deleting the file (or rotating the env value). |
+| `JWT_SECRET` | (leave empty for auto-generation) or `$(openssl rand -hex 32)` to override | Signing key for browser session JWTs. When `UI_PASSWORD` is set and `JWT_SECRET` is empty, the server generates one and persists it to `${FORGE_DATA_DIR}/jwt-secret` (mode 0600); the data dir is already a PVC / bind-mount so tokens survive restarts. Rotate by deleting the file (or rotating the env value). |
 | `API_KEY` | `$(openssl rand -hex 32)` | Static bearer token for scripts / CI. Different secret than the browser login. |
 | `JWT_EXPIRES_IN_SECONDS` | `86400` (24 h) for higher-trust environments, or leave at default `604800` (7 d) | Shorter = re-login more often = smaller blast radius if a token leaks. |
 | `RATE_LIMIT_LOGIN_MAX` | `5` if you're paranoid; default `10` is fine for most | Per-IP login attempts per minute. |
@@ -215,7 +215,7 @@ API_KEY=<openssl rand -hex 32 output>
 
 When `UI_PASSWORD` is set and `JWT_SECRET` is empty, the server
 generates a 48-byte random secret on first boot and persists it to
-`${WORKBENCH_DATA_DIR}/jwt-secret` (mode 0600). Because `WORKBENCH_DATA_DIR`
+`${FORGE_DATA_DIR}/jwt-secret` (mode 0600). Because `FORGE_DATA_DIR`
 is already a PVC / bind-mount in K8s and Docker, the secret survives
 restarts and tokens issued before a restart keep working. Set
 `JWT_SECRET` explicitly only if you want to manage rotation out-of-band
@@ -238,7 +238,7 @@ Three things worth backing up:
    definitions. Encrypted at rest if your backup tooling supports it
    (most do).
 
-`projects.json` (under `${WORKBENCH_DATA_HOST_PATH}`) is recoverable
+`projects.json` (under `${FORGE_DATA_HOST_PATH}`) is recoverable
 from disk by re-adding projects manually, so it's lower priority — but
 also tiny, so back it up anyway.
 
@@ -263,33 +263,33 @@ reconnect.
 
 ## Multi-deploy patterns
 
-pi-workbench is single-tenant. To support multiple users, run multiple
+pi-forge is single-tenant. To support multiple users, run multiple
 deploys:
 
 ```yaml
 # docker-compose.yml — one service per user
 services:
-  pi-workbench-alice:
-    container_name: pi-workbench-alice
-    image: pi-workbench:latest
+  pi-forge-alice:
+    container_name: pi-forge-alice
+    image: pi-forge:latest
     ports: ["127.0.0.1:3001:3000"]
     volumes:
       - /srv/alice/workspace:/workspace
       - /srv/alice/.pi/agent:/home/pi/.pi/agent
-      - /srv/alice/.pi-workbench:/home/pi/.pi-workbench
+      - /srv/alice/.pi-forge:/home/pi/.pi-forge
     environment:
       - UI_PASSWORD=${ALICE_PASSWORD}
       - JWT_SECRET=${ALICE_JWT_SECRET}
       - TRUST_PROXY=true
 
-  pi-workbench-bob:
-    container_name: pi-workbench-bob
-    image: pi-workbench:latest
+  pi-forge-bob:
+    container_name: pi-forge-bob
+    image: pi-forge:latest
     ports: ["127.0.0.1:3002:3000"]
     volumes:
       - /srv/bob/workspace:/workspace
       - /srv/bob/.pi/agent:/home/pi/.pi/agent
-      - /srv/bob/.pi-workbench:/home/pi/.pi-workbench
+      - /srv/bob/.pi-forge:/home/pi/.pi-forge
     environment:
       - UI_PASSWORD=${BOB_PASSWORD}
       - JWT_SECRET=${BOB_JWT_SECRET}
@@ -327,13 +327,13 @@ format. Pipe through your log aggregator of choice:
 
 ```bash
 # Promtail / Loki
-docker compose logs -f pi-workbench | promtail-pipe
+docker compose logs -f pi-forge | promtail-pipe
 
 # Vector
-docker logs -f pi-workbench | vector-pipe
+docker logs -f pi-forge | vector-pipe
 
 # Just file rotation
-docker compose logs -f pi-workbench >> /var/log/pi-workbench.log
+docker compose logs -f pi-forge >> /var/log/pi-forge.log
 ```
 
 Useful log fields to alert on:

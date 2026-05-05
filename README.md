@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="docs/images/icon.png" alt="pi-workbench" width="120" height="120"/>
+  <img src="docs/images/icon.png" alt="pi-forge" width="120" height="120"/>
 </p>
 
-# pi-workbench
+# pi-forge
 
-[![CI](https://github.com/Devin-Marks/pi-workbench/actions/workflows/ci.yml/badge.svg)](https://github.com/Devin-Marks/pi-workbench/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/Devin-Marks/pi-workbench?sort=semver)](https://github.com/Devin-Marks/pi-workbench/releases)
+[![CI](https://github.com/Devin-Marks/pi-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/Devin-Marks/pi-forge/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Devin-Marks/pi-forge?sort=semver)](https://github.com/Devin-Marks/pi-forge/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A self-hosted browser workbench for the [pi coding agent](https://github.com/badlogic/pi-mono).
@@ -13,7 +13,7 @@ Chat with the agent against your code, browse files, run a terminal, review
 diffs, all from one tab.
 
 <p align="center">
-  <img src="docs/images/img0.png" alt="pi-workbench in action" width="1200"/>
+  <img src="docs/images/img0.png" alt="pi-forge in action" width="1200"/>
 </p>
 
 <details>
@@ -35,7 +35,7 @@ diffs, all from one tab.
 
 </details>
 
-## Why pi-workbench?
+## Why pi-forge?
 
 - **Self-hosted, single-tenant.** Your code, your provider keys, your container. No cloud.
   No analytics. No multi-tenant cross-talk. The same machine that runs the agent owns the
@@ -50,8 +50,8 @@ diffs, all from one tab.
 ## Quick start
 
 ```bash
-git clone https://github.com/Devin-Marks/pi-workbench.git
-cd pi-workbench
+git clone https://github.com/Devin-Marks/pi-forge.git
+cd pi-forge
 cp docker/.env.example docker/.env       # edit auth + paths if you want
 cd docker && docker compose up -d --build
 ```
@@ -170,7 +170,7 @@ For project conventions and the agent-facing architecture notes, see
 
 ## Versions
 
-pi-workbench tracks the [`@mariozechner/pi-coding-agent`](https://www.npmjs.com/package/@mariozechner/pi-coding-agent)
+pi-forge tracks the [`@mariozechner/pi-coding-agent`](https://www.npmjs.com/package/@mariozechner/pi-coding-agent)
 SDK closely. Each workbench release pins an exact patch version of the
 pi SDK trio (`pi-coding-agent`, `pi-agent-core`, `pi-ai`) — no
 caret/tilde — so a transparent SDK upgrade can't surprise an existing
@@ -186,7 +186,7 @@ notes live in [CHANGELOG.md](./CHANGELOG.md).
 
 ## Heads up
 
-pi-workbench drives a coding agent that runs real commands (`bash`,
+pi-forge drives a coding agent that runs real commands (`bash`,
 `write`, `edit`) as the workbench user — review what it does, set
 provider-side spending limits, and don't expose the container to the
 public internet. See
