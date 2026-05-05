@@ -12,6 +12,8 @@ the README for the support window policy.
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-05-04
+
 ### Added
 
 - **Copy buttons on chat messages and code blocks.** Each user and
