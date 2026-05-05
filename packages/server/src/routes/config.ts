@@ -17,6 +17,12 @@ import {
 } from "../config-manager.js";
 import { buildExportTar, importConfigFromBuffer, MAX_IMPORT_BYTES } from "../config-export.js";
 import {
+  buildSkillsExportTar,
+  importSkillsFromFiles,
+  importSkillsFromTar,
+  MAX_SKILLS_IMPORT_BYTES,
+} from "../skills-export.js";
+import {
   ensureProjectLoaded as mcpEnsureProjectLoaded,
   getStatus as mcpGetStatus,
 } from "../mcp/manager.js";
@@ -675,6 +681,143 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
       }
       try {
         const summary = await importConfigFromBuffer(buf);
+        return summary;
+      } catch (err) {
+        return internalError(reply, err);
+      }
+    },
+  );
+
+  // ---------------------- skills export / import ----------------------
+  // Skills tree export. Streams a tar.gz of every file under
+  // `${piConfigDir}/skills/` — single-file skills (`<name>.md`) and
+  // directory skills (`<name>/SKILL.md` plus assets) round-trip
+  // verbatim. Empty exports are valid (zero-entry tar) so the route
+  // doesn't 404 on a fresh install.
+  fastify.get(
+    "/config/skills/export",
+    {
+      schema: {
+        description:
+          "Stream a `.tar.gz` of every file under `${piConfigDir}/skills/`. " +
+          "Single-file (`<name>.md`) and directory skills (`<name>/SKILL.md` + " +
+          "assets) both round-trip. Empty trees produce a zero-entry tar — " +
+          "consumers should accept that.",
+        tags: ["config"],
+        response: {
+          200: {
+            description: "gzip-compressed tar of the skills directory contents",
+            type: "string",
+            format: "binary",
+          },
+          500: errorSchema,
+        },
+      },
+    },
+    async (_req, reply) => {
+      try {
+        const { fileCount, stream } = await buildSkillsExportTar();
+        const ts = new Date().toISOString().replace(/[:.]/g, "-");
+        reply
+          .header("Content-Type", "application/gzip")
+          .header("Content-Disposition", `attachment; filename="pi-workbench-skills-${ts}.tar.gz"`)
+          .header("X-Pi-Workbench-File-Count", String(fileCount));
+        return reply.send(stream);
+      } catch (err) {
+        return internalError(reply, err);
+      }
+    },
+  );
+
+  // Skills tree import. Two shapes accepted:
+  //   1. A single multipart file part — server treats it as a tar.gz
+  //      and delegates to `importSkillsFromTar`.
+  //   2. Multiple multipart file parts — typical of an
+  //      `<input webkitdirectory>` folder pick. Each part's `filename`
+  //      carries the relative path inside the picked folder; server
+  //      writes each into the skills tree after the path-safety
+  //      filter.
+  // The route auto-detects: if exactly one part is present AND its
+  // filename ends in `.tar.gz` / `.tgz`, it's treated as a tar; in any
+  // other case the parts are imported as discrete files.
+  fastify.post(
+    "/config/skills/import",
+    {
+      schema: {
+        description:
+          "Restore a skills tar.gz OR upload a folder of skill files. " +
+          "Tar.gz path: must contain only relative paths under the skills " +
+          "directory; absolute paths and `..` traversal are rejected. " +
+          "Folder upload path: each multipart `filename` is treated as a " +
+          "relative path inside the skills tree (same safety filter). " +
+          "Existing files at colliding paths are overwritten.",
+        tags: ["config"],
+        consumes: ["multipart/form-data"],
+        response: {
+          200: {
+            type: "object",
+            required: ["imported", "skipped"],
+            properties: {
+              imported: { type: "array", items: { type: "string" } },
+              skipped: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["name", "reason"],
+                  properties: {
+                    name: { type: "string" },
+                    reason: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          400: errorSchema,
+          413: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (req: FastifyRequest, reply) => {
+      // Collect every multipart file part up front. We need to know the
+      // count + filenames before deciding tar-vs-folder, so we buffer
+      // each part's bytes (capped per-part by the multipart limit) and
+      // then dispatch to the right importer.
+      const parts: { filename: string; buffer: Buffer }[] = [];
+      try {
+        const iter = req.files({ limits: { fileSize: MAX_SKILLS_IMPORT_BYTES } });
+        for await (const f of iter) {
+          if (f.file.truncated) {
+            return reply.code(413).send({
+              error: "file_too_large",
+              message: `part "${f.filename}" exceeds ${MAX_SKILLS_IMPORT_BYTES} bytes`,
+            });
+          }
+          const buf = await f.toBuffer();
+          if (f.file.truncated) {
+            return reply.code(413).send({
+              error: "file_too_large",
+              message: `part "${f.filename}" exceeds ${MAX_SKILLS_IMPORT_BYTES} bytes`,
+            });
+          }
+          parts.push({ filename: f.filename, buffer: buf });
+        }
+      } catch (err) {
+        return reply.code(400).send({
+          error: "invalid_multipart",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      if (parts.length === 0) {
+        return reply.code(400).send({ error: "no_file" });
+      }
+      try {
+        const isTarball =
+          parts.length === 1 &&
+          (parts[0]!.filename.endsWith(".tar.gz") || parts[0]!.filename.endsWith(".tgz"));
+        const summary = isTarball
+          ? await importSkillsFromTar(parts[0]!.buffer)
+          : await importSkillsFromFiles(parts);
         return summary;
       } catch (err) {
         return internalError(reply, err);
