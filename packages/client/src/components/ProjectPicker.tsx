@@ -87,6 +87,14 @@ export function ProjectPicker({ onClose, required = false }: Props) {
 
   const select = async (selected: string): Promise<void> => {
     if (submitting) return;
+    // Refuse the workspace root itself as a project folder. Pi-workbench
+    // expects each project to be a sub-tree of WORKSPACE_PATH; the
+    // root is the boundary, not a project. Picking it would let the
+    // agent see every other project's files in one session.
+    if (workspaceRoot.length > 0 && selected === workspaceRoot) {
+      setError("workspace_root_not_allowed");
+      return;
+    }
     setSubmitting(true);
     setError(undefined);
     try {
@@ -254,8 +262,15 @@ export function ProjectPicker({ onClose, required = false }: Props) {
                   </button>
                   <button
                     onClick={() => path && void select(path)}
-                    disabled={!path || submitting}
+                    disabled={
+                      !path || submitting || (workspaceRoot.length > 0 && path === workspaceRoot)
+                    }
                     className="rounded-md bg-neutral-100 px-3 py-2 text-sm font-medium text-neutral-900 disabled:opacity-50"
+                    title={
+                      workspaceRoot.length > 0 && path === workspaceRoot
+                        ? "Pick a sub-folder — the workspace root itself can't be a project."
+                        : "Use this folder as the project root"
+                    }
                   >
                     Select this folder
                   </button>
@@ -269,15 +284,17 @@ export function ProjectPicker({ onClose, required = false }: Props) {
           <p className="mt-3 text-sm text-red-400">
             {error === "path_not_allowed"
               ? "That folder is outside the workspace root."
-              : error === "not_a_directory"
-                ? "That path is not a directory."
-                : error === "already_exists"
-                  ? "A folder with that name already exists."
-                  : error === "duplicate_path"
-                    ? "Another project already points at that folder."
-                    : error === "network_error"
-                      ? "Couldn't reach the server."
-                      : `Error: ${error}`}
+              : error === "workspace_root_not_allowed"
+                ? "Pick a sub-folder — the workspace root itself can't be a project."
+                : error === "not_a_directory"
+                  ? "That path is not a directory."
+                  : error === "already_exists"
+                    ? "A folder with that name already exists."
+                    : error === "duplicate_path"
+                      ? "Another project already points at that folder."
+                      : error === "network_error"
+                        ? "Couldn't reach the server."
+                        : `Error: ${error}`}
           </p>
         )}
       </div>
