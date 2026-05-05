@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { useFileStore, type OpenFile } from "../store/file-store";
 import { useActiveProject } from "../store/project-store";
-import { WrapText, X } from "lucide-react";
+import { WrapText, X, XSquare } from "lucide-react";
 
 const WRAP_KEY_PREFIX = "pi.editor.wrap.";
 
@@ -73,6 +73,7 @@ export function EditorPanel() {
   const activePath = useFileStore((s) => s.activePath);
   const setActiveFile = useFileStore((s) => s.setActiveFile);
   const closeFile = useFileStore((s) => s.closeFile);
+  const closeAllFiles = useFileStore((s) => s.closeAllFiles);
   const updateDraft = useFileStore((s) => s.updateDraft);
   const saveFile = useFileStore((s) => s.saveFile);
   const reloadFile = useFileStore((s) => s.reloadFile);
@@ -102,6 +103,7 @@ export function EditorPanel() {
         activePath={activePath}
         onActivate={setActiveFile}
         onClose={closeFile}
+        onCloseAll={closeAllFiles}
       />
       {active === undefined ? (
         <div className="flex flex-1 items-center justify-center text-xs italic text-neutral-500">
@@ -156,41 +158,69 @@ function Tabs({
   activePath,
   onActivate,
   onClose,
+  onCloseAll,
 }: {
   files: OpenFile[];
   activePath: string | undefined;
   onActivate: (path: string | undefined) => void;
   onClose: (path: string) => void;
+  onCloseAll: () => void;
 }) {
   if (files.length === 0) return null;
+  const dirtyCount = files.filter((f) => f.dirty).length;
+  const handleCloseAll = (): void => {
+    if (
+      dirtyCount > 0 &&
+      !window.confirm(
+        `Close ${files.length} tab${files.length === 1 ? "" : "s"}? ${dirtyCount} ha${
+          dirtyCount === 1 ? "s" : "ve"
+        } unsaved changes that will be lost.`,
+      )
+    ) {
+      return;
+    }
+    onCloseAll();
+  };
   return (
-    <div className="flex overflow-x-auto border-b border-neutral-800 bg-neutral-900/40">
-      {files.map((f) => {
-        const name = f.path.split("/").pop() ?? f.path;
-        const active = f.path === activePath;
-        return (
-          <div
-            key={f.tabId}
-            className={`group flex items-center gap-1 border-r border-neutral-800 px-3 py-1.5 text-xs ${
-              active
-                ? "bg-neutral-950 text-neutral-100"
-                : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
-            }`}
-          >
-            <button onClick={() => onActivate(f.path)} className="truncate" title={f.path}>
-              {f.dirty && <span className="mr-1 text-amber-400">•</span>}
-              {name}
-            </button>
-            <button
-              onClick={() => onClose(f.path)}
-              className="rounded p-1 text-neutral-600 opacity-0 hover:bg-neutral-800 hover:text-neutral-200 group-hover:opacity-100"
-              title="Close (any unsaved changes are lost)"
+    <div className="flex border-b border-neutral-800 bg-neutral-900/40">
+      {/* Close-all sits before the tab strip so its position is
+          stable regardless of how many tabs are open. Confirmation
+          prompt only when there are unsaved changes. */}
+      <button
+        onClick={handleCloseAll}
+        className="flex shrink-0 items-center justify-center border-r border-neutral-800 px-2 py-1.5 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200"
+        title={`Close all ${files.length} tab${files.length === 1 ? "" : "s"}`}
+      >
+        <XSquare size={14} />
+      </button>
+      <div className="flex flex-1 overflow-x-auto">
+        {files.map((f) => {
+          const name = f.path.split("/").pop() ?? f.path;
+          const active = f.path === activePath;
+          return (
+            <div
+              key={f.tabId}
+              className={`group flex items-center gap-1 border-r border-neutral-800 px-3 py-1.5 text-xs ${
+                active
+                  ? "bg-neutral-950 text-neutral-100"
+                  : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
+              }`}
             >
-              <X size={16} />
-            </button>
-          </div>
-        );
-      })}
+              <button onClick={() => onActivate(f.path)} className="truncate" title={f.path}>
+                {f.dirty && <span className="mr-1 text-amber-400">•</span>}
+                {name}
+              </button>
+              <button
+                onClick={() => onClose(f.path)}
+                className="rounded p-1 text-neutral-600 hover:bg-neutral-800 hover:text-neutral-200"
+                title="Close (any unsaved changes are lost)"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

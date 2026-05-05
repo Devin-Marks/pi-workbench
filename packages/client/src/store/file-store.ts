@@ -126,6 +126,9 @@ interface FileState {
   /** Clear `pendingNav` on a tab after the editor has consumed it. */
   consumePendingNav: (path: string) => void;
   closeFile: (path: string) => void;
+  /** Close every open editor tab. Persisted state for the active
+   *  project is also cleared so a reload doesn't reopen them. */
+  closeAllFiles: () => void;
   setActiveFile: (path: string | undefined) => void;
   updateDraft: (path: string, draft: string) => void;
   saveFile: (projectId: string, path: string) => Promise<void>;
@@ -182,7 +185,11 @@ interface FileState {
    * editor stays open without a flash.
    */
   moveEntry: (projectId: string, srcAbsPath: string, destAbsPath: string) => Promise<string>;
-  deleteEntry: (projectId: string, absPath: string) => Promise<void>;
+  deleteEntry: (
+    projectId: string,
+    absPath: string,
+    opts?: { recursive?: boolean },
+  ) => Promise<void>;
 }
 
 export const EMPTY_OPEN_FILES: OpenFile[] = [];
@@ -318,6 +325,14 @@ export const useFileStore = create<FileState>((set, get) => ({
       const ext = { ...s.externallyChanged };
       delete ext[path];
       const result = { openFiles: next, activePath, externallyChanged: ext };
+      persist(currentProjectId, result);
+      return result;
+    });
+  },
+
+  closeAllFiles: () => {
+    set(() => {
+      const result = { openFiles: [], activePath: undefined, externallyChanged: {} };
       persist(currentProjectId, result);
       return result;
     });
@@ -499,11 +514,19 @@ export const useFileStore = create<FileState>((set, get) => ({
     }
   },
 
-  deleteEntry: async (projectId, absPath) => {
+  deleteEntry: async (projectId, absPath, opts) => {
     set({ error: undefined });
     try {
-      await api.filesDelete(projectId, absPath);
-      // Close any tab the user had open on this path.
+      await api.filesDelete(
+        projectId,
+        absPath,
+        opts?.recursive === true ? { recursive: true } : undefined,
+      );
+      // Close any tab the user had open on this path. For recursive
+      // dir delete we'd ideally also close any child-of-absPath tabs;
+      // those will surface "file_not_found" on the next save / reload
+      // and the user can close them — keeping the tab close logic
+      // simple here.
       const open = get().openFiles.find((f) => f.path === absPath);
       if (open !== undefined) get().closeFile(absPath);
       await get().loadTree(projectId);

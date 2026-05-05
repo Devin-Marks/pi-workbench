@@ -72,8 +72,6 @@ function extractToolFilePath(message: Record<string, unknown>): string | undefin
   return undefined;
 }
 
-const noop = (): void => undefined;
-
 export function App() {
   const ready = useAuthStore((s) => s.ready);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -147,6 +145,14 @@ export function App() {
     setEditorOpen(v);
     localStorage.setItem("pi-workbench/editor-open", v ? "true" : "false");
   };
+
+  // First-run picker dismissal. When no projects exist we render the
+  // ProjectPicker by default, but the user can dismiss it to take a
+  // look around the empty workbench. Re-opens via the sidebar's
+  // "+ New project" button. Reset whenever a project is created so
+  // the picker doesn't reappear if the user later deletes all
+  // projects in the same browser tab.
+  const [setupPickerDismissed, setSetupPickerDismissed] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState<number>(() =>
     readPersistedWidth(TERMINAL_HEIGHT_KEY, DEFAULT_TERMINAL_HEIGHT),
   );
@@ -362,18 +368,6 @@ export function App() {
             Chat
           </button>
           <button
-            onClick={() => setFilesOpenPersisted(!filesOpen)}
-            className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
-              filesOpen
-                ? "border-neutral-500 bg-neutral-800 text-neutral-100"
-                : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
-            }`}
-            title="Toggle the file browser tree"
-          >
-            <FolderTree size={13} />
-            Files
-          </button>
-          <button
             onClick={() => setEditorOpenPersisted(!editorOpen)}
             className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
               editorOpen
@@ -384,6 +378,18 @@ export function App() {
           >
             <FileCode size={13} />
             Editor
+          </button>
+          <button
+            onClick={() => setFilesOpenPersisted(!filesOpen)}
+            className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
+              filesOpen
+                ? "border-neutral-500 bg-neutral-800 text-neutral-100"
+                : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+            }`}
+            title="Toggle the file browser tree"
+          >
+            <FolderTree size={13} />
+            Files
           </button>
           {!minimal && (
             <button
@@ -448,9 +454,27 @@ export function App() {
             {(chatOpen || activeSessionId === undefined) && (
               <div className="flex flex-1 flex-col overflow-hidden">
                 {projectsLoaded && projects.length === 0 ? (
-                  <div className="flex flex-1 items-center justify-center">
-                    <ProjectPicker required onClose={noop} />
-                  </div>
+                  setupPickerDismissed ? (
+                    // Picker dismissed — show a friendly empty state
+                    // pointing back at the sidebar's + button. The
+                    // header buttons (settings, theme, etc.) stay
+                    // reachable from this state too.
+                    <div className="flex flex-1 items-center justify-center px-6 text-center">
+                      <div className="space-y-3 text-sm text-neutral-400">
+                        <p>No projects yet.</p>
+                        <button
+                          onClick={() => setSetupPickerDismissed(false)}
+                          className="rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900 hover:bg-white"
+                        >
+                          + New project
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-1 items-center justify-center">
+                      <ProjectPicker onClose={() => setSetupPickerDismissed(true)} />
+                    </div>
+                  )
                 ) : activeSessionId !== undefined ? (
                   <>
                     <ChatView sessionId={activeSessionId} />
@@ -468,12 +492,23 @@ export function App() {
                   </>
                 ) : active ? (
                   <div className="flex flex-1 items-center justify-center px-6 text-center">
-                    <div className="space-y-2 text-sm text-neutral-400">
+                    <div className="space-y-3 text-sm text-neutral-400">
                       <h2 className="text-xl font-semibold text-neutral-100">{active.name}</h2>
                       <p className="font-mono text-xs">{active.path}</p>
-                      <p>
-                        Pick a session from the sidebar — or click "+ New session" to start one.
-                      </p>
+                      <p>Pick a session from the sidebar — or start a new one here.</p>
+                      <button
+                        onClick={() => {
+                          // Fire-and-forget; createSession sets the
+                          // active session id on success which routes
+                          // this branch into the ChatView render
+                          // above. Failures surface via the session
+                          // store's `error` field.
+                          void useSessionStore.getState().createSession(active.id);
+                        }}
+                        className="rounded-md bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900 hover:bg-white"
+                      >
+                        + New session
+                      </button>
                     </div>
                   </div>
                 ) : (
@@ -484,112 +519,152 @@ export function App() {
               </div>
             )}
 
-            {editorVisible && (
-              <>
-                <ResizableDivider
-                  getStartSize={() => editorWidthRef.current}
-                  onResize={(next) => setEditorWidth(next)}
-                  /* Pane is to the RIGHT of the divider, so drag-right
-                   shrinks the editor. direction: -1 → grow as user drags left. */
-                  direction={-1}
-                  minSize={MIN_EDITOR_WIDTH}
-                  maxSize={Math.max(
-                    MIN_EDITOR_WIDTH,
-                    window.innerWidth - (filesOpen ? filesWidth : 0) - MIN_CHAT_WIDTH - 240, // 240 ≈ ProjectSidebar
-                  )}
-                />
-                <div
-                  className="flex shrink-0 flex-col border-l border-neutral-800"
-                  style={{ width: `${editorWidth}px` }}
-                >
-                  <EditorPanel />
-                </div>
-              </>
-            )}
+            {/* Layout rule when chat is hidden: whichever pane is
+                LEFTMOST in the render order (editor, then files) takes
+                flex-1 + drops its leading divider so the visible panes
+                fill the entire main area with at most one slider
+                between them. With chat visible, the chat column is
+                always the flex-1 leftmost and editor + files keep
+                their persisted widths + dividers as before.
 
-            {filesOpen && (
-              <>
-                <ResizableDivider
-                  getStartSize={() => filesWidthRef.current}
-                  onResize={(next) => setFilesWidth(next)}
-                  direction={-1}
-                  minSize={MIN_FILES_WIDTH}
-                  maxSize={Math.max(
-                    MIN_FILES_WIDTH,
-                    window.innerWidth -
-                      MIN_CHAT_WIDTH -
-                      240 -
-                      (editorVisible ? MIN_EDITOR_WIDTH : 0),
-                  )}
-                />
-                <div
-                  className="flex shrink-0 flex-col border-l border-neutral-800"
-                  style={{ width: `${filesWidth}px` }}
-                >
-                  {/* Right-pane tabs: file browser vs the turn-diff
-                      "Changes" view. Both share width + position so
-                      they don't compete for screen real estate. */}
-                  <div className="flex border-b border-neutral-800 bg-neutral-900/40">
-                    {(minimal
-                      ? // Minimal mode keeps Files + Search + Context.
-                        // Context (token usage / message inspector) is
-                        // useful even in locked-down deploys — it's
-                        // read-only and helps users debug their own
-                        // sessions without needing the full diff/git
-                        // toolchain.
-                        (["files", "search", "context"] as const)
-                      : (["files", "search", "changes", "git", "context"] as const)
-                    ).map((t) => (
-                      <button
-                        key={t}
-                        onClick={() => setRightTabPersisted(t)}
-                        className={`flex items-center gap-1 px-3 py-1.5 text-[11px] uppercase tracking-wider ${
-                          rightTab === t
-                            ? "border-b border-neutral-100 text-neutral-100"
-                            : "text-neutral-500 hover:text-neutral-300"
-                        }`}
-                      >
-                        {/* Internal key stays "changes" for backwards-compat with
-                            persisted localStorage; user-visible label is "Last turn"
-                            so it's distinct from the Git tab's working-tree changes. */}
-                        {t === "files"
-                          ? "Files"
-                          : t === "search"
-                            ? "Search"
-                            : t === "changes"
-                              ? "Last turn"
-                              : t === "git"
-                                ? "Git"
-                                : "Context"}
-                        {t === "git" && gitChangedCount > 0 && (
-                          <span className="rounded bg-amber-900/40 px-1 py-0.5 text-[9px] text-amber-300">
-                            {gitChangedCount}
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex-1 overflow-hidden">
-                    {rightTab === "files" ? (
-                      <FileBrowserPanel />
-                    ) : rightTab === "search" ? (
-                      <SearchPanel />
-                    ) : !minimal && rightTab === "changes" ? (
-                      <TurnDiffPanel />
-                    ) : !minimal && rightTab === "git" ? (
-                      <GitPanel />
-                    ) : rightTab === "context" ? (
-                      <ContextInspectorPanel />
-                    ) : (
-                      // minimal mode: stale persisted "changes"/"git"/"context"
-                      // falls back to the file browser rather than rendering
-                      // a tab the user can't even see.
-                      <FileBrowserPanel />
-                    )}
-                  </div>
-                </div>
-              </>
-            )}
+                `chatColumnVisible` mirrors the rendering condition for
+                the chat column above (it stays mounted on empty-state
+                branches so onboarding messaging always renders). */}
+            {editorVisible &&
+              (() => {
+                const chatColumnVisible = chatOpen || activeSessionId === undefined;
+                const editorIsLeftmost = !chatColumnVisible;
+                if (editorIsLeftmost) {
+                  return (
+                    <div className="flex flex-1 flex-col overflow-hidden">
+                      <EditorPanel />
+                    </div>
+                  );
+                }
+                return (
+                  <>
+                    <ResizableDivider
+                      getStartSize={() => editorWidthRef.current}
+                      onResize={(next) => setEditorWidth(next)}
+                      /* Pane is to the RIGHT of the divider, so drag-right
+                       shrinks the editor. direction: -1 → grow as user drags left. */
+                      direction={-1}
+                      minSize={MIN_EDITOR_WIDTH}
+                      maxSize={Math.max(
+                        MIN_EDITOR_WIDTH,
+                        window.innerWidth - (filesOpen ? filesWidth : 0) - MIN_CHAT_WIDTH - 240, // 240 ≈ ProjectSidebar
+                      )}
+                    />
+                    <div
+                      className="flex shrink-0 flex-col border-l border-neutral-800"
+                      style={{ width: `${editorWidth}px` }}
+                    >
+                      <EditorPanel />
+                    </div>
+                  </>
+                );
+              })()}
+
+            {filesOpen &&
+              (() => {
+                const chatColumnVisible = chatOpen || activeSessionId === undefined;
+                const filesIsLeftmost = !chatColumnVisible && !editorVisible;
+                // Inner content (tabs + selected panel) — identical in
+                // both layout branches. Extracted so we can wrap it in
+                // either a flex-1 container (leftmost) or a shrink-0
+                // fixed-width container (with a divider in front).
+                const filesContent = (
+                  <>
+                    {/* Right-pane tabs: file browser vs the turn-diff
+                        "Changes" view. Both share width + position so
+                        they don't compete for screen real estate. */}
+                    <div className="flex border-b border-neutral-800 bg-neutral-900/40">
+                      {(minimal
+                        ? // Minimal mode keeps Files + Search + Context.
+                          // Context (token usage / message inspector) is
+                          // useful even in locked-down deploys — it's
+                          // read-only and helps users debug their own
+                          // sessions without needing the full diff/git
+                          // toolchain.
+                          (["files", "search", "context"] as const)
+                        : (["files", "search", "changes", "git", "context"] as const)
+                      ).map((t) => (
+                        <button
+                          key={t}
+                          onClick={() => setRightTabPersisted(t)}
+                          className={`flex items-center gap-1 px-3 py-1.5 text-[11px] uppercase tracking-wider ${
+                            rightTab === t
+                              ? "border-b border-neutral-100 text-neutral-100"
+                              : "text-neutral-500 hover:text-neutral-300"
+                          }`}
+                        >
+                          {/* Internal key stays "changes" for backwards-compat with
+                              persisted localStorage; user-visible label is "Last turn"
+                              so it's distinct from the Git tab's working-tree changes. */}
+                          {t === "files"
+                            ? "Files"
+                            : t === "search"
+                              ? "Search"
+                              : t === "changes"
+                                ? "Last turn"
+                                : t === "git"
+                                  ? "Git"
+                                  : "Context"}
+                          {t === "git" && gitChangedCount > 0 && (
+                            <span className="rounded bg-amber-900/40 px-1 py-0.5 text-[9px] text-amber-300">
+                              {gitChangedCount}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex-1 overflow-hidden">
+                      {rightTab === "files" ? (
+                        <FileBrowserPanel />
+                      ) : rightTab === "search" ? (
+                        <SearchPanel />
+                      ) : !minimal && rightTab === "changes" ? (
+                        <TurnDiffPanel />
+                      ) : !minimal && rightTab === "git" ? (
+                        <GitPanel />
+                      ) : rightTab === "context" ? (
+                        <ContextInspectorPanel />
+                      ) : (
+                        // minimal mode: stale persisted "changes"/"git"/"context"
+                        // falls back to the file browser rather than rendering
+                        // a tab the user can't even see.
+                        <FileBrowserPanel />
+                      )}
+                    </div>
+                  </>
+                );
+                if (filesIsLeftmost) {
+                  return <div className="flex flex-1 flex-col overflow-hidden">{filesContent}</div>;
+                }
+                return (
+                  <>
+                    <ResizableDivider
+                      getStartSize={() => filesWidthRef.current}
+                      onResize={(next) => setFilesWidth(next)}
+                      direction={-1}
+                      minSize={MIN_FILES_WIDTH}
+                      maxSize={Math.max(
+                        MIN_FILES_WIDTH,
+                        window.innerWidth -
+                          MIN_CHAT_WIDTH -
+                          240 -
+                          (editorVisible ? MIN_EDITOR_WIDTH : 0),
+                      )}
+                    />
+                    <div
+                      className="flex shrink-0 flex-col border-l border-neutral-800"
+                      style={{ width: `${filesWidth}px` }}
+                    >
+                      {filesContent}
+                    </div>
+                  </>
+                );
+              })()}
           </main>
         </div>
 
