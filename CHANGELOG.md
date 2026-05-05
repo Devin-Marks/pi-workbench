@@ -12,6 +12,8 @@ the README for the support window policy.
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-05-04
+
 ### Added
 
 - **Pane toggles for chat and editor.** New **Chat** and **Editor**
