@@ -1,4 +1,4 @@
-# pi-workbench on Kubernetes / OpenShift
+# pi-forge on Kubernetes / OpenShift
 
 Two flavors of manifests, side-by-side:
 
@@ -7,7 +7,7 @@ kubernetes/
 ├── kube/         # vanilla Kubernetes (1.25+) with nginx-ingress
 │   ├── base.yaml          # Namespace + 3× PVC + Service + Ingress
 │   ├── deployment.yaml    # Deployment + initContainer for volume perms
-│   └── secret.sh          # Bootstrap script for pi-workbench-secret
+│   └── secret.sh          # Bootstrap script for pi-forge-secret
 └── openshift/    # OpenShift 4.x (DeploymentConfig + Route)
     ├── base.yaml          # Namespace + ServiceAccount + 3× PVC + Service + Route
     ├── deployment.yaml
@@ -19,9 +19,9 @@ PersistentVolumes:
 
 | Mount | Purpose | PVC |
 |---|---|---|
-| `/workspace` | User code (projects live as subfolders) | `pi-workbench-workspace` (10 Gi) |
-| `/home/pi/.pi/agent` | pi SDK config (auth.json, models.json, settings.json) | `pi-workbench-pi-config` (1 Gi) |
-| `/home/pi/.pi-workbench` | Workbench state (projects.json) | `pi-workbench-data` (1 Gi) |
+| `/workspace` | User code (projects live as subfolders) | `pi-forge-workspace` (10 Gi) |
+| `/home/pi/.pi/agent` | pi SDK config (auth.json, models.json, settings.json) | `pi-forge-pi-config` (1 Gi) |
+| `/home/pi/.pi-forge` | Workbench state (projects.json) | `pi-forge-data` (1 Gi) |
 
 All three are `ReadWriteMany` so OpenShift `DeploymentConfig` rolling
 updates can mount the volumes from the new pod before the old one
@@ -36,20 +36,20 @@ contention during rollouts.
 1. **Build and push the image** to a registry your cluster can pull from:
    ```bash
    # From the repo root
-   docker build -t <registry>/pi-workbench:latest -f docker/Dockerfile .
-   docker push <registry>/pi-workbench:latest
+   docker build -t <registry>/pi-forge:latest -f docker/Dockerfile .
+   docker push <registry>/pi-forge:latest
    ```
    Then update `image:` in `kube/deployment.yaml` (or
    `openshift/deployment.yaml`) to match. The shipped manifests use
    placeholder image refs:
-   - **kube:** `pi-workbench:latest` — assumes the image is already on
+   - **kube:** `pi-forge:latest` — assumes the image is already on
      every node. Fine for kind / minikube / k3s after `kind load
-     docker-image pi-workbench:latest` / `minikube image load
-     pi-workbench:latest`. For real clusters, swap in your registry path.
-   - **openshift:** `image-registry.openshift-image-registry.svc:5000/pi-workbench/pi-workbench:latest`
+     docker-image pi-forge:latest` / `minikube image load
+     pi-forge:latest`. For real clusters, swap in your registry path.
+   - **openshift:** `image-registry.openshift-image-registry.svc:5000/pi-forge/pi-forge:latest`
      — uses the cluster's internal registry. Populate it via `oc
-     new-build --strategy=docker --binary --name=pi-workbench` then
-     `oc start-build pi-workbench --from-dir=. -F`.
+     new-build --strategy=docker --binary --name=pi-forge` then
+     `oc start-build pi-forge --from-dir=. -F`.
 
 2. **kubectl / oc** configured against the target cluster.
 
@@ -76,15 +76,15 @@ kubectl apply -f kubernetes/kube/base.yaml
 kubectl apply -f kubernetes/kube/deployment.yaml
 
 # 4. Verify
-kubectl -n pi-workbench rollout status deploy/pi-workbench
-kubectl -n pi-workbench get pods,svc,ingress
+kubectl -n pi-forge rollout status deploy/pi-forge
+kubectl -n pi-forge get pods,svc,ingress
 ```
 
 Reach the UI:
-- **With ingress** — point `pi-workbench.local` (or your custom host;
+- **With ingress** — point `pi-forge.local` (or your custom host;
   edit `base.yaml` first) at your ingress controller's external IP.
-- **Without ingress** — `kubectl -n pi-workbench port-forward
-  svc/pi-workbench 3000:3000`, then open <http://localhost:3000>.
+- **Without ingress** — `kubectl -n pi-forge port-forward
+  svc/pi-forge 3000:3000`, then open <http://localhost:3000>.
 
 ---
 
@@ -104,18 +104,18 @@ oc apply -f kubernetes/openshift/deployment.yaml
 #    OpenShift's default SCC assigns a random UID per namespace, which
 #    breaks the chown'd /workspace and /home/pi paths in the image.
 #    The `anyuid` SCC bypasses that for the project's ServiceAccount.
-oc adm policy add-scc-to-user anyuid -z pi-workbench -n pi-workbench
+oc adm policy add-scc-to-user anyuid -z pi-forge -n pi-forge
 
 # 5. Verify
-oc -n pi-workbench rollout status dc/pi-workbench
-oc -n pi-workbench get pods,svc,route
+oc -n pi-forge rollout status dc/pi-forge
+oc -n pi-forge get pods,svc,route
 ```
 
 The Route auto-generates a hostname like
-`pi-workbench-pi-workbench.apps.<cluster-domain>`. Print the actual one
+`pi-forge-pi-forge.apps.<cluster-domain>`. Print the actual one
 with:
 ```bash
-oc -n pi-workbench get route pi-workbench -o jsonpath='{.spec.host}{"\n"}'
+oc -n pi-forge get route pi-forge -o jsonpath='{.spec.host}{"\n"}'
 ```
 
 > **Note:** `DeploymentConfig` is deprecated in OpenShift 4.x in favor
@@ -143,17 +143,17 @@ env:
     value: "true"
 ```
 
-`kubectl rollout restart deploy/pi-workbench -n pi-workbench` (or `oc
-rollout restart dc/pi-workbench -n pi-workbench`) after editing.
+`kubectl rollout restart deploy/pi-forge -n pi-forge` (or `oc
+rollout restart dc/pi-forge -n pi-forge`) after editing.
 
 ### Auth
 
-Two independent mechanisms, controlled by the `pi-workbench-secret`
+Two independent mechanisms, controlled by the `pi-forge-secret`
 keys:
 
 - `UI_PASSWORD` — enables browser password login with JWT session
   tokens. `JWT_SECRET` is auto-generated by the server on first boot
-  and persisted to `${WORKBENCH_DATA_DIR}/jwt-secret` (mode 0600) on
+  and persisted to `${FORGE_DATA_DIR}/jwt-secret` (mode 0600) on
   the data-dir PVC, so tokens survive pod restarts. Override by adding
   a `JWT_SECRET` key to the secret if you want to manage it centrally.
 - `API_KEY` — enables a static bearer token for programmatic clients
@@ -165,15 +165,15 @@ network policy or a private cluster.
 
 To rotate, edit the secret and restart the pod:
 ```bash
-kubectl -n pi-workbench edit secret pi-workbench-secret
-kubectl -n pi-workbench rollout restart deploy/pi-workbench
+kubectl -n pi-forge edit secret pi-forge-secret
+kubectl -n pi-forge rollout restart deploy/pi-forge
 ```
 
 ### Behind a reverse proxy
 
 Set `TRUST_PROXY=true` in the deployment env so the login rate limit
 sees the real client IP from `X-Forwarded-For` instead of the proxy's
-IP. The shipped manifests default to `false` since pi-workbench
+IP. The shipped manifests default to `false` since pi-forge
 clusters typically expose via ingress / route which already terminate
 TLS and set the header — but the flag stays opt-in to avoid trusting
 a header that hasn't been validated upstream.
@@ -200,7 +200,7 @@ ceiling.
 
 Health endpoint is unauthenticated:
 ```bash
-kubectl -n pi-workbench port-forward svc/pi-workbench 3000:3000 &
+kubectl -n pi-forge port-forward svc/pi-forge 3000:3000 &
 curl -s http://localhost:3000/api/v1/health | jq
 # { "status": "ok", "activeSessions": 0, "activePtys": 0 }
 ```

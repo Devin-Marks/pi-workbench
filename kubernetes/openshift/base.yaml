@@ -1,19 +1,19 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: pi-workbench
+  name: pi-forge
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: pi-workbench
-  namespace: pi-workbench
+  name: pi-forge
+  namespace: pi-forge
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: pi-workbench-workspace
-  namespace: pi-workbench
+  name: pi-forge-workspace
+  namespace: pi-forge
 spec:
   accessModes:
     - ReadWriteMany
@@ -24,8 +24,8 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: pi-workbench-pi-config
-  namespace: pi-workbench
+  name: pi-forge-pi-config
+  namespace: pi-forge
 spec:
   accessModes:
     - ReadWriteMany
@@ -36,8 +36,8 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: pi-workbench-data
-  namespace: pi-workbench
+  name: pi-forge-data
+  namespace: pi-forge
 spec:
   accessModes:
     - ReadWriteMany
@@ -48,24 +48,24 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: pi-workbench
-  namespace: pi-workbench
+  name: pi-forge
+  namespace: pi-forge
 spec:
   ports:
     - port: 3000
       targetPort: 3000
       name: http
   selector:
-    app: pi-workbench
+    app: pi-forge
 ---
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: pi-workbench
-  namespace: pi-workbench
+  name: pi-forge
+  namespace: pi-forge
 spec:
   to:
     kind: Service
-    name: pi-workbench
+    name: pi-forge
   port:
     targetPort: http
