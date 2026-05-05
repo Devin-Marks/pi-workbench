@@ -189,7 +189,7 @@ notes live in [CHANGELOG.md](./CHANGELOG.md).
 pi-workbench drives a coding agent that runs real commands (`bash`,
 `write`, `edit`) as the workbench user — review what it does, set
 provider-side spending limits, and don't expose the container to the
-public internet without TLS + auth. See
+public internet. See
 [`SECURITY.md`](./SECURITY.md) for the threat model and
 [`docs/deployment.md`](./docs/deployment.md) for production notes.
 
