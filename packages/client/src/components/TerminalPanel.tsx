@@ -132,7 +132,7 @@ export function TerminalPanel() {
                 </button>
                 <button
                   onClick={() => onCloseTab(t.id)}
-                  className="rounded p-1 text-neutral-600 opacity-0 hover:bg-neutral-800 hover:text-neutral-200 group-hover:opacity-100"
+                  className="rounded p-1 text-neutral-600 hover:bg-neutral-800 hover:text-neutral-200"
                   title="Close terminal (kills the PTY)"
                 >
                   <X size={16} />
@@ -419,7 +419,13 @@ function TerminalHost({
     <div
       ref={hostRef}
       onClick={onHostClick}
-      className="absolute inset-0"
+      // Left offset so text doesn't sit flush against the pane edge.
+      // Using `left-2` instead of `pl-2` because the host is the
+      // xterm parent — fit-addon reads its padding-box width to
+      // compute cols, so padding would cause horizontal overflow.
+      // An absolute offset shrinks the box xterm sees, which is what
+      // we want.
+      className="absolute inset-y-0 left-2 right-0"
       // `visibility: hidden` instead of `display: none` so every host
       // keeps real layout dimensions whether or not it's the active
       // tab. That way fit() always reads the correct cols/rows on

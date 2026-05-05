@@ -1429,6 +1429,21 @@ function BackupTab({ onError }: { onError: (msg: string | undefined) => void }) 
     | undefined
   >(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Skills export / import state. Kept separate from the config
+  // export/import state above so each section's "last result" message
+  // doesn't bleed into the other.
+  const [lastSkillsExport, setLastSkillsExport] = useState<
+    { filename: string; fileCount: number } | undefined
+  >(undefined);
+  const [lastSkillsImport, setLastSkillsImport] = useState<
+    | {
+        imported: string[];
+        skipped: { name: string; reason: string }[];
+      }
+    | undefined
+  >(undefined);
+  const skillsTarInputRef = useRef<HTMLInputElement>(null);
+  const skillsFolderInputRef = useRef<HTMLInputElement>(null);
 
   const onExport = async (): Promise<void> => {
     onError(undefined);
@@ -1468,6 +1483,49 @@ function BackupTab({ onError }: { onError: (msg: string | undefined) => void }) 
     } finally {
       setBusy(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const triggerDownload = (blob: Blob, filename: string): void => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    requestAnimationFrame(() => URL.revokeObjectURL(url));
+  };
+
+  const onExportSkills = async (): Promise<void> => {
+    onError(undefined);
+    setBusy(true);
+    setLastSkillsImport(undefined);
+    try {
+      const { blob, filename, fileCount } = await api.exportSkills();
+      triggerDownload(blob, filename);
+      setLastSkillsExport({ filename, fileCount });
+    } catch (err) {
+      onError(`Skills export failed: ${errorCode(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onImportSkills = async (files: File[]): Promise<void> => {
+    if (files.length === 0) return;
+    onError(undefined);
+    setBusy(true);
+    setLastSkillsExport(undefined);
+    try {
+      const summary = await api.importSkills(files);
+      setLastSkillsImport(summary);
+    } catch (err) {
+      onError(`Skills import failed: ${errorCode(err)}`);
+    } finally {
+      setBusy(false);
+      if (skillsTarInputRef.current) skillsTarInputRef.current.value = "";
+      if (skillsFolderInputRef.current) skillsFolderInputRef.current.value = "";
     }
   };
 
@@ -1549,6 +1607,112 @@ function BackupTab({ onError }: { onError: (msg: string | undefined) => void }) 
               lastImport.skipped.length === 0 && (
                 <p className="italic text-neutral-500">Archive was empty.</p>
               )}
+          </div>
+        )}
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-sm font-medium text-neutral-100">Export skills</h3>
+        <p className="mb-3 text-xs text-neutral-400">
+          Downloads a <code className="font-mono">.tar.gz</code> of every file under{" "}
+          <code className="font-mono">~/.pi/agent/skills/</code> — both single-file (
+          <code className="font-mono">{`<name>.md`}</code>) and directory skills (
+          <code className="font-mono">{`<name>/SKILL.md`}</code> + assets) round-trip verbatim.
+        </p>
+        <button
+          onClick={() => void onExportSkills()}
+          disabled={busy}
+          className="rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-100 hover:border-neutral-500 disabled:opacity-50"
+        >
+          {busy ? "Working…" : "Download skills archive"}
+        </button>
+        {lastSkillsExport !== undefined && (
+          <p className="mt-2 text-xs text-emerald-400">
+            Exported <code className="font-mono">{lastSkillsExport.filename}</code> (
+            {lastSkillsExport.fileCount === 0
+              ? "no skills on disk"
+              : `${lastSkillsExport.fileCount} file${lastSkillsExport.fileCount === 1 ? "" : "s"} packed`}
+            )
+          </p>
+        )}
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-sm font-medium text-neutral-100">Import skills</h3>
+        <p className="mb-3 text-xs text-neutral-400">
+          Restore skills from a previously-exported <code className="font-mono">.tar.gz</code>, OR
+          upload a folder of skill files directly. Existing files at the same path are{" "}
+          <strong>overwritten</strong>; new files are added. Path traversal and absolute paths are
+          rejected.
+        </p>
+        <div className="space-y-3">
+          <label className="block space-y-1">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">
+              From tar.gz
+            </span>
+            <input
+              ref={skillsTarInputRef}
+              type="file"
+              accept=".gz,.tgz,application/gzip,application/x-gzip"
+              disabled={busy}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file !== undefined) void onImportSkills([file]);
+              }}
+              className="block text-xs text-neutral-300 file:mr-3 file:rounded file:border file:border-neutral-700 file:bg-neutral-900 file:px-3 file:py-1.5 file:text-xs file:text-neutral-100 hover:file:border-neutral-500 disabled:opacity-50"
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">
+              From folder (Chromium / WebKit only)
+            </span>
+            <input
+              ref={skillsFolderInputRef}
+              type="file"
+              multiple
+              // `webkitdirectory` lets the user pick a directory; the
+              // browser sends each contained file as a separate
+              // multipart entry with the relative path in
+              // `webkitRelativePath`. Firefox doesn't implement this
+              // attribute — fall back to the tar.gz path above.
+              {...({ webkitdirectory: "" } as Record<string, string>)}
+              disabled={busy}
+              onChange={(e) => {
+                const files = e.target.files;
+                if (files === null || files.length === 0) return;
+                void onImportSkills(Array.from(files));
+              }}
+              className="block text-xs text-neutral-300 file:mr-3 file:rounded file:border file:border-neutral-700 file:bg-neutral-900 file:px-3 file:py-1.5 file:text-xs file:text-neutral-100 hover:file:border-neutral-500 disabled:opacity-50"
+            />
+          </label>
+        </div>
+        {lastSkillsImport !== undefined && (
+          <div className="mt-3 space-y-1 text-xs">
+            {lastSkillsImport.imported.length > 0 && (
+              <p className="text-emerald-400">
+                Imported {lastSkillsImport.imported.length} file
+                {lastSkillsImport.imported.length === 1 ? "" : "s"}:{" "}
+                <code className="font-mono">{lastSkillsImport.imported.join(", ")}</code>
+              </p>
+            )}
+            {lastSkillsImport.skipped.length > 0 && (
+              <div className="text-amber-400">
+                <p>
+                  Skipped {lastSkillsImport.skipped.length} entr
+                  {lastSkillsImport.skipped.length === 1 ? "y" : "ies"}:
+                </p>
+                <ul className="ml-4 list-disc">
+                  {lastSkillsImport.skipped.map((s) => (
+                    <li key={s.name}>
+                      <code className="font-mono">{s.name}</code> ({s.reason})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {lastSkillsImport.imported.length === 0 && lastSkillsImport.skipped.length === 0 && (
+              <p className="italic text-neutral-500">No files were imported.</p>
+            )}
           </div>
         )}
       </section>

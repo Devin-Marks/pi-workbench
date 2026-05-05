@@ -64,6 +64,46 @@ function buildFileRefRegex(path: string): RegExp {
   return new RegExp(`(^|\\s)@(?:"${escaped}"|${escaped})\\s?`, "g");
 }
 
+/**
+ * Per-session input history backed by localStorage. Captures EVERY
+ * submission (regular prompts, `/slash` commands, `!bash` execs,
+ * mid-turn steers) so up-arrow recall surfaces the same set of
+ * inputs the user actually typed — not just the ones that round-
+ * tripped to the agent. Newest first; capped at HISTORY_LIMIT to
+ * keep storage bounded across long-lived sessions.
+ */
+const HISTORY_LIMIT = 100;
+const HISTORY_KEY_PREFIX = "pi.input.history.v1:";
+
+function readInputHistory(sessionId: string): string[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY_PREFIX + sessionId);
+    if (raw === null) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((s): s is string => typeof s === "string").slice(0, HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function pushInputHistory(sessionId: string, text: string): void {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return;
+  try {
+    const cur = readInputHistory(sessionId);
+    // Skip if the most recent entry is identical (no point recording
+    // back-to-back duplicates the same way bash's `HISTCONTROL=ignoredups`
+    // works).
+    if (cur[0] === trimmed) return;
+    const next = [trimmed, ...cur].slice(0, HISTORY_LIMIT);
+    localStorage.setItem(HISTORY_KEY_PREFIX + sessionId, JSON.stringify(next));
+  } catch {
+    // private-mode storage failure — still works for the current
+    // browser-tab session via the ref-based fallback below.
+  }
+}
+
 function userHistory(messages: readonly AgentMessageLike[]): string[] {
   const out: string[] = [];
   let last: string | undefined;
@@ -518,7 +558,32 @@ export function ChatInput({ sessionId }: Props) {
   // the user had typed BEFORE pressing Up, so Down past the newest
   // entry restores it instead of leaving the textarea blank.
   const messages = useSessionStore((s) => s.messagesBySession[sessionId] ?? EMPTY_MESSAGES);
-  const history = useMemo(() => userHistory(messages), [messages]);
+  // localStorage tick — bumped after each pushInputHistory so the
+  // memo recomputes and the new entry shows up on the next Up press
+  // without needing a full re-render of the message list.
+  const [historyTick, setHistoryTick] = useState(0);
+  const history = useMemo(() => {
+    // Merge the localStorage record (which captures slash commands +
+    // bash exec + steers) with the message-derived history (which
+    // captures regular prompts and survives across browser tabs /
+    // sessionStorage clears). localStorage takes precedence because
+    // it preserves exact submission order including non-LLM inputs;
+    // message history backfills anything not yet persisted (e.g. a
+    // session opened in a fresh tab where localStorage is empty).
+    const persisted = readInputHistory(sessionId);
+    const fromMessages = userHistory(messages);
+    const seen = new Set<string>();
+    const merged: string[] = [];
+    for (const t of [...persisted, ...fromMessages]) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      merged.push(t);
+    }
+    return merged;
+    // historyTick is intentionally in the deps — bumping it
+    // invalidates this memo when we push to localStorage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, sessionId, historyTick]);
   const [historyIdx, setHistoryIdx] = useState<number | undefined>(undefined);
   const historyDraftRef = useRef<string>("");
   // Reset history navigation when the session changes — each session
@@ -647,6 +712,14 @@ export function ChatInput({ sessionId }: Props) {
     // sending "look at this" with an image but no caption is a
     // common path. Server still rejects entirely-empty prompts.
     if ((value.length === 0 && attachments.length === 0) || submitting) return;
+    // Record EVERY submission (slash command, bash exec, prompt,
+    // steer) in the per-session input history so up-arrow recall
+    // includes commands. Done up front so a slash command that
+    // never returns from slashRunSelected still gets recorded.
+    if (value.length > 0) {
+      pushInputHistory(sessionId, value);
+      setHistoryTick((t) => t + 1);
+    }
     // /-command dispatch — the keyboard path (Enter) handles this
     // first, but a click on Send also lands here and a `/foo` typed
     // input shouldn't slip through to the LLM as a regular prompt.

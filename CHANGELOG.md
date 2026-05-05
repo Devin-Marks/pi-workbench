@@ -12,7 +12,86 @@ the README for the support window policy.
 
 ## [Unreleased]
 
-## [1.0.1] — 2026-05-03
+### Added
+
+- **Pane toggles for chat and editor.** New **Chat** and **Editor**
+  buttons in the header alongside the existing **Files** and
+  **Terminal** toggles. Each pane is independently hideable so a
+  user can collapse the workbench down to whichever surface
+  matters for the task at hand (e.g. just editor + terminal for a
+  test-running flow, or just chat for an agent-driving flow).
+  Persistence mirrors the existing toggles: `localStorage` keys
+  `pi-workbench/chat-open` and `pi-workbench/editor-open`, both
+  defaulting to OPEN.
+- **Editor pane decoupled from the file browser.** The Files
+  toggle previously controlled both the file tree AND the editor
+  visibility; closing the tree also hid any open tabs. Now the
+  Editor toggle is independent — keep one file open without the
+  280px file tree taking room, or browse the tree without the
+  editor pane materialising.
+- **Editor tabs persist across page reloads.** Open tab paths and
+  the active path are now saved to `sessionStorage` per project
+  (`pi.editor.tabs.v1:<projectId>`), mirroring the terminal store's
+  per-browser-tab persistence. On reload the tabs reopen via the
+  existing `openFile` read; files that have been deleted since
+  persist time are silently dropped. Only paths + active path are
+  stored — file content stays on the server.
+- **Chat-hidden layout fills the viewport.** When the chat pane is
+  toggled off, the leftmost visible pane (editor, then files) expands
+  to `flex-1` and its leading ResizableDivider is dropped, so two
+  visible panes fill the entire main area with a single slider between
+  them instead of leaving blank space on the right.
+- **Editor/Files button order matches pane order.** The **Editor**
+  toggle button now appears before **Files** in the header bar,
+  matching the left-to-right render order (chat → editor → files).
+- **Close-all tabs button in editor.** An XSquare icon at the left
+  edge of the editor tab bar closes every open tab at once; prompts
+  for confirmation when any tab has unsaved changes.
+- **MCP status badge opens MCP settings.** Clicking the MCP badge in
+  the header navigates directly to **Settings → MCP** instead of
+  doing nothing.
+- **Dismissable project picker.** When no projects exist, the project
+  picker can be dismissed with the X so the user can explore the
+  workbench before creating a project. A "New project" link in the
+  empty state re-opens it.
+- **New-session shortcut in chat pane.** When a project is selected
+  but no session is active, the chat column shows a "+ New session"
+  button that creates and navigates to a new session directly.
+- **Always-visible sidebar controls.** The + (new session) and X
+  (delete project) buttons in the project sidebar are now always
+  visible instead of appearing only on hover.
+- **Always-visible tab close buttons.** X buttons on editor tabs and
+  terminal tabs are always visible (previously required hovering over
+  the tab).
+- **8 px left padding in terminal pane.** The xterm viewport now has a
+  small left inset so terminal text isn't flush against the panel edge.
+- **Prompt history includes slash commands and bash execs.** All
+  submitted prompts (agent prose, `/` slash commands, `!` / `!!` bash
+  execs) are now persisted to `localStorage` per session
+  (`pi.input.history.v1:<sessionId>`, capped at 100, consecutive
+  duplicates skipped). The up-arrow history merges this store with the
+  existing message-derived history.
+- **Block workspace-root folder as a project path.** The folder picker
+  rejects the workspace root itself; the "Select this folder" button
+  is disabled and a tooltip explains why.
+- **Recursive folder delete with confirmation.** Deleting a non-empty
+  folder now opens a second confirmation dialog (instead of returning
+  an error); the confirmed action sends `?recursive=true` to the server
+  and removes the directory tree atomically.
+- **Multiselect for files.** Cmd/Ctrl+click in the file browser
+  toggles rows into a selection set; a toolbar appears with a
+  "Delete selected" action that removes all selected items.
+- **Multiselect for sessions.** Same Cmd/Ctrl+click pattern in the
+  session list enables bulk-delete of multiple sessions at once.
+- **Skills backup.** New section in **Settings → Backup**:
+  - **Export**: downloads a `.tar.gz` of every file under the skills
+    directory (`${piConfigDir}/skills/`) via
+    `GET /api/v1/config/skills/export`.
+  - **Import**: uploads either a `.tar.gz` archive or a folder
+    (via `<input webkitdirectory>`) via
+    `POST /api/v1/config/skills/import`; paths are validated before
+    write (no `..`, no absolute paths); existing files at colliding
+    paths are overwritten atomically.
 
 ### Changed
 

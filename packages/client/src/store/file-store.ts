@@ -49,6 +49,54 @@ export interface OpenFile {
   pendingNav?: { line: number; column?: number };
 }
 
+/**
+ * sessionStorage key for the per-project editor tab list. Same
+ * persistence posture as the terminal store: per-browser-tab so
+ * sibling tabs don't fight over the same UI state. Survives
+ * in-tab reload, doesn't bleed across browser tabs.
+ *
+ * Stored shape: `{ paths: string[]; activePath: string | null }`.
+ * Per-project key so switching projects doesn't pull the previous
+ * project's files into view.
+ */
+const TABS_KEY_PREFIX = "pi.editor.tabs.v1:";
+
+interface PersistedTabs {
+  paths: string[];
+  activePath: string | null;
+}
+
+function readPersistedTabs(projectId: string): PersistedTabs {
+  try {
+    const raw = sessionStorage.getItem(TABS_KEY_PREFIX + projectId);
+    if (raw === null) return { paths: [], activePath: null };
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return { paths: [], activePath: null };
+    const obj = parsed as { paths?: unknown; activePath?: unknown };
+    const paths = Array.isArray(obj.paths)
+      ? obj.paths.filter((p): p is string => typeof p === "string")
+      : [];
+    const activePath = typeof obj.activePath === "string" ? obj.activePath : null;
+    return {
+      paths,
+      activePath: paths.includes(activePath ?? "") ? activePath : (paths[0] ?? null),
+    };
+  } catch {
+    return { paths: [], activePath: null };
+  }
+}
+
+function writePersistedTabs(projectId: string, paths: string[], activePath: string | undefined) {
+  try {
+    sessionStorage.setItem(
+      TABS_KEY_PREFIX + projectId,
+      JSON.stringify({ paths, activePath: activePath ?? null }),
+    );
+  } catch {
+    // ignore — choice still applies for this tab session
+  }
+}
+
 interface FileState {
   /** Most-recently-fetched tree, keyed by projectId. */
   treeByProject: Record<string, FileTreeNode | undefined>;
@@ -62,6 +110,14 @@ interface FileState {
   error: string | undefined;
 
   loadTree: (projectId: string) => Promise<void>;
+  /**
+   * Re-open every tab persisted for `projectId` in sessionStorage and
+   * restore the active path. No-op if tabs are already open (avoids
+   * double-restore when called twice for the same project). Failures
+   * to read individual files are silently dropped — a file that's
+   * been deleted since persist time just doesn't reappear.
+   */
+  restoreTabs: (projectId: string) => Promise<void>;
   openFile: (
     projectId: string,
     absPath: string,
@@ -70,6 +126,9 @@ interface FileState {
   /** Clear `pendingNav` on a tab after the editor has consumed it. */
   consumePendingNav: (path: string) => void;
   closeFile: (path: string) => void;
+  /** Close every open editor tab. Persisted state for the active
+   *  project is also cleared so a reload doesn't reopen them. */
+  closeAllFiles: () => void;
   setActiveFile: (path: string | undefined) => void;
   updateDraft: (path: string, draft: string) => void;
   saveFile: (projectId: string, path: string) => Promise<void>;
@@ -126,10 +185,32 @@ interface FileState {
    * editor stays open without a flash.
    */
   moveEntry: (projectId: string, srcAbsPath: string, destAbsPath: string) => Promise<string>;
-  deleteEntry: (projectId: string, absPath: string) => Promise<void>;
+  deleteEntry: (
+    projectId: string,
+    absPath: string,
+    opts?: { recursive?: boolean },
+  ) => Promise<void>;
 }
 
 export const EMPTY_OPEN_FILES: OpenFile[] = [];
+
+// Module-level pointer to the project the open tabs belong to.
+// Updated whenever openFile is called; consumed by closeFile /
+// setActiveFile so they know which sessionStorage key to write to
+// without dragging projectId through every callsite.
+let currentProjectId: string | undefined;
+
+function persist(
+  projectId: string | undefined,
+  state: { openFiles: OpenFile[]; activePath: string | undefined },
+) {
+  if (projectId === undefined) return;
+  writePersistedTabs(
+    projectId,
+    state.openFiles.map((f) => f.path),
+    state.activePath,
+  );
+}
 
 export const useFileStore = create<FileState>((set, get) => ({
   treeByProject: {},
@@ -155,19 +236,52 @@ export const useFileStore = create<FileState>((set, get) => ({
     }
   },
 
+  restoreTabs: async (projectId) => {
+    currentProjectId = projectId;
+    // Skip if anything is already open for this project — the
+    // restore is meant for the cold-boot path, not to clobber
+    // mid-session state.
+    if (get().openFiles.length > 0) return;
+    const persisted = readPersistedTabs(projectId);
+    if (persisted.paths.length === 0) return;
+    // Open files in order so the tab strip matches the persisted
+    // layout. Each openFile awaits the server fetch; if a file
+    // 404s (deleted since persist time), we drop it and continue.
+    for (const path of persisted.paths) {
+      try {
+        await get().openFile(projectId, path);
+      } catch {
+        // Silently skip — the server-side miss is the expected
+        // outcome for files that no longer exist; we don't want a
+        // stale tab list to block the rest of the restore.
+      }
+    }
+    if (persisted.activePath !== null) {
+      get().setActiveFile(persisted.activePath);
+    }
+  },
+
   openFile: async (projectId, absPath, nav) => {
+    currentProjectId = projectId;
     // If already open, just activate. When `nav` is supplied, also
     // patch the existing tab so the editor scrolls to the requested
     // line on its next render.
     const existing = get().openFiles.find((f) => f.path === absPath);
     if (existing !== undefined) {
       if (nav !== undefined) {
-        set((s) => ({
-          openFiles: s.openFiles.map((f) => (f.path === absPath ? { ...f, pendingNav: nav } : f)),
-          activePath: absPath,
-        }));
+        set((s) => {
+          const next = {
+            openFiles: s.openFiles.map((f) => (f.path === absPath ? { ...f, pendingNav: nav } : f)),
+            activePath: absPath,
+          };
+          persist(currentProjectId, next);
+          return next;
+        });
       } else {
-        set({ activePath: absPath });
+        set((s) => {
+          persist(currentProjectId, { openFiles: s.openFiles, activePath: absPath });
+          return { activePath: absPath };
+        });
       }
       return;
     }
@@ -188,10 +302,14 @@ export const useFileStore = create<FileState>((set, get) => ({
         loadingError: r.binary ? "Binary file — open externally to edit." : undefined,
       };
       if (nav !== undefined) tab.pendingNav = nav;
-      set((s) => ({
-        openFiles: [...s.openFiles, tab],
-        activePath: absPath,
-      }));
+      set((s) => {
+        const next = {
+          openFiles: [...s.openFiles, tab],
+          activePath: absPath,
+        };
+        persist(currentProjectId, next);
+        return next;
+      });
     } catch (err) {
       set({ error: err instanceof ApiError ? err.code : (err as Error).message });
     }
@@ -206,11 +324,25 @@ export const useFileStore = create<FileState>((set, get) => ({
         s.activePath === path ? (next[idx] ?? next[idx - 1] ?? next[0])?.path : s.activePath;
       const ext = { ...s.externallyChanged };
       delete ext[path];
-      return { openFiles: next, activePath, externallyChanged: ext };
+      const result = { openFiles: next, activePath, externallyChanged: ext };
+      persist(currentProjectId, result);
+      return result;
     });
   },
 
-  setActiveFile: (path) => set({ activePath: path }),
+  closeAllFiles: () => {
+    set(() => {
+      const result = { openFiles: [], activePath: undefined, externallyChanged: {} };
+      persist(currentProjectId, result);
+      return result;
+    });
+  },
+
+  setActiveFile: (path) =>
+    set((s) => {
+      persist(currentProjectId, { openFiles: s.openFiles, activePath: path });
+      return { activePath: path };
+    }),
 
   consumePendingNav: (path) => {
     set((s) => ({
@@ -382,11 +514,19 @@ export const useFileStore = create<FileState>((set, get) => ({
     }
   },
 
-  deleteEntry: async (projectId, absPath) => {
+  deleteEntry: async (projectId, absPath, opts) => {
     set({ error: undefined });
     try {
-      await api.filesDelete(projectId, absPath);
-      // Close any tab the user had open on this path.
+      await api.filesDelete(
+        projectId,
+        absPath,
+        opts?.recursive === true ? { recursive: true } : undefined,
+      );
+      // Close any tab the user had open on this path. For recursive
+      // dir delete we'd ideally also close any child-of-absPath tabs;
+      // those will surface "file_not_found" on the next save / reload
+      // and the user can close them — keeping the tab close logic
+      // simple here.
       const open = get().openFiles.find((f) => f.path === absPath);
       if (open !== undefined) get().closeFile(absPath);
       await get().loadTree(projectId);

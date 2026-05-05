@@ -600,15 +600,16 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.delete<{ Querystring: { projectId: string; path: string } }>(
+  fastify.delete<{ Querystring: { projectId: string; path: string; recursive?: string } }>(
     "/files/delete",
     {
       schema: {
         description:
-          "Delete a file or empty directory. Non-empty directories return " +
-          "409 — recursive delete is intentionally NOT supported (single-user " +
-          "single-tenant: an accidental rm -rf is a worse failure mode than " +
-          "a mildly inconvenient extra step).",
+          "Delete a file or directory. Empty directories delete unconditionally. " +
+          "Non-empty directories return 409 unless `?recursive=true` is set, in " +
+          "which case the entire subtree is removed. The UI prompts the user with " +
+          "a second confirmation before retrying with the recursive flag — single- " +
+          "user single-tenant, but `rm -rf` should still be an explicit choice.",
         tags: ["files"],
         querystring: {
           type: "object",
@@ -616,6 +617,7 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
           properties: {
             projectId: { type: "string", minLength: 1 },
             path: { type: "string", minLength: 1 },
+            recursive: { type: "string", enum: ["true", "false"] },
           },
         },
         response: {
@@ -632,7 +634,8 @@ export const fileRoutes: FastifyPluginAsync = async (fastify) => {
       const project = await resolveProject(req.query.projectId, reply);
       if (project === undefined) return;
       try {
-        await deleteEntry(req.query.path, project.path);
+        const recursive = req.query.recursive === "true";
+        await deleteEntry(req.query.path, project.path, { recursive });
         return reply.code(204).send();
       } catch (err) {
         return mapError(reply, err);

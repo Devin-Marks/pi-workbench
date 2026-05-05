@@ -686,7 +686,11 @@ export async function moveEntry(
 
 /* ----------------------------- delete ----------------------------- */
 
-export async function deleteEntry(absPath: string, root: string): Promise<void> {
+export async function deleteEntry(
+  absPath: string,
+  root: string,
+  opts?: { recursive?: boolean },
+): Promise<void> {
   const resolved = await verifyPathSafe(absPath, root);
   // Defense in depth: never let a delete reach the project root itself
   // even if it slips past assertInsideRoot's "equal-to-root" allowance.
@@ -696,9 +700,15 @@ export async function deleteEntry(absPath: string, root: string): Promise<void> 
   const st = await stat(resolved).catch(() => undefined);
   if (st === undefined) throw new NotFoundError(resolved);
   if (st.isDirectory()) {
-    // We don't recursively force-delete. Empty-dir delete is fine; non-empty
-    // surfaces a clear error so the UI can ask the user to clean up first.
-    // The dev plan explicitly calls this out as a deliberate non-feature.
+    // Empty dirs are always safe to remove. Non-empty dirs require an
+    // explicit `recursive: true` from the caller — the route plumbs
+    // this from a `?recursive=true` query param which the UI sets only
+    // after a second confirmation prompt. Without the flag, a non-
+    // empty dir surfaces DirectoryNotEmptyError so the UI can prompt.
+    if (opts?.recursive === true) {
+      await rm(resolved, { recursive: true, force: false });
+      return;
+    }
     try {
       await rmdir(resolved);
     } catch (err) {

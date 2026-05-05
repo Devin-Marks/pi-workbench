@@ -55,18 +55,46 @@ export function SessionList({ projectId }: Props) {
    * confirm = gone, end of story.
    */
   const [deleteDialog, setDeleteDialog] = useState<
-    { sessionId: string; label: string; isLive: boolean } | undefined
+    | { kind: "single"; sessionId: string; label: string; isLive: boolean }
+    | { kind: "many"; sessionIds: string[] }
+    | undefined
   >(undefined);
+
+  // Selected session ids for the multiselect / bulk-delete affordance.
+  // Cmd/Ctrl+click on a session row toggles selection; plain click
+  // selects the session as before.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const clearSelection = (): void => setSelectedIds(new Set());
+  const toggleSelected = (sessionId: string): void => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+  };
 
   const submitDelete = async (): Promise<void> => {
     if (deleteDialog === undefined) return;
-    const { sessionId } = deleteDialog;
     setDeleteDialog(undefined);
     // hard:true unconditionally — server's DELETE route handles the
     // live + hard case by disposing the in-memory entry AND
     // removing the on-disk JSONL atomically. The route's docs spell
     // out the full matrix; we always pick the "actually delete" leg.
-    void disposeSession(sessionId, { hard: true });
+    if (deleteDialog.kind === "single") {
+      void disposeSession(deleteDialog.sessionId, { hard: true });
+      return;
+    }
+    for (const id of deleteDialog.sessionIds) {
+      try {
+        await disposeSession(id, { hard: true });
+      } catch {
+        // store.error renders the first failure; keep going so a
+        // single missing/blocked session doesn't strand the rest of
+        // the bulk action.
+      }
+    }
+    clearSelection();
   };
 
   useEffect(() => {
@@ -118,8 +146,28 @@ export function SessionList({ projectId }: Props) {
       {sessions.length === 0 && (
         <p className="px-2 py-1 text-xs italic text-neutral-600">No sessions yet.</p>
       )}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between gap-2 rounded bg-neutral-900/60 px-2 py-1 text-[11px] text-neutral-300">
+          <span>{selectedIds.size} selected</span>
+          <div className="flex gap-1">
+            <button
+              onClick={() => setDeleteDialog({ kind: "many", sessionIds: Array.from(selectedIds) })}
+              className="rounded border border-red-700/50 px-1.5 py-0.5 text-red-300 hover:bg-red-900/20"
+            >
+              Delete
+            </button>
+            <button
+              onClick={clearSelection}
+              className="rounded border border-neutral-700 px-1.5 py-0.5 text-neutral-300 hover:border-neutral-500"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
       {sessions.map((s) => {
         const isActive = s.sessionId === activeSessionId;
+        const isSelected = selectedIds.has(s.sessionId);
         const label =
           s.name ??
           (s.firstMessage.length > 0
@@ -130,9 +178,11 @@ export function SessionList({ projectId }: Props) {
           <div
             key={s.sessionId}
             className={`group flex items-center gap-1 rounded px-2 py-0.5 text-xs ${
-              isActive
-                ? "bg-neutral-800 text-neutral-100"
-                : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
+              isSelected
+                ? "bg-emerald-900/20 text-neutral-100"
+                : isActive
+                  ? "bg-neutral-800 text-neutral-100"
+                  : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
             }`}
           >
             {isRenaming ? (
@@ -148,10 +198,19 @@ export function SessionList({ projectId }: Props) {
               />
             ) : (
               <button
-                onClick={() => selectSession(s.sessionId)}
+                onClick={(e) => {
+                  // Cmd/Ctrl+click toggles selection without switching
+                  // the active session, so the user can build up a
+                  // selection for bulk delete without page churn.
+                  if (e.metaKey || e.ctrlKey) {
+                    toggleSelected(s.sessionId);
+                    return;
+                  }
+                  selectSession(s.sessionId);
+                }}
                 onDoubleClick={() => startRename(s.sessionId, s.name ?? "")}
                 className="flex-1 truncate text-left"
-                title={`${s.sessionId} — double-click to rename`}
+                title={`${s.sessionId} — double-click to rename, Cmd/Ctrl+click to select for bulk delete`}
               >
                 {s.isLive && <span className="mr-1 text-emerald-500">●</span>}
                 {label}
@@ -159,8 +218,15 @@ export function SessionList({ projectId }: Props) {
             )}
             {!isRenaming && (
               <button
-                onClick={() => setDeleteDialog({ sessionId: s.sessionId, label, isLive: s.isLive })}
-                className="invisible inline-flex items-center p-1 text-neutral-500 hover:text-red-400 group-hover:visible"
+                onClick={() =>
+                  setDeleteDialog({
+                    kind: "single",
+                    sessionId: s.sessionId,
+                    label,
+                    isLive: s.isLive,
+                  })
+                }
+                className="inline-flex items-center p-1 text-neutral-500 hover:text-red-400"
                 title={
                   s.isLive
                     ? "Delete session — also kills the live shell"
@@ -177,13 +243,21 @@ export function SessionList({ projectId }: Props) {
         open={deleteDialog !== undefined}
         onClose={() => setDeleteDialog(undefined)}
         onConfirm={() => void submitDelete()}
-        title={`Delete session "${deleteDialog?.label ?? ""}"`}
-        message={
-          deleteDialog?.isLive === true
-            ? `Delete "${deleteDialog.label}"? This kills the live shell AND removes the on-disk JSONL. Cannot be undone.`
-            : `Delete the on-disk JSONL for "${deleteDialog?.label ?? ""}"? Cannot be undone — the file is the only copy.`
+        title={
+          deleteDialog?.kind === "many"
+            ? `Delete ${deleteDialog.sessionIds.length} session${deleteDialog.sessionIds.length === 1 ? "" : "s"}`
+            : `Delete session "${deleteDialog?.label ?? ""}"`
         }
-        primaryLabel="Delete"
+        message={
+          deleteDialog?.kind === "many"
+            ? `Delete the ${deleteDialog.sessionIds.length} selected session${deleteDialog.sessionIds.length === 1 ? "" : "s"}? Live sessions are killed and on-disk JSONLs are removed. Cannot be undone.`
+            : deleteDialog?.kind === "single" && deleteDialog.isLive
+              ? `Delete "${deleteDialog.label}"? This kills the live shell AND removes the on-disk JSONL. Cannot be undone.`
+              : deleteDialog?.kind === "single"
+                ? `Delete the on-disk JSONL for "${deleteDialog.label}"? Cannot be undone — the file is the only copy.`
+                : ""
+        }
+        primaryLabel={deleteDialog?.kind === "many" ? "Delete all" : "Delete"}
         tone="danger"
       />
     </div>
