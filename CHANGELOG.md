@@ -14,6 +14,8 @@ the README for the support window policy.
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-05-05
+
 ### Renamed
 
 The project is renamed from **pi-workbench** to **pi-forge** in this
