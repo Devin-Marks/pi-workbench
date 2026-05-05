@@ -231,9 +231,58 @@ export async function buildServer(): Promise<FastifyInstance> {
     },
   });
 
+  // Bootstrap script injected into the swagger UI page. Resolves an
+  // auth token in priority order — URL ?token=, then sessionStorage
+  // (set by an earlier visit), then localStorage["pi-workbench/auth-
+  // token"] (the JWT the main UI persisted on login). Same-origin so
+  // the localStorage read is allowed. Then patches fetch() to attach
+  // the token as a Bearer header on every call swagger UI makes to
+  // /api/v1/*.
+  //
+  // Cleanup: if the token came from ?token=, strip it from the URL
+  // via history.replaceState so it doesn't sit in the URL bar /
+  // browser history. The sessionStorage stash is for in-tab nav only;
+  // closing the tab clears it.
+  //
+  // No-op when no token is found anywhere (e.g. unauthenticated
+  // visitor with auth disabled — fetch is left unpatched).
+  const swaggerThemeJs = `(function () {
+    try {
+      var url = new URL(window.location.href);
+      var qpToken = url.searchParams.get("token");
+      if (qpToken && qpToken.length > 0) {
+        sessionStorage.setItem("pi-workbench/docs-token", qpToken);
+        url.searchParams.delete("token");
+        window.history.replaceState({}, document.title, url.toString());
+      }
+      var token =
+        sessionStorage.getItem("pi-workbench/docs-token") ||
+        localStorage.getItem("pi-workbench/auth-token");
+      if (token && window.fetch) {
+        var origFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) {
+          init = init || {};
+          var url2 = typeof input === "string" ? input : input.url;
+          if (url2 && url2.indexOf("/api/v1/") !== -1) {
+            init.headers = new Headers(init.headers || {});
+            if (!init.headers.has("Authorization")) {
+              init.headers.set("Authorization", "Bearer " + token);
+            }
+          }
+          return origFetch(input, init);
+        };
+      }
+    } catch (err) {
+      console.warn("pi-workbench docs auth bootstrap failed:", err);
+    }
+  })();`;
+
   await fastify.register(swaggerUi, {
     routePrefix: "/api/docs",
-    uiConfig: { docExpansion: "list" },
+    uiConfig: { docExpansion: "list", persistAuthorization: true },
+    theme: {
+      js: [{ filename: "pi-workbench-auth.js", content: swaggerThemeJs }],
+    },
   });
 
   /**
@@ -263,15 +312,22 @@ export async function buildServer(): Promise<FastifyInstance> {
         reply.code(404).send({ error: "not_found" });
         return;
       }
-      if (!authEnabled()) return;
-      const presented = extractBearer(req.headers.authorization);
-      if (
-        presented === undefined ||
-        (verifyToken(presented) === undefined && !verifyApiKey(presented))
-      ) {
-        reply.code(401).send({ error: "auth_required" });
-        return;
-      }
+      // The /api/docs static UI (HTML / JS / CSS / OpenAPI spec) is
+      // open when EXPOSE_DOCS=true, regardless of auth. Browsers
+      // can't attach an Authorization header on top-level
+      // navigation, so gating the UI page itself on a Bearer header
+      // would 401 every logged-in user who hits /api/docs from a
+      // new tab. The route catalog the docs page exposes is the
+      // same one this project's CLAUDE.md / repo already publish, so
+      // the asset-level exposure is the same as before.
+      //
+      // Real protection lives at the actual API surface: every
+      // /api/v1/* call swagger UI makes still goes through the
+      // auth gate below. The injected theme bootstrap (see
+      // swaggerThemeJs) reads the JWT/API-key out of localStorage
+      // (same-origin) — or the one-shot ?token=<...> query param
+      // the Settings → "API Docs ↗" button passes — and injects
+      // it as a Bearer header on every fetch swagger UI issues.
       return;
     }
 

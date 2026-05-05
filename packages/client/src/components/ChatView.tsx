@@ -1,9 +1,11 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import {
   AtSign,
+  Check,
   ChevronDown,
   ChevronRight,
   Columns2,
+  Copy,
   FileCode,
   GitBranch,
   Rows2,
@@ -166,7 +168,7 @@ export function ChatView({ sessionId }: Props) {
               No messages yet. Send a prompt to get started.
             </p>
           )}
-          <div className="mx-auto max-w-3xl space-y-4">
+          <div className="chat-message-list mx-auto max-w-3xl space-y-4">
             {(() => {
               // Pair toolCall blocks (in assistant messages) with their
               // matching toolResult messages (by toolCallId) so each
@@ -201,7 +203,7 @@ export function ChatView({ sessionId }: Props) {
               });
             })()}
             {streamingText.length > 0 && (
-              <div className="rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3">
+              <div className="message-bubble rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3">
                 <div className="mb-1 text-[10px] uppercase tracking-wider text-neutral-500">
                   assistant (streaming)
                 </div>
@@ -522,10 +524,15 @@ function Message({
       }
     }
     return (
-      <div className="rounded-lg bg-neutral-800 px-4 py-3">
+      <div className="message-bubble rounded-lg bg-neutral-800 px-4 py-3" data-message-role="user">
         <div className="mb-1 flex items-center justify-between">
           <span className="text-[10px] uppercase tracking-wider text-neutral-400">you</span>
-          {text.length > 0 && <RawToggle showRaw={showRaw} onToggle={setShowRaw} />}
+          {text.length > 0 && (
+            <div className="flex items-center gap-1">
+              <CopyButton getText={() => text} title="Copy message text" />
+              <RawToggle showRaw={showRaw} onToggle={setShowRaw} />
+            </div>
+          )}
         </div>
         {text.length > 0 && (
           <div className="text-neutral-100">
@@ -593,10 +600,21 @@ function Message({
     // the toggle would do nothing useful for them.
     const hasTextBlock = content.some((b) => (b as Record<string, unknown>).type === "text");
     return (
-      <div className="rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3">
+      <div
+        className="message-bubble rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3"
+        data-message-role="assistant"
+      >
         <div className="mb-1 flex items-center justify-between">
           <span className="text-[10px] uppercase tracking-wider text-neutral-500">assistant</span>
-          {hasTextBlock && <RawToggle showRaw={showRaw} onToggle={setShowRaw} />}
+          {hasTextBlock && (
+            <div className="flex items-center gap-1">
+              <CopyButton
+                getText={() => assistantTextContent(content as Record<string, unknown>[])}
+                title="Copy all text from this assistant message"
+              />
+              <RawToggle showRaw={showRaw} onToggle={setShowRaw} />
+            </div>
+          )}
         </div>
         <div className="space-y-2 text-sm text-neutral-100">
           {content.map((block, i) => {
@@ -977,6 +995,76 @@ function BashExecution({ message }: { message: AgentMessageLike }) {
  * Defaults to "rendered" — click flips to raw, click again flips
  * back. Per-session, per-message; not persisted.
  */
+/**
+ * Copy-to-clipboard button rendered next to the raw/rendered toggle on
+ * each message bubble (and inside fenced code blocks via ChatMarkdown).
+ * `getText` is invoked on click so callers don't have to keep a copy
+ * of the (potentially large) message text in a closure when the
+ * button isn't used. Shows a brief check-mark confirmation; falls
+ * back to a synthetic textarea when the async clipboard API isn't
+ * available (older Safari, insecure HTTP origins).
+ */
+function CopyButton({ getText, title }: { getText: () => string; title: string }) {
+  const [copied, setCopied] = useState(false);
+  const onClick = (): void => {
+    const text = getText();
+    if (text.length === 0) return;
+    const writeAsync = navigator.clipboard?.writeText?.bind(navigator.clipboard);
+    if (writeAsync !== undefined) {
+      void writeAsync(text)
+        .then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1200);
+        })
+        .catch(() => fallback(text));
+    } else {
+      fallback(text);
+    }
+  };
+  const fallback = (text: string): void => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // Clipboard unavailable; do nothing — user can still select + Cmd+C.
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded px-1.5 py-0.5 text-neutral-500 hover:bg-neutral-700/40 hover:text-neutral-300"
+      title={title}
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+    </button>
+  );
+}
+
+/**
+ * Concatenate every text-typed block in an assistant message's content
+ * array into one newline-separated string for the message-level Copy
+ * button. Tool calls and thinking blocks are skipped — they have their
+ * own copy affordances inside their respective renderers.
+ */
+function assistantTextContent(content: Record<string, unknown>[]): string {
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block.type === "text" && typeof block.text === "string") {
+      parts.push(block.text);
+    }
+  }
+  return parts.join("\n\n");
+}
+
 function RawToggle({ showRaw, onToggle }: { showRaw: boolean; onToggle: (next: boolean) => void }) {
   return (
     <button

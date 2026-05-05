@@ -609,6 +609,14 @@ export function ChatInput({ sessionId }: Props) {
   // of relying on useState's mount-only initializer.
   const storageKey = MODEL_KEY_PREFIX + sessionId;
   const [providers, setProviders] = useState<ProvidersListing | undefined>(undefined);
+  // The configured default in `settings.json` ({defaultProvider, defaultModel}).
+  // Fetched once per mount; passed to ModelPicker so the "Use agent default"
+  // row can name the actual model the agent would pick instead of just saying
+  // "default". Undefined while loading; { provider: "", modelId: "" } if the
+  // user hasn't set a default at all.
+  const [defaultModel, setDefaultModel] = useState<
+    { provider: string; modelId: string } | undefined
+  >(undefined);
   const [modelChoice, setModelChoice] = useState<string>(
     () => localStorage.getItem(MODEL_KEY_PREFIX + sessionId) ?? "",
   );
@@ -622,6 +630,20 @@ export function ChatInput({ sessionId }: Props) {
         // Surface as a non-fatal hint; chat still works with the default model.
         const code = err instanceof ApiError ? err.code : (err as Error).message;
         setModelError(`models unavailable (${code})`);
+      });
+    // settings.json — split fetch from providers because the picker UI
+    // needs to render even when settings is empty / missing.
+    void api
+      .getSettings()
+      .then((s) => {
+        setDefaultModel({
+          provider: typeof s.defaultProvider === "string" ? s.defaultProvider : "",
+          modelId: typeof s.defaultModel === "string" ? s.defaultModel : "",
+        });
+      })
+      .catch(() => {
+        // Settings unreadable — keep defaultModel undefined; the picker
+        // gracefully falls back to "Use agent default" with no name.
       });
   }, []);
 
@@ -1060,6 +1082,7 @@ export function ChatInput({ sessionId }: Props) {
         <div className="flex flex-wrap items-center gap-2">
           <ModelPicker
             providers={providers}
+            defaultModel={defaultModel}
             value={modelChoice}
             onChange={(v) => void onModelChange(v)}
           />
@@ -1309,10 +1332,20 @@ export function ChatInput({ sessionId }: Props) {
  */
 function ModelPicker({
   providers,
+  defaultModel,
   value,
   onChange,
 }: {
   providers: ProvidersListing | undefined;
+  /**
+   * The configured default from `settings.json`. When present and
+   * non-empty, the "Use agent default" row in the dropdown shows the
+   * actual provider/model the agent would pick (so users don't have
+   * to flip to Settings → Agent to find out). Undefined while
+   * loading; both fields can be empty strings if no default has been
+   * configured at all (rare on a working install).
+   */
+  defaultModel: { provider: string; modelId: string } | undefined;
   value: string;
   onChange: (next: string) => void;
 }) {
@@ -1339,8 +1372,21 @@ function ModelPicker({
   }, [options, query]);
 
   const selected = options.find((o) => o.value === value);
+  // Resolved default label — used both in the trigger when no override
+  // is set, and in the "Use agent default" row of the dropdown.
+  // Empty if defaultModel hasn't loaded or no default is configured.
+  const defaultLabel =
+    defaultModel !== undefined &&
+    defaultModel.provider.length > 0 &&
+    defaultModel.modelId.length > 0
+      ? `${defaultModel.provider} / ${defaultModel.modelId}`
+      : "";
   const triggerLabel =
-    selected !== undefined ? `${selected.provider} / ${selected.name}` : "default model";
+    selected !== undefined
+      ? `${selected.provider} / ${selected.name}`
+      : defaultLabel.length > 0
+        ? `${defaultLabel} (default)`
+        : "default model";
 
   // Close on outside click.
   useEffect(() => {
@@ -1431,7 +1477,14 @@ function ModelPicker({
                 activeIdx === -1 ? "bg-neutral-800 text-neutral-100" : "text-neutral-400"
               }`}
             >
-              <span>Use agent default</span>
+              <span className="flex min-w-0 items-baseline gap-2">
+                <span>Use agent default</span>
+                {defaultLabel.length > 0 && (
+                  <span className="truncate font-mono text-[10px] text-neutral-500">
+                    {defaultLabel}
+                  </span>
+                )}
+              </span>
               {value === "" && <span className="text-emerald-400">●</span>}
             </button>
             {filtered.length === 0 ? (

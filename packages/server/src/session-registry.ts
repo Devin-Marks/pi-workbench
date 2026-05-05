@@ -923,6 +923,36 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
   live.unsubscribe = makeSubscribeHandler(live);
   registry.set(live.sessionId, live);
 
+  // Disambiguate the fork's display name from its source. The SDK
+  // copies session_info entries forward when forking, so the new
+  // session has the same `sessionName` as the source — making it
+  // hard to tell them apart in the sidebar. Rename to "<source>
+  // (clone)", or "<source> (clone N)" if other clones already exist
+  // in this project. Plain "(clone)" is used when the source has no
+  // explicit name. Failures are non-fatal (the fork is otherwise
+  // fully usable).
+  try {
+    const sourceName = source.session.sessionName;
+    const baseName =
+      sourceName !== undefined && sourceName.length > 0 ? `${sourceName} (clone)` : "(clone)";
+    const siblings = await listSessionsForProject(source.projectId, source.workspacePath);
+    const existingNames = new Set(
+      siblings
+        .filter((s) => s.sessionId !== live.sessionId)
+        .map((s) => s.name)
+        .filter((n): n is string => typeof n === "string"),
+    );
+    let candidate = baseName;
+    let n = 2;
+    while (existingNames.has(candidate)) {
+      candidate = `${baseName} ${n}`;
+      n += 1;
+    }
+    session.setSessionName(candidate);
+  } catch {
+    // Naming is best-effort; the new session still works without it.
+  }
+
   // Undo the SDK's in-place mutation on the source LiveSession by
   // reopening the original .jsonl with a fresh SessionManager +
   // AgentSession. Without this, the source's sessionId field still
