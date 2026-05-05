@@ -17,6 +17,7 @@ packages/*/dist
 # Runtime data that shouldn't bake into the image.
 workspace
 forge
+pi-forge
 *.jsonl
 **/.pi/sessions
 
