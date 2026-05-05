@@ -101,8 +101,8 @@ async function jsend(
 }
 
 async function main(): Promise<void> {
-  const workspacePath = await mkdtemp(join(tmpdir(), "pi-workbench-ws-"));
-  const configDir = await mkdtemp(join(tmpdir(), "pi-workbench-cfg-"));
+  const workspacePath = await mkdtemp(join(tmpdir(), "pi-forge-ws-"));
+  const configDir = await mkdtemp(join(tmpdir(), "pi-forge-cfg-"));
   const apiKey = "test-api-key-" + randomBytes(8).toString("hex");
   const port = await pickFreePort();
 

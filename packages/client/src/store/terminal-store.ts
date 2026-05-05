@@ -50,7 +50,7 @@ interface TerminalState {
 
 export const EMPTY_TABS: TerminalTab[] = [];
 
-const STORAGE_KEY = "pi.terminal.tabs.v1";
+const STORAGE_KEY = "forge.terminal.tabs.v1";
 
 interface PersistedShape {
   tabs: TerminalTab[];

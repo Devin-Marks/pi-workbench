@@ -103,7 +103,7 @@ async function main(): Promise<void> {
   }
 
   const tmp = mkdtempSync(join(tmpdir(), "pi-docker-test-"));
-  const projectName = `pi-workbench-test-${Date.now()}`;
+  const projectName = `pi-forge-test-${Date.now()}`;
   const composeFile = join(tmp, "docker-compose.test.yml");
   const port = await pickFreePort();
   const workspaceDir = join(tmp, "workspace");
@@ -114,7 +114,7 @@ async function main(): Promise<void> {
   // and a random port so the dev's normal stack isn't disturbed.
   const composeYaml = `
 services:
-  pi-workbench:
+  pi-forge:
     build:
       context: ${repoRoot}
       dockerfile: docker/Dockerfile

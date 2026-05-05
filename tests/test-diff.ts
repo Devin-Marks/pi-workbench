@@ -276,7 +276,7 @@ async function routeTest(): Promise<void> {
       NODE_ENV: "test",
       WORKSPACE_PATH: workspacePath,
       PI_CONFIG_DIR: configDir,
-      WORKBENCH_DATA_DIR: dataDir,
+      FORGE_DATA_DIR: dataDir,
       SESSION_DIR: join(workspacePath, ".pi", "sessions"),
       API_KEY: apiKey,
       UI_PASSWORD: undefined,

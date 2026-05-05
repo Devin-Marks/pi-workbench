@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MCP Servers — pi-workbench</title>
-  <meta name="description" content="Connecting external Model Context Protocol servers to the workbench.">
+  <title>MCP Servers — pi-forge</title>
+  <meta name="description" content="Connecting external Model Context Protocol servers to the pi-forge.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,13 +21,13 @@
   <path d="M23 11 L26 16 L23 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
   <path d="M12 13 H20 M14 13 V21 M18 13 V21" stroke="#e6e7eb" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </svg>
-        pi-workbench
+        pi-forge
       </a>
       <nav class="nav-links" id="navLinks">
         <a href="../index.html#features">Features</a>
         <a href="../index.html#quickstart">Quick Start</a>
         <a href="architecture.html">Docs</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench" class="nav-cta">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-forge" class="nav-cta">GitHub</a>
       </nav>
       <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">&#9776;</button>
     </div>
@@ -47,20 +47,20 @@
       </div>
       <div class="sidebar-section">
         <h4>Project</h4>
-        <a href="https://github.com/Devin-Marks/pi-workbench">GitHub</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/CHANGELOG.md">Changelog</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/SECURITY.md">Security</a>
+        <a href="https://github.com/Devin-Marks/pi-forge">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-forge/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/Devin-Marks/pi-forge/blob/main/SECURITY.md">Security</a>
       </div>
     </aside>
 
     <main class="docs-main">
       <h1>MCP Servers</h1>
-      <p class="docs-subtitle">Connecting external Model Context Protocol servers to the workbench.</p>
-<p>pi-workbench can connect to MCP servers and surface their tools to the
+      <p class="docs-subtitle">Connecting external Model Context Protocol servers to the pi-forge.</p>
+<p>pi-forge can connect to MCP servers and surface their tools to the
 agent. Configure servers from <strong>Settings → MCP</strong> in the browser, or by
 editing config files directly.</p>
 <blockquote>
-<p>Pi itself has no native MCP support. The integration is workbench-
+<p>Pi itself has no native MCP support. The integration is pi-forge-
 internal — see <a href="../packages/server/src/mcp/manager.ts"><code>packages/server/src/mcp/manager.ts</code></a>
 for the contract.</p>
 </blockquote>
@@ -71,10 +71,10 @@ spec) and <code>sse</code> (legacy). The default <code>auto</code> transport tri
 <code>streamable-http</code> first and falls back to <code>sse</code> — covers
 <a href="https://github.com/jlowin/fastmcp" target="_blank" rel="noopener noreferrer">fastmcp</a> servers regardless of
 which transport you exposed.</li>
-<li><strong>stdio is not supported.</strong> The workbench is container-native and
+<li><strong>stdio is not supported.</strong> The pi-forge is container-native and
 arbitrary subprocess spawning has different security trade-offs.
 Run stdio MCP servers as a separate process and expose them over
-HTTP/SSE if you need them in the workbench.</li>
+HTTP/SSE if you need them in the pi-forge.</li>
 <li><strong>Static-header auth only.</strong> Bearer tokens, custom auth headers —
 whatever your MCP server expects. OAuth (per-server consent flow,
 callback handling) is deferred.</li>
@@ -91,7 +91,7 @@ callback handling) is deferred.</li>
 </thead>
 <tbody><tr>
 <td>Global</td>
-<td><code>${WORKBENCH_DATA_DIR}/mcp.json</code></td>
+<td><code>${FORGE_DATA_DIR}/mcp.json</code></td>
 <td>Yes (Settings → MCP)</td>
 </tr>
 <tr>
@@ -105,7 +105,7 @@ collide. The override is per-server (not per-tool); add a project
 entry with the same <code>name</code> to swap a global server for a project-
 specific one inside that project&#39;s sessions.</p>
 <h2>File format</h2>
-<p><code>mcp.json</code> (workbench-native shape, written by the UI):</p>
+<p><code>mcp.json</code> (pi-forge-native shape, written by the UI):</p>
 <pre><code class="language-json">{
   &quot;disabled&quot;: false,
   &quot;servers&quot;: {
@@ -120,7 +120,7 @@ specific one inside that project&#39;s sessions.</p>
   }
 }
 </code></pre>
-<p>Project <code>.mcp.json</code> accepts both shapes — workbench-native and the
+<p>Project <code>.mcp.json</code> accepts both shapes — pi-forge-native and the
 Claude Desktop / pi-mcp-adapter standard:</p>
 <pre><code class="language-json">{
   &quot;mcpServers&quot;: {
@@ -192,13 +192,13 @@ silently dropping)</li>
 <code>[error]</code> so the agent has something actionable in its tool result.</p>
 <h2>Lifecycle</h2>
 <ul>
-<li><strong>Boot.</strong> The server eagerly loads <code>${WORKBENCH_DATA_DIR}/mcp.json</code>
+<li><strong>Boot.</strong> The server eagerly loads <code>${FORGE_DATA_DIR}/mcp.json</code>
 and connects every enabled global server. Connection failures are
-non-fatal — the server stays in <code>error</code> state and the workbench
+non-fatal — the server stays in <code>error</code> state and the pi-forge
 comes up regardless.</li>
 <li><strong>Project sessions.</strong> <code>&lt;projectPath&gt;/.mcp.json</code> is read lazily on
 the first <code>createAgentSession</code> for that project, then cached. A
-config change to that file requires either restarting the workbench
+config change to that file requires either restarting the pi-forge
 or hitting the project&#39;s &quot;Probe&quot; button to pick up changes.</li>
 <li><strong>Save.</strong> A <code>PUT</code> from the Settings UI rewrites <code>mcp.json</code>
 atomically (<code>.tmp</code> + <code>rename</code>, mode 0600), then re-syncs the pool
@@ -237,7 +237,7 @@ on-disk secret; supplying a new value overwrites it (same
 write-merge pattern as <code>models.json</code>).</p>
 <p><strong>Tools don&#39;t show up after editing project <code>.mcp.json</code></strong> — the file
 is read once per project per server lifetime. Hit Probe on the row,
-or restart the workbench, to pick up edits.</p>
+or restart the pi-forge, to pick up edits.</p>
 <h2>API surface</h2>
 <p>For automation. All routes are under <code>/api/v1/mcp/</code>:</p>
 <table>
@@ -287,8 +287,8 @@ or restart the workbench, to pick up edits.</p>
 <p>The Swagger UI at <code>/api/docs</code> has the request/response schemas.</p>
 <h2>See also</h2>
 <ul>
-<li><a href="./configuration.md"><code>docs/configuration.md</code></a> — workbench env vars
-including <code>WORKBENCH_DATA_DIR</code></li>
+<li><a href="./configuration.md"><code>docs/configuration.md</code></a> — pi-forge env vars
+including <code>FORGE_DATA_DIR</code></li>
 <li><a href="./architecture.md"><code>docs/architecture.md</code></a> — where the manager
 sits in the request flow</li>
 <li><a href="../packages/server/src/mcp/manager.ts"><code>packages/server/src/mcp/manager.ts</code></a>

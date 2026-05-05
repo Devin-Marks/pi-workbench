@@ -17,8 +17,8 @@ export default defineConfig({
         "offline.html",
       ],
       manifest: {
-        name: "pi web ui",
-        short_name: "pi",
+        name: "pi-forge",
+        short_name: "pi-forge",
         description: "Browser interface for the pi coding agent",
         theme_color: "#0a0a0a",
         background_color: "#0a0a0a",

@@ -42,7 +42,7 @@ const ChatDiffViewContext = createContext<{
   setViewType: () => undefined,
 });
 
-const CHAT_VIEW_TYPE_KEY = "pi.chat.viewType";
+const CHAT_VIEW_TYPE_KEY = "forge.chat.viewType";
 function readChatViewType(): ChatViewType {
   try {
     return localStorage.getItem(CHAT_VIEW_TYPE_KEY) === "split" ? "split" : "unified";

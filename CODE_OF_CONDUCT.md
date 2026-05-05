@@ -10,7 +10,7 @@ The Code of Conduct applies to:
 
 - All project spaces (this repo, issues, pull requests, discussions)
 - Project communications elsewhere when an individual is officially
-  representing the project (e.g., posting from a `@pi-workbench` account)
+  representing the project (e.g., posting from a `@pi-forge` account)
 
 ## Reporting
 

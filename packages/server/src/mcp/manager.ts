@@ -24,7 +24,7 @@ interface ClosableTransport {
  * `customTools` array fed to `createAgentSession`.
  *
  * Scope:
- *  - "global": loaded from `${WORKBENCH_DATA_DIR}/mcp.json`. Available
+ *  - "global": loaded from `${FORGE_DATA_DIR}/mcp.json`. Available
  *    to every project's sessions.
  *  - "project:<projectId>": loaded from `<projectPath>/.mcp.json`.
  *    Only available to sessions in that project. Project servers OVER-
@@ -35,7 +35,7 @@ interface ClosableTransport {
  * `loadProject()` so the status badge has something honest to show.
  *
  * v1 supports remote transports only (StreamableHTTP + SSE). stdio
- * deferred — the workbench is container-native and arbitrary
+ * deferred — the pi-forge is container-native and arbitrary
  * subprocess spawning has different security trade-offs.
  */
 
@@ -392,7 +392,7 @@ async function openStreamableHttp(
     url,
     headers !== undefined ? { requestInit: { headers } } : undefined,
   );
-  const client = new Client({ name: "pi-workbench", version: "1.0.0" }, { capabilities: {} });
+  const client = new Client({ name: "pi-forge", version: "1.0.0" }, { capabilities: {} });
   await client.connect(transport as unknown as SdkTransport);
   return { client, transport, resolvedTransport: "streamable-http" };
 }
@@ -422,7 +422,7 @@ async function openSse(
           } as unknown as EventSourceInit,
         })
       : new SSEClientTransport(url);
-  const client = new Client({ name: "pi-workbench", version: "1.0.0" }, { capabilities: {} });
+  const client = new Client({ name: "pi-forge", version: "1.0.0" }, { capabilities: {} });
   await client.connect(transport);
   return { client, transport, resolvedTransport: "sse" };
 }
@@ -436,7 +436,7 @@ async function readProjectMcpJson(projectPath: string): Promise<Record<string, M
     if (raw.trim().length === 0) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (typeof parsed !== "object" || parsed === null) return {};
-    // Accept both `{ servers: {...} }` (workbench shape) and
+    // Accept both `{ servers: {...} }` (pi-forge shape) and
     // `{ mcpServers: {...} }` (Claude Desktop / pi-mcp-adapter shape)
     // so a project that already speaks the standard MCP file format
     // works without rewriting.

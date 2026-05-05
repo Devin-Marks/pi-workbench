@@ -33,7 +33,7 @@ import { scrubbedEnv } from "../pty-manager.js";
  *
  * Security posture: BashOperations is overridden to inject our
  * `scrubbedEnv()` — an allowlist-based filter that only passes
- * known-harmless system vars (PATH, HOME, TERM, locales, …). Workbench
+ * known-harmless system vars (PATH, HOME, TERM, locales, …). pi-forge
  * secrets, provider keys, cloud credentials, and any other host-env
  * vars are dropped unless the operator opts them back in via
  * `TERMINAL_PASSTHROUGH_ENV`. Matches the integrated terminal's
@@ -51,12 +51,12 @@ interface ExecBody {
 /**
  * Build a BashOperations that delegates to local spawn, but with our
  * scrubbed env. createLocalBashOperations from the SDK would inherit
- * `process.env` verbatim, leaking secrets the workbench process
+ * `process.env` verbatim, leaking secrets the pi-forge process
  * carries (JWT_SECRET, API_KEY, etc.) — see
  * pty-manager.TERMINAL_ENV_ALLOWLIST for the full set of allowed
  * passthrough vars and rationale.
  */
-function workbenchBashOperations(): BashOperations {
+function forgeBashOperations(): BashOperations {
   return {
     exec: (command, cwd, options) => {
       return new Promise<{ exitCode: number | null }>((resolve, reject) => {
@@ -142,7 +142,7 @@ export const execRoutes: FastifyPluginAsync = async (fastify) => {
           "`excludeFromContext: true` (the `!!` prefix) the result " +
           "is recorded but kept out of the next turn's LLM input. " +
           "Output is captured whole — no streaming for v1. The " +
-          "spawned shell inherits a scrubbed env (no workbench / " +
+          "spawned shell inherits a scrubbed env (no pi-forge / " +
           "provider secrets), same posture as the integrated " +
           "terminal.",
         tags: ["sessions"],
@@ -193,7 +193,7 @@ export const execRoutes: FastifyPluginAsync = async (fastify) => {
       try {
         const result = await live.session.executeBash(command, undefined, {
           excludeFromContext,
-          operations: timeoutOperations(workbenchBashOperations(), timeoutController.signal),
+          operations: timeoutOperations(forgeBashOperations(), timeoutController.signal),
         });
         const durationMs = Date.now() - started;
         live.lastActivityAt = new Date();

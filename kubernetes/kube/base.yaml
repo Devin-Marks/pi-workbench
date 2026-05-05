@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: pi-workbench
+  name: pi-forge
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: pi-workbench-workspace
-  namespace: pi-workbench
+  name: pi-forge-workspace
+  namespace: pi-forge
 spec:
   accessModes:
     - ReadWriteMany
@@ -18,8 +18,8 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: pi-workbench-pi-config
-  namespace: pi-workbench
+  name: pi-forge-pi-config
+  namespace: pi-forge
 spec:
   accessModes:
     - ReadWriteMany
@@ -30,8 +30,8 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: pi-workbench-data
-  namespace: pi-workbench
+  name: pi-forge-data
+  namespace: pi-forge
 spec:
   accessModes:
     - ReadWriteMany
@@ -42,8 +42,8 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: pi-workbench
-  namespace: pi-workbench
+  name: pi-forge
+  namespace: pi-forge
 spec:
   type: NodePort
   ports:
@@ -51,13 +51,13 @@ spec:
       targetPort: 3000
       name: http
   selector:
-    app: pi-workbench
+    app: pi-forge
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: pi-workbench
-  namespace: pi-workbench
+  name: pi-forge
+  namespace: pi-forge
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: "50m"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
@@ -65,13 +65,13 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: pi-workbench.local
+    - host: pi-forge.local
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: pi-workbench
+                name: pi-forge
                 port:
                   number: 3000

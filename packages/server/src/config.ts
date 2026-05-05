@@ -40,12 +40,12 @@ function readBool(key: string, fallback: boolean): boolean {
 }
 
 /**
- * Workbench-owned root. `~/.pi-workbench` is the single dotdir we own.
+ * Forge-owned root. `~/.pi-forge` is the single dotdir we own.
  * By default it holds both the project registry and the workspace where
  * user code lives:
  *
- *   ~/.pi-workbench/
- *     ├── projects.json   ← WORKBENCH_DATA_DIR by default
+ *   ~/.pi-forge/
+ *     ├── projects.json   ← FORGE_DATA_DIR by default
  *     └── workspace/      ← WORKSPACE_PATH by default
  *
  * Either path can be relocated independently via its env var (e.g. point
@@ -58,12 +58,12 @@ if (HOME === "/" || HOME === "") {
   throw new Error(
     `config: os.homedir() returned ${JSON.stringify(HOME)}. ` +
       "This usually means HOME / USERPROFILE is unset. " +
-      "Set WORKSPACE_PATH, PI_CONFIG_DIR, and WORKBENCH_DATA_DIR explicitly, " +
+      "Set WORKSPACE_PATH, PI_CONFIG_DIR, and FORGE_DATA_DIR explicitly, " +
       "or run the server with a real user account.",
   );
 }
-const WORKBENCH_HOME = join(HOME, ".pi-workbench");
-const WORKSPACE_PATH = resolve(readEnv("WORKSPACE_PATH") ?? join(WORKBENCH_HOME, "workspace"));
+const FORGE_HOME = join(HOME, ".pi-forge");
+const WORKSPACE_PATH = resolve(readEnv("WORKSPACE_PATH") ?? join(FORGE_HOME, "workspace"));
 // Default to the current user's home so local dev on macOS/Linux just works.
 // In the documented Docker setup this still resolves to `/root/.pi/agent`
 // (root's homedir IS `/root` inside the container), so the production target
@@ -71,15 +71,15 @@ const WORKSPACE_PATH = resolve(readEnv("WORKSPACE_PATH") ?? join(WORKBENCH_HOME,
 const PI_CONFIG_DIR = resolve(readEnv("PI_CONFIG_DIR") ?? join(HOME, ".pi", "agent"));
 const SESSION_DIR = resolve(readEnv("SESSION_DIR") ?? `${WORKSPACE_PATH}/.pi/sessions`);
 /**
- * Workbench-owned data dir. Holds `projects.json` (the project registry
- * pi-workbench layers on top of pi) and any other state that's ours, not
- * pi's. Defaults to `WORKBENCH_HOME` (~/.pi-workbench) so projects.json
+ * Forge-owned data dir. Holds `projects.json` (the project registry
+ * pi-forge layers on top of pi) and any other state that's ours, not
+ * pi's. Defaults to `FORGE_HOME` (~/.pi-forge) so projects.json
  * sits next to the workspace folder. Kept SEPARATE from `PI_CONFIG_DIR`
  * (~/.pi/agent), which is owned by the pi SDK — auth.json, models.json,
  * settings.json. Dropping our state into the SDK's dir was the original
  * design and got refactored out.
  */
-const WORKBENCH_DATA_DIR = resolve(readEnv("WORKBENCH_DATA_DIR") ?? WORKBENCH_HOME);
+const FORGE_DATA_DIR = resolve(readEnv("FORGE_DATA_DIR") ?? FORGE_HOME);
 
 /**
  * Path to the built client (Vite output). In production we serve this via
@@ -100,7 +100,7 @@ const API_KEY = readEnv("API_KEY");
 const CORS_ORIGIN = readEnv("CORS_ORIGIN");
 
 /**
- * Load a JWT signing key from `${WORKBENCH_DATA_DIR}/jwt-secret`, or
+ * Load a JWT signing key from `${FORGE_DATA_DIR}/jwt-secret`, or
  * generate-and-persist one on first boot. Treated like an SSH host key:
  * created once, persisted to the data dir (which is the PVC / bind-mount
  * in K8s and Docker), reused across restarts so issued tokens stay
@@ -132,7 +132,7 @@ function loadOrGenerateJwtSecret(dataDir: string): string {
 
 const JWT_SECRET =
   readEnv("JWT_SECRET") ??
-  (UI_PASSWORD !== undefined ? loadOrGenerateJwtSecret(WORKBENCH_DATA_DIR) : undefined);
+  (UI_PASSWORD !== undefined ? loadOrGenerateJwtSecret(FORGE_DATA_DIR) : undefined);
 
 export const config = Object.freeze({
   port: readInt("PORT", 3000),
@@ -147,7 +147,7 @@ export const config = Object.freeze({
   trustProxy: readBool("TRUST_PROXY", false),
   workspacePath: WORKSPACE_PATH,
   piConfigDir: PI_CONFIG_DIR,
-  workbenchDataDir: WORKBENCH_DATA_DIR,
+  forgeDataDir: FORGE_DATA_DIR,
   sessionDir: SESSION_DIR,
   clientDistPath: CLIENT_DIST_PATH,
   serveClient: readBool("SERVE_CLIENT", true),
@@ -176,30 +176,30 @@ export const config = Object.freeze({
    */
   hideBuiltinProviders: readBool("HIDE_BUILTIN_PROVIDERS", false),
   /**
-   * Path to the workbench-owned MCP server registry. Lives in the
+   * Path to the forge-owned MCP server registry. Lives in the
    * data dir (not pi's config dir) because pi has no native MCP
-   * support — `mcp.json` is purely a workbench file, surfaced to
+   * support — `mcp.json` is purely a forge file, surfaced to
    * the agent via `customTools` on createAgentSession.
    */
-  mcpConfigFile: join(WORKBENCH_DATA_DIR, "mcp.json"),
+  mcpConfigFile: join(FORGE_DATA_DIR, "mcp.json"),
   /**
-   * Path to the workbench-private per-project skill overrides file.
+   * Path to the forge-private per-project skill overrides file.
    * Lives in the data dir (NOT in PI_CONFIG_DIR — pi's settings.skills
    * is global, and not in `<project>/.pi/` — the user picked
-   * workbench-private over team-shared so each install has its own
+   * forge-private over team-shared so each install has its own
    * preferences without bleeding into the project tree).
    */
-  skillOverridesFile: join(WORKBENCH_DATA_DIR, "skills-overrides.json"),
+  skillOverridesFile: join(FORGE_DATA_DIR, "skills-overrides.json"),
   /**
-   * Path to the workbench-private per-tool override file. Captures
+   * Path to the forge-private per-tool override file. Captures
    * "user has explicitly disabled this builtin tool" and "user has
    * explicitly disabled this MCP tool" — both as flat allow-by-default
-   * sets. Lives in the data dir (workbench-owned; pi's SDK has no
-   * native concept of per-tool toggles, this is purely a workbench
+   * sets. Lives in the data dir (forge-owned; pi's SDK has no
+   * native concept of per-tool toggles, this is purely a forge
    * filter applied to the `tools` allowlist passed to
    * createAgentSession).
    */
-  toolOverridesFile: join(WORKBENCH_DATA_DIR, "tool-overrides.json"),
+  toolOverridesFile: join(FORGE_DATA_DIR, "tool-overrides.json"),
   /**
    * Whether `/api/docs` (Swagger UI + OpenAPI JSON spec) is reachable.
    * Defaults to true so Docker / production deploys keep working without
@@ -225,7 +225,7 @@ export const config = Object.freeze({
      * `mustChangePassword: true` and the issued JWT is restricted —
      * the user can only call `POST /auth/change-password` until they
      * pick a new password. After the user changes it, the new password
-     * is hashed and persisted to `${WORKBENCH_DATA_DIR}/password-hash`,
+     * is hashed and persisted to `${FORGE_DATA_DIR}/password-hash`,
      * and subsequent logins ignore the env value.
      *
      * Defaults to true so deployments that bake an initial password
@@ -234,7 +234,7 @@ export const config = Object.freeze({
      */
     requirePasswordChange: readBool("REQUIRE_PASSWORD_CHANGE", true),
     /** Where the persisted scrypt hash lives — see auth.ts. */
-    passwordHashFile: join(WORKBENCH_DATA_DIR, "password-hash"),
+    passwordHashFile: join(FORGE_DATA_DIR, "password-hash"),
   }),
   /**
    * Per-route rate limits applied to the cost-heavy / disk-heavy / CPU-heavy
@@ -264,7 +264,7 @@ export const config = Object.freeze({
   corsOrigin: CORS_ORIGIN,
   /**
    * Extra env-var names the operator wants the integrated terminal
-   * (and the `!` exec route) to inherit from the workbench process.
+   * (and the `!` exec route) to inherit from the pi-forge process.
    *
    * The terminal env starts from a small allowlist of harmless system
    * vars (PATH, HOME, USER, SHELL, TERM, locales — see
@@ -283,17 +283,17 @@ export const config = Object.freeze({
    */
   terminalPassthroughEnv: Object.freeze(readStringList("TERMINAL_PASSTHROUGH_ENV")),
   /**
-   * Opt-in: append a workbench-defined "secret hygiene" rule to the
+   * Opt-in: append a pi-forge-defined "secret hygiene" rule to the
    * agent's system prompt. The rule asks the model to treat env-var
    * values as credentials by default and not echo them into responses
    * or tool outputs unless explicitly asked. See
-   * `agent-resource-loader.ts#WORKBENCH_SECRET_HYGIENE_RULE` for the
+   * `agent-resource-loader.ts#FORGE_SECRET_HYGIENE_RULE` for the
    * exact wording and `SECURITY.md` for the threat-model framing
    * (behavioral nudge, not a security control).
    *
    * Default OFF. Operators who want it explicitly opt in by setting
    * `AGENT_SECRET_HYGIENE_RULE=true`. Kept opt-in (rather than
-   * default-on) so the workbench doesn't ship invisible behavioral
+   * default-on) so the pi-forge doesn't ship invisible behavioral
    * rules that constrain the agent in ways the user never asked for.
    * Deliberately not surfaced in `docker-compose.yml` or
    * `.env.example` — this is an advanced knob, intentionally

@@ -1,17 +1,17 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: pi-workbench
-  namespace: pi-workbench
+  name: pi-forge
+  namespace: pi-forge
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: pi-workbench
+      app: pi-forge
   template:
     metadata:
       labels:
-        app: pi-workbench
+        app: pi-forge
     spec:
       # Pod-level security context — these apply to every container.
       # `fsGroup` + `fsGroupChangePolicy: OnRootMismatch` lets the kubelet
@@ -40,7 +40,7 @@ spec:
             [
               "sh",
               "-c",
-              "mkdir -p /workspace /home/pi/.pi/agent /home/pi/.pi-workbench && chown -R 1000:1000 /workspace /home/pi/.pi/agent /home/pi/.pi-workbench && chmod 700 /workspace /home/pi/.pi/agent /home/pi/.pi-workbench || true",
+              "mkdir -p /workspace /home/pi/.pi/agent /home/pi/.pi-forge && chown -R 1000:1000 /workspace /home/pi/.pi/agent /home/pi/.pi-forge && chmod 700 /workspace /home/pi/.pi/agent /home/pi/.pi-forge || true",
             ]
           securityContext:
             allowPrivilegeEscalation: false
@@ -66,14 +66,14 @@ spec:
               mountPath: /workspace
             - name: pi-config
               mountPath: /home/pi/.pi/agent
-            - name: workbench-data
-              mountPath: /home/pi/.pi-workbench
+            - name: pi-forge-data
+              mountPath: /home/pi/.pi-forge
       containers:
-        - name: pi-workbench
-          image: pi-workbench:latest
+        - name: pi-forge
+          image: pi-forge:latest
           imagePullPolicy: IfNotPresent
           # Container-level security context. The application only writes
-          # to bind-mounted volumes (workspace, pi-config, workbench-data),
+          # to bind-mounted volumes (workspace, pi-config, pi-forge-data),
           # so the root filesystem can be read-only.
           securityContext:
             allowPrivilegeEscalation: false
@@ -97,8 +97,8 @@ spec:
               value: /workspace
             - name: PI_CONFIG_DIR
               value: /home/pi/.pi/agent
-            - name: WORKBENCH_DATA_DIR
-              value: /home/pi/.pi-workbench
+            - name: FORGE_DATA_DIR
+              value: /home/pi/.pi-forge
             - name: PUID
               value: "1000"
             - name: PGID
@@ -117,7 +117,7 @@ spec:
             # password — the UI forces the user to pick a new password
             # before any other API call works. The new password's
             # scrypt hash is persisted to
-            # ${WORKBENCH_DATA_DIR}/password-hash on the data-dir PVC
+            # ${FORGE_DATA_DIR}/password-hash on the data-dir PVC
             # and the secret-supplied UI_PASSWORD is ignored on
             # subsequent logins. Set to "false" to keep the
             # secret-supplied password as the canonical credential
@@ -126,26 +126,26 @@ spec:
               value: "true"
             # JWT_SECRET is OPTIONAL. When UI_PASSWORD is set and
             # JWT_SECRET is unset, the server generates one on first
-            # boot and persists it to ${WORKBENCH_DATA_DIR}/jwt-secret
+            # boot and persists it to ${FORGE_DATA_DIR}/jwt-secret
             # on the data-dir PVC, so issued tokens survive restarts.
             # Set it explicitly only if you want to manage rotation
             # out-of-band.
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: pi-workbench-secret
+                  name: pi-forge-secret
                   key: JWT_SECRET
                   optional: true
             - name: UI_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: pi-workbench-secret
+                  name: pi-forge-secret
                   key: UI_PASSWORD
                   optional: true
             - name: API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: pi-workbench-secret
+                  name: pi-forge-secret
                   key: API_KEY
                   optional: true
           livenessProbe:
@@ -183,8 +183,8 @@ spec:
               mountPath: /workspace
             - name: pi-config
               mountPath: /home/pi/.pi/agent
-            - name: workbench-data
-              mountPath: /home/pi/.pi-workbench
+            - name: pi-forge-data
+              mountPath: /home/pi/.pi-forge
             # /tmp is required by the agent's bash tool — `mktemp`,
             # `pip install`, `npm install`, `git clone` all write here.
             # readOnlyRootFilesystem:true (set on the container security
@@ -194,13 +194,13 @@ spec:
       volumes:
         - name: workspace
           persistentVolumeClaim:
-            claimName: pi-workbench-workspace
+            claimName: pi-forge-workspace
         - name: pi-config
           persistentVolumeClaim:
-            claimName: pi-workbench-pi-config
-        - name: workbench-data
+            claimName: pi-forge-pi-config
+        - name: pi-forge-data
           persistentVolumeClaim:
-            claimName: pi-workbench-data
+            claimName: pi-forge-data
         # emptyDir for /tmp because the container has
         # readOnlyRootFilesystem:true. 256Mi is generous for the
         # agent's typical mktemp / npm cache / git clone scratch use.

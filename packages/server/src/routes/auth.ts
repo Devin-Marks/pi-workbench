@@ -125,7 +125,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       schema: {
         description:
           "Verify the current password, persist a new scrypt hash to " +
-          "${WORKBENCH_DATA_DIR}/password-hash, and issue a fresh JWT " +
+          "${FORGE_DATA_DIR}/password-hash, and issue a fresh JWT " +
           "(mustChangePassword=false). Once a stored hash exists the env " +
           "UI_PASSWORD is ignored on subsequent logins. Requires a valid " +
           "JWT (initial-login `mustChangePassword:true` tokens are accepted).",

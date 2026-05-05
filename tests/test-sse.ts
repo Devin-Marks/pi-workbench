@@ -73,8 +73,8 @@ interface TestBridge {
 }
 
 async function main(): Promise<void> {
-  const workspacePath = await mkdtemp(join(tmpdir(), "pi-workbench-ws-"));
-  const configDir = await mkdtemp(join(tmpdir(), "pi-workbench-cfg-"));
+  const workspacePath = await mkdtemp(join(tmpdir(), "pi-forge-ws-"));
+  const configDir = await mkdtemp(join(tmpdir(), "pi-forge-cfg-"));
   process.env.WORKSPACE_PATH = workspacePath;
   process.env.PI_CONFIG_DIR = configDir;
   process.env.SESSION_DIR = join(workspacePath, ".pi", "sessions");

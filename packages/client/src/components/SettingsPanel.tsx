@@ -856,8 +856,8 @@ function SkillsTab({ onError }: { onError: (msg: string | undefined) => void }) 
         Skills discovered in <code className="font-mono">~/.pi/agent/skills/</code> and{" "}
         <code className="font-mono">{project.path}/.pi/skills/</code>. The global toggle writes to
         pi&apos;s <code className="font-mono">settings.skills</code>; per-project overrides write to
-        the workbench-private file at{" "}
-        <code className="font-mono">{`\${WORKBENCH_DATA_DIR}/skills-overrides.json`}</code>.
+        the pi-forge-private file at{" "}
+        <code className="font-mono">{`\${FORGE_DATA_DIR}/skills-overrides.json`}</code>.
       </p>
       <div className="rounded border border-amber-700/40 bg-amber-900/10 px-3 py-2 text-[11px] text-amber-200">
         Skill changes apply to the <strong>next session</strong> you start in the affected project.
@@ -1425,7 +1425,7 @@ function ThemeSwatch({ id }: { id: ThemeId }) {
 // ---------------- Backup tab ----------------
 
 /**
- * Export / import the workbench's portable config as a `.tar.gz`.
+ * Export / import the pi-forge's portable config as a `.tar.gz`.
  *
  * Export bundles `mcp.json` + `settings.json` + `models.json`. Auth
  * is deliberately excluded (provider keys / OAuth tokens), and the

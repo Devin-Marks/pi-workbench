@@ -69,7 +69,7 @@ interface SearcherModule {
 }
 
 async function setupWorkspace(): Promise<string> {
-  const ws = await mkdtemp(join(tmpdir(), "pi-workbench-search-ws-"));
+  const ws = await mkdtemp(join(tmpdir(), "pi-forge-search-ws-"));
   // Plain text matches.
   await writeFile(join(ws, "alpha.ts"), "const greeting = 'hello world';\n");
   await writeFile(join(ws, "beta.md"), "# Hello\n\nthe quick brown fox.\n");

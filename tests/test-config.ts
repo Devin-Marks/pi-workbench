@@ -73,8 +73,8 @@ async function jsend(
 }
 
 async function main(): Promise<void> {
-  const workspacePath = await mkdtemp(join(tmpdir(), "pi-workbench-ws-"));
-  const configDir = await mkdtemp(join(tmpdir(), "pi-workbench-cfg-"));
+  const workspacePath = await mkdtemp(join(tmpdir(), "pi-forge-ws-"));
+  const configDir = await mkdtemp(join(tmpdir(), "pi-forge-cfg-"));
   process.env.WORKSPACE_PATH = workspacePath;
   process.env.PI_CONFIG_DIR = configDir;
   process.env.SESSION_DIR = join(workspacePath, ".pi", "sessions");
@@ -404,7 +404,7 @@ async function main(): Promise<void> {
       );
 
       // pi's settings.json should NOT have absorbed the project
-      // override — project state lives in the workbench-private
+      // override — project state lives in the pi-forge-private
       // overrides file. In the new pattern model, "global view
       // unaffected" means the global file does NOT pick up a
       // `!hello` exclude pattern as a side-effect of the project-

@@ -2,13 +2,13 @@
  * Phase 7+ config export/import integration test.
  *
  * Boots the server in-process with a temp PI_CONFIG_DIR and
- * WORKBENCH_DATA_DIR, seeds the three exported files, exercises
+ * FORGE_DATA_DIR, seeds the three exported files, exercises
  * round-trip GET /config/export → POST /config/import, and confirms
  * the on-disk content matches.
  *
  * Coverage:
  *   - GET /config/export with all three files present → 200, gzip
- *     stream, X-Pi-Workbench-Files header lists all three.
+ *     stream, X-Pi-Forge-Files header lists all three.
  *   - GET /config/export with only some files present → tar contains
  *     only the existing ones; missing files are silently skipped.
  *   - POST /config/import round-trips: export buffer fed back imports
@@ -132,7 +132,7 @@ async function main(): Promise<void> {
   const dataDir = await mkdtemp(join(tmpdir(), "pi-config-export-data-"));
   process.env.WORKSPACE_PATH = workspacePath;
   process.env.PI_CONFIG_DIR = configDir;
-  process.env.WORKBENCH_DATA_DIR = dataDir;
+  process.env.FORGE_DATA_DIR = dataDir;
   process.env.SESSION_DIR = join(workspacePath, ".pi", "sessions");
   process.env.NODE_ENV = "test";
   delete process.env.UI_PASSWORD;
@@ -140,7 +140,7 @@ async function main(): Promise<void> {
   delete process.env.API_KEY;
 
   console.log(`[test-config-export] PI_CONFIG_DIR=${configDir}`);
-  console.log(`[test-config-export] WORKBENCH_DATA_DIR=${dataDir}`);
+  console.log(`[test-config-export] FORGE_DATA_DIR=${dataDir}`);
 
   // Seed the three exportable files PLUS auth.json (which we expect
   // the export to deliberately exclude).
@@ -181,19 +181,19 @@ async function main(): Promise<void> {
         r.headers.get("content-type") === "application/gzip",
         r.headers.get("content-type") ?? "(none)",
       );
-      const filesHeader = r.headers.get("x-pi-workbench-files") ?? "";
+      const filesHeader = r.headers.get("x-pi-forge-files") ?? "";
       const filesList = filesHeader
         .split(",")
         .filter((s) => s.length > 0)
         .sort();
       assert(
-        "  X-Pi-Workbench-Files lists all three files",
+        "  X-Pi-Forge-Files lists all three files",
         JSON.stringify(filesList) === JSON.stringify(["mcp.json", "models.json", "settings.json"]),
         filesHeader,
       );
       assert(
         "  Content-Disposition is attachment with timestamped filename",
-        (r.headers.get("content-disposition") ?? "").includes("pi-workbench-config-"),
+        (r.headers.get("content-disposition") ?? "").includes("pi-forge-config-"),
         r.headers.get("content-disposition") ?? "(none)",
       );
       exportedBuf = r.buf;
@@ -403,12 +403,12 @@ async function main(): Promise<void> {
       await rm(join(dataDir, "mcp.json"));
       const r = await getRaw(base, "/api/v1/config/export");
       assert("GET /config/export (missing mcp.json) → 200", r.status === 200);
-      const filesList = (r.headers.get("x-pi-workbench-files") ?? "")
+      const filesList = (r.headers.get("x-pi-forge-files") ?? "")
         .split(",")
         .filter((s) => s.length > 0)
         .sort();
       assert(
-        "  X-Pi-Workbench-Files omits missing mcp.json",
+        "  X-Pi-Forge-Files omits missing mcp.json",
         JSON.stringify(filesList) === JSON.stringify(["models.json", "settings.json"]),
         JSON.stringify(filesList),
       );

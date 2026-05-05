@@ -12,7 +12,7 @@ env:
   # `Devin-Marks`), which would push to `ghcr.io/Devin-Marks/...` and
   # fail with "repository name must be lowercase". Each job sets
   # IMAGE_NAME to the lowercased value via GITHUB_ENV in a setup step.
-  IMAGE_BASE: pi-workbench
+  IMAGE_BASE: pi-forge
 
 jobs:
   # Gate the release on the tag and the in-tree versions agreeing.

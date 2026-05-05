@@ -458,8 +458,8 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
         description:
           "Toggle a skill's enabled state. Default scope=`global` mutates " +
           "pi's `settings.skills` (canonical enable/disable list shared with " +
-          "the pi TUI). scope=`project` writes to the workbench-private " +
-          "overrides file at `${WORKBENCH_DATA_DIR}/skills-overrides.json` " +
+          "the pi TUI). scope=`project` writes to the pi-forge-private " +
+          "overrides file at `${FORGE_DATA_DIR}/skills-overrides.json` " +
           "for the project named in `?projectId=`. Project-scope overrides " +
           "follow tri-state semantics: `enabled` adds, `disabled` removes; " +
           "absence (cleared via DELETE) inherits from global. Skill changes " +
@@ -571,7 +571,7 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   // ---------------------- export / import ----------------------
-  // Two routes that round-trip the workbench's portable config
+  // Two routes that round-trip the pi-forge's portable config
   // (mcp.json + settings.json + models.json — see config-export.ts
   // header for what's in and what's out).
   fastify.get(
@@ -579,11 +579,11 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
     {
       schema: {
         description:
-          "Stream a `.tar.gz` of the portable workbench config: " +
+          "Stream a `.tar.gz` of the portable pi-forge config: " +
           "`mcp.json`, `settings.json`, and `models.json`. Excludes " +
           "`auth.json` (provider keys / OAuth tokens) and any " +
           "installation-bound files (jwt-secret, password-hash). " +
-          "The header `X-Pi-Workbench-Files` lists the names actually " +
+          "The header `X-Pi-Forge-Files` lists the names actually " +
           "included so a client can warn when a file was missing on " +
           "disk and therefore omitted from the export.",
         tags: ["config"],
@@ -603,8 +603,8 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
         const ts = new Date().toISOString().replace(/[:.]/g, "-");
         reply
           .header("Content-Type", "application/gzip")
-          .header("Content-Disposition", `attachment; filename="pi-workbench-config-${ts}.tar.gz"`)
-          .header("X-Pi-Workbench-Files", files.join(","));
+          .header("Content-Disposition", `attachment; filename="pi-forge-config-${ts}.tar.gz"`)
+          .header("X-Pi-Forge-Files", files.join(","));
         return reply.send(stream);
       } catch (err) {
         return internalError(reply, err);
@@ -720,8 +720,8 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
         const ts = new Date().toISOString().replace(/[:.]/g, "-");
         reply
           .header("Content-Type", "application/gzip")
-          .header("Content-Disposition", `attachment; filename="pi-workbench-skills-${ts}.tar.gz"`)
-          .header("X-Pi-Workbench-File-Count", String(fileCount));
+          .header("Content-Disposition", `attachment; filename="pi-forge-skills-${ts}.tar.gz"`)
+          .header("X-Pi-Forge-File-Count", String(fileCount));
         return reply.send(stream);
       } catch (err) {
         return internalError(reply, err);

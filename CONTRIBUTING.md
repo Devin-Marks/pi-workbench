@@ -1,4 +1,4 @@
-# Contributing to pi-workbench
+# Contributing to pi-forge
 
 Thanks for the interest. This document covers everything you need to send a
 pull request that has a good chance of landing quickly.
@@ -6,8 +6,8 @@ pull request that has a good chance of landing quickly.
 ## Quick start
 
 ```bash
-git clone https://github.com/<your-fork>/pi-workbench.git
-cd pi-workbench
+git clone https://github.com/<your-fork>/pi-forge.git
+cd pi-forge
 npm install
 npm run dev          # server on :3000, client on :5173
 ```

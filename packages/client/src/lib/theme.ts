@@ -24,7 +24,7 @@ export const THEME_DEFS: ThemeDef[] = [
   { id: "catppuccin-mocha", label: "Catppuccin Mocha", mode: "dark" },
 ];
 
-const STORAGE_KEY = "pi.theme";
+const STORAGE_KEY = "forge.theme";
 
 function isThemeId(v: unknown): v is ThemeId {
   return typeof v === "string" && THEME_DEFS.some((t) => t.id === v);

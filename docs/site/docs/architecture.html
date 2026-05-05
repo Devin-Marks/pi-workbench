@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Architecture — pi-workbench</title>
-  <meta name="description" content="How requests flow through the workbench, from the browser to the pi SDK.">
+  <title>Architecture — pi-forge</title>
+  <meta name="description" content="How requests flow through the pi-forge, from the browser to the pi SDK.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='1' y='1' width='30' height='30' rx='7' fill='%230d0d10'/><path d='M12 13 H20 M14 13 V21 M18 13 V21' stroke='%23e6e7eb' stroke-width='1.6' stroke-linecap='round' fill='none'/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,13 +21,13 @@
   <path d="M23 11 L26 16 L23 21" stroke="#10b981" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
   <path d="M12 13 H20 M14 13 V21 M18 13 V21" stroke="#e6e7eb" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </svg>
-        pi-workbench
+        pi-forge
       </a>
       <nav class="nav-links" id="navLinks">
         <a href="../index.html#features">Features</a>
         <a href="../index.html#quickstart">Quick Start</a>
         <a href="architecture.html">Docs</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench" class="nav-cta">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-forge" class="nav-cta">GitHub</a>
       </nav>
       <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">&#9776;</button>
     </div>
@@ -47,24 +47,24 @@
       </div>
       <div class="sidebar-section">
         <h4>Project</h4>
-        <a href="https://github.com/Devin-Marks/pi-workbench">GitHub</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/CHANGELOG.md">Changelog</a>
-        <a href="https://github.com/Devin-Marks/pi-workbench/blob/main/SECURITY.md">Security</a>
+        <a href="https://github.com/Devin-Marks/pi-forge">GitHub</a>
+        <a href="https://github.com/Devin-Marks/pi-forge/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/Devin-Marks/pi-forge/blob/main/SECURITY.md">Security</a>
       </div>
     </aside>
 
     <main class="docs-main">
       <h1>Architecture</h1>
-      <p class="docs-subtitle">How requests flow through the workbench, from the browser to the pi SDK.</p>
+      <p class="docs-subtitle">How requests flow through the pi-forge, from the browser to the pi SDK.</p>
 <p>This document is the deeper dive that the <a href="../README.md"><code>README.md</code></a> ASCII
 diagram refers out to. For contributor-focused architecture rules
 (conventions, &quot;where does X live&quot;, code-organization invariants), see
 <a href="../CLAUDE.md"><code>CLAUDE.md</code></a> at the repo root.</p>
-<h2>What pi-workbench is</h2>
+<h2>What pi-forge is</h2>
 <p>A self-hosted HTTP server + browser UI that wraps the
 <a href="https://github.com/badlogic/pi-mono" target="_blank" rel="noopener noreferrer"><code>pi-coding-agent</code></a> SDK. It is <strong>not</strong>
 a reimplementation of the agent loop — all of that is the SDK. The
-workbench is the bridge:</p>
+pi-forge is the bridge:</p>
 <ul>
 <li>Fastify HTTP server hosts the SDK as an in-process embedding</li>
 <li>REST routes for project / session / file / git / config / terminal /
@@ -133,7 +133,7 @@ programmatic client would</li>
 │                                                                      │
 │  ${WORKSPACE_PATH}/&lt;project&gt;/         — user code                    │
 │  ${SESSION_DIR}/&lt;projectId&gt;/*.jsonl   — session transcripts          │
-│  ${WORKBENCH_DATA_DIR}/projects.json  — project registry             │
+│  ${FORGE_DATA_DIR}/projects.json  — project registry             │
 │  ${PI_CONFIG_DIR}/auth.json           — provider API keys            │
 │  ${PI_CONFIG_DIR}/models.json         — custom provider definitions  │
 │  ${PI_CONFIG_DIR}/settings.json       — agent defaults               │
@@ -214,7 +214,7 @@ registry is rebuilt <strong>lazily</strong> as clients reconnect their SSE strea
 first line</strong> of each <code>.jsonl</code> (the session header) to populate the
 sidebar&#39;s session list — no full sessions land in memory eagerly.</p>
 <h2>Persistence model</h2>
-<p>The workbench is stateless on the server side <strong>except for</strong>:</p>
+<p>The pi-forge is stateless on the server side <strong>except for</strong>:</p>
 <table>
 <thead>
 <tr>
@@ -225,7 +225,7 @@ sidebar&#39;s session list — no full sessions land in memory eagerly.</p>
 </thead>
 <tbody><tr>
 <td>Project registry</td>
-<td><code>${WORKBENCH_DATA_DIR}/projects.json</code></td>
+<td><code>${FORGE_DATA_DIR}/projects.json</code></td>
 <td>Yes</td>
 </tr>
 <tr>

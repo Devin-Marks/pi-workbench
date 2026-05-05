@@ -145,7 +145,7 @@ export function passwordConfigured(): boolean {
 
 /**
  * Hash the new password and atomically replace the on-disk file.
- * Mode 0600 — only the workbench process owner should be able to
+ * Mode 0600 — only the pi-forge process owner should be able to
  * read it. Atomic replace via tmp + rename so a crash mid-write
  * doesn't leave a half-written hash that locks the user out.
  */

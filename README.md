@@ -1,19 +1,19 @@
 <p align="center">
-  <img src="docs/images/icon.png" alt="pi-workbench" width="120" height="120"/>
+  <img src="docs/images/icon.png" alt="pi-forge" width="120" height="120"/>
 </p>
 
-# pi-workbench
+# pi-forge
 
-[![CI](https://github.com/Devin-Marks/pi-workbench/actions/workflows/ci.yml/badge.svg)](https://github.com/Devin-Marks/pi-workbench/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/Devin-Marks/pi-workbench?sort=semver)](https://github.com/Devin-Marks/pi-workbench/releases)
+[![CI](https://github.com/Devin-Marks/pi-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/Devin-Marks/pi-forge/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Devin-Marks/pi-forge?sort=semver)](https://github.com/Devin-Marks/pi-forge/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A self-hosted browser workbench for the [pi coding agent](https://github.com/badlogic/pi-mono).
+A self-hosted browser pi-forge for the [pi coding agent](https://github.com/badlogic/pi-mono).
 Chat with the agent against your code, browse files, run a terminal, review
 diffs, all from one tab.
 
 <p align="center">
-  <img src="docs/images/img0.png" alt="pi-workbench in action" width="1200"/>
+  <img src="docs/images/img0.png" alt="pi-forge in action" width="1200"/>
 </p>
 
 <details>
@@ -35,7 +35,7 @@ diffs, all from one tab.
 
 </details>
 
-## Why pi-workbench?
+## Why pi-forge?
 
 - **Self-hosted, single-tenant.** Your code, your provider keys, your container. No cloud.
   No analytics. No multi-tenant cross-talk. The same machine that runs the agent owns the
@@ -50,8 +50,8 @@ diffs, all from one tab.
 ## Quick start
 
 ```bash
-git clone https://github.com/Devin-Marks/pi-workbench.git
-cd pi-workbench
+git clone https://github.com/Devin-Marks/pi-forge.git
+cd pi-forge
 cp docker/.env.example docker/.env       # edit auth + paths if you want
 cd docker && docker compose up -d --build
 ```
@@ -81,9 +81,9 @@ details, follow the links in [Documentation](#documentation) below.
   `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`. The agent uses typed
   tools for filesystem search and listing instead of shelling out for every
   directory walk.
-- **Bash tool with workbench env scrub** — the agent's `bash` calls inherit a
+- **Bash tool with env scrub** — the agent's `bash` calls inherit a
   scrubbed environment (no `JWT_SECRET`, `API_KEY`, provider keys) so a stuck
-  agent can't `printenv` workbench secrets back into the transcript. Same
+  agent can't `printenv` pi-forge secrets back into the transcript. Same
   posture as the integrated terminal and the `!` exec route.
 
 ### Sessions & chat
@@ -170,24 +170,24 @@ For project conventions and the agent-facing architecture notes, see
 
 ## Versions
 
-pi-workbench tracks the [`@mariozechner/pi-coding-agent`](https://www.npmjs.com/package/@mariozechner/pi-coding-agent)
-SDK closely. Each workbench release pins an exact patch version of the
+pi-forge tracks the [`@mariozechner/pi-coding-agent`](https://www.npmjs.com/package/@mariozechner/pi-coding-agent)
+SDK closely. Each pi-forge release pins an exact patch version of the
 pi SDK trio (`pi-coding-agent`, `pi-agent-core`, `pi-ai`) — no
 caret/tilde — so a transparent SDK upgrade can't surprise an existing
-workbench install. The pinned versions live in
+pi-forge install. The pinned versions live in
 [`packages/server/package.json`](./packages/server/package.json).
 
-Support window: only the latest workbench tag is supported. When a
+Support window: only the latest pi-forge tag is supported. When a
 new tag ships, the previous one is best-effort — security fixes may
 be backported, feature work isn't. Breaking SDK changes that the
-workbench had to absorb show up in the release notes' **Changed**
+pi-forge had to absorb show up in the release notes' **Changed**
 section so operators know what to re-test before upgrading. Per-tag
 notes live in [CHANGELOG.md](./CHANGELOG.md).
 
 ## Heads up
 
-pi-workbench drives a coding agent that runs real commands (`bash`,
-`write`, `edit`) as the workbench user — review what it does, set
+pi-forge drives a coding agent that runs real commands (`bash`,
+`write`, `edit`) as the pi-forge user — review what it does, set
 provider-side spending limits, and don't expose the container to the
 public internet. See
 [`SECURITY.md`](./SECURITY.md) for the threat model and

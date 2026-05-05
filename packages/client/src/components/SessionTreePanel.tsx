@@ -73,8 +73,8 @@ interface NodeView extends SessionTreeEntry {
   isBranchHead: boolean;
 }
 
-const MODEL_KEY_PREFIX = "pi-workbench/model/";
-const VIEW_KEY = "pi-workbench/sessionTree.view";
+const MODEL_KEY_PREFIX = "pi-forge/model/";
+const VIEW_KEY = "pi-forge/sessionTree.view";
 
 export function SessionTreePanel({ sessionId, projectId, onClose }: Props) {
   const isStreaming = useSessionStore((s) => s.streamingBySession[sessionId] ?? false);

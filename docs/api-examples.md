@@ -229,7 +229,7 @@ curl -s -X PATCH -H "Authorization: Bearer $KEY" -H "Content-Type: application/j
   $BASE/api/v1/projects/$PROJECT_ID \
   -d '{"name":"new-name"}'
 
-# Plain delete: removes the workbench's record, leaves session JSONLs orphaned
+# Plain delete: removes the pi-forge's record, leaves session JSONLs orphaned
 curl -s -X DELETE -H "Authorization: Bearer $KEY" $BASE/api/v1/projects/$PROJECT_ID
 
 # Cascade delete: also rm -rf the project's session directory
@@ -585,7 +585,7 @@ timestamp. Refresh by logging in again before expiry.
 
 ```python
 #!/usr/bin/env python3
-"""Send a one-shot prompt to a pi-workbench session and print the response."""
+"""Send a one-shot prompt to a pi-forge session and print the response."""
 import json
 import sys
 import httpx

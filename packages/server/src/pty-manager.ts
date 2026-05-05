@@ -346,7 +346,7 @@ export function installPtyExitHandler(): void {
 
 /**
  * Allowlist of env-var names the PTY shell (and the `!` exec route)
- * may inherit from the workbench process. Everything else is dropped.
+ * may inherit from the pi-forge process. Everything else is dropped.
  *
  * Allowlist instead of denylist because the threat model is "any
  * secret an operator has in their host env leaks into the shell." A
@@ -370,7 +370,7 @@ export function installPtyExitHandler(): void {
  *
  * Conspicuously NOT on the list (must be opt-in via
  * `TERMINAL_PASSTHROUGH_ENV` if the operator wants them in-shell):
- *   - Workbench secrets: JWT_SECRET, API_KEY, UI_PASSWORD
+ *   - pi-forge secrets: JWT_SECRET, API_KEY, UI_PASSWORD
  *   - Provider keys:     ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.
  *   - Cloud credentials: AWS_*, GOOGLE_APPLICATION_CREDENTIALS,
  *                        GH_TOKEN, GITHUB_TOKEN, KUBECONFIG, ...
@@ -426,6 +426,6 @@ function filterEnv(env: NodeJS.ProcessEnv): Record<string, string> {
  * the one-shot user-bash share an identical threat model: an
  * authenticated browser user must not be able to `echo
  * $JWT_SECRET` (or any other host-env secret) from a shell the
- * workbench spawned on their behalf.
+ * pi-forge spawned on their behalf.
  */
 export const scrubbedEnv = (): Record<string, string> => filterEnv(process.env);

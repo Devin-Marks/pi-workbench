@@ -1,6 +1,6 @@
 /**
- * Workbench-private per-tool overrides at
- * `${WORKBENCH_DATA_DIR}/tool-overrides.json`.
+ * pi-forge-private per-tool overrides at
+ * `${FORGE_DATA_DIR}/tool-overrides.json`.
  *
  * Two layers, both allow-by-default:
  *
@@ -32,7 +32,7 @@
  *               the un-prefixed inner name from the MCP server)
  *
  * Lives outside `${PI_CONFIG_DIR}` because pi's SDK has no native
- * concept of per-tool toggles — this is purely a workbench filter
+ * concept of per-tool toggles — this is purely a pi-forge filter
  * applied to the `tools` allowlist passed to `createAgentSession`.
  */
 import { chmodSync } from "node:fs";

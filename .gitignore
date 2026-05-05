@@ -82,4 +82,5 @@ pi-webui-dev-plan.md
 
 # User data created by running the app locally.
 workspace/
-workbench/
+forge/
+pi-forge/

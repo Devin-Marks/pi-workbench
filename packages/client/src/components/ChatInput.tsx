@@ -73,7 +73,7 @@ function buildFileRefRegex(path: string): RegExp {
  * keep storage bounded across long-lived sessions.
  */
 const HISTORY_LIMIT = 100;
-const HISTORY_KEY_PREFIX = "pi.input.history.v1:";
+const HISTORY_KEY_PREFIX = "forge.input.history.v1:";
 
 function readInputHistory(sessionId: string): string[] {
   try {
@@ -136,7 +136,7 @@ interface Props {
   sessionId: string;
 }
 
-const MODEL_KEY_PREFIX = "pi-workbench/model/";
+const MODEL_KEY_PREFIX = "pi-forge/model/";
 
 interface ModelOption {
   value: string; // "<provider>:<modelId>"
@@ -362,9 +362,9 @@ export function ChatInput({ sessionId }: Props) {
         run: () => {
           setAttachmentError(
             minimalUi
-              ? "/<cmd> runs a workbench command (compact, abort, settings, …). " +
+              ? "/<cmd> runs a pi-forge command (compact, abort, settings, …). " +
                   "@<path> references a project file (autocomplete from the popover)."
-              : "/<cmd> runs a workbench command (compact, abort, settings, …). " +
+              : "/<cmd> runs a pi-forge command (compact, abort, settings, …). " +
                   "!cmd runs bash (output → next LLM context); !!cmd runs bash local-only. " +
                   "@<path> references a project file (autocomplete from the popover).",
           );

@@ -1155,7 +1155,7 @@ export const api = {
   /**
    * Toggle a skill's enabled state. `scope` defaults to "global" for
    * back-compat with the original two-arg form. Project scope writes
-   * the workbench-private overrides file; clear an override (= return
+   * the pi-forge-private overrides file; clear an override (= return
    * to inherit) via `clearSkillProjectOverride` below.
    */
   setSkillEnabled: (
@@ -1181,7 +1181,7 @@ export const api = {
   /**
    * Unified tool listing — pi's seven builtins + every connected MCP
    * server's tools, each with an `enabled` flag reflecting the
-   * workbench-private overrides file. Optional `?projectId=` includes
+   * pi-forge-private overrides file. Optional `?projectId=` includes
    * project-scope MCP servers.
    *
    * The server normalizes the response shape; we only sanity-check
@@ -1286,11 +1286,11 @@ export const api = {
 
   // ---------------- config export / import ----------------
   /**
-   * Download a `.tar.gz` of the workbench's portable config (mcp.json,
+   * Download a `.tar.gz` of the pi-forge's portable config (mcp.json,
    * settings.json, models.json — auth.json deliberately excluded).
    * Returns a blob plus the filename the server suggested via
    * Content-Disposition AND the names actually packed (from the
-   * `X-Pi-Workbench-Files` header). The caller is responsible for
+   * `X-Pi-Forge-Files` header). The caller is responsible for
    * triggering the browser download (createObjectURL + anchor click).
    */
   exportConfig: async (): Promise<{ blob: Blob; filename: string; files: string[] }> => {
@@ -1315,8 +1315,8 @@ export const api = {
     }
     const blob = await res.blob();
     const cd = res.headers.get("Content-Disposition") ?? "";
-    const filename = parseContentDispositionFilename(cd) ?? "pi-workbench-config.tar.gz";
-    const filesHeader = res.headers.get("X-Pi-Workbench-Files") ?? "";
+    const filename = parseContentDispositionFilename(cd) ?? "pi-forge-config.tar.gz";
+    const filesHeader = res.headers.get("X-Pi-Forge-Files") ?? "";
     const files = filesHeader.split(",").filter((s) => s.length > 0);
     return { blob, filename, files };
   },
@@ -1385,8 +1385,8 @@ export const api = {
     }
     const blob = await res.blob();
     const cd = res.headers.get("Content-Disposition") ?? "";
-    const filename = parseContentDispositionFilename(cd) ?? "pi-workbench-skills.tar.gz";
-    const countHeader = res.headers.get("X-Pi-Workbench-File-Count") ?? "0";
+    const filename = parseContentDispositionFilename(cd) ?? "pi-forge-skills.tar.gz";
+    const countHeader = res.headers.get("X-Pi-Forge-File-Count") ?? "0";
     const fileCount = Number.parseInt(countHeader, 10) || 0;
     return { blob, filename, fileCount };
   },

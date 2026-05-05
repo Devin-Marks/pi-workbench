@@ -181,8 +181,8 @@ export function ProjectSidebar() {
         {deleteDialog !== undefined && (
           <div className="flex flex-col gap-3 px-4 py-3">
             <p className="text-xs text-neutral-300">
-              Remove "{deleteDialog.name}" from the workbench. The project folder on disk is{" "}
-              <strong>not</strong> deleted; only the workbench's record of it goes away.
+              Remove "{deleteDialog.name}" from the pi-forge. The project folder on disk is{" "}
+              <strong>not</strong> deleted; only the pi-forge's record of it goes away.
             </p>
             {deleteDialog.onDiskCount > 0 && (
               <label className="flex items-start gap-2 rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-xs text-neutral-300">
@@ -203,7 +203,7 @@ export function ProjectSidebar() {
                     .pi/sessions/{deleteDialog.id}/
                   </code>
                   ). Without this, the JSONLs stay on disk and become orphaned — recoverable but not
-                  reachable through the workbench.
+                  reachable through the pi-forge.
                 </span>
               </label>
             )}

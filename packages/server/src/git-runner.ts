@@ -7,7 +7,7 @@ import { assertInsideRoot } from "./file-manager.js";
 const execFileAsync = promisify(execFile);
 
 /**
- * Thin wrapper around `git` for the workbench's git panel.
+ * Thin wrapper around `git` for the pi-forge's git panel.
  *
  * Rules:
  *   - NEVER `exec` with string interpolation. Always `execFile` with
@@ -136,7 +136,7 @@ interface RunResult {
  */
 /**
  * `-c` flags prepended to every git invocation so a hostile per-repo
- * `.git/config` can't get the workbench to execute arbitrary commands
+ * `.git/config` can't get the pi-forge to execute arbitrary commands
  * via `core.fsmonitor` / `core.editor` / `core.pager` /
  * `core.sshCommand` / `core.askPass`. Cloning a third-party repo is a
  * normal flow; the cloned repo's local config CAN ship hostile values

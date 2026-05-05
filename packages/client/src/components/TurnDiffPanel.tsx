@@ -5,7 +5,7 @@ import { useSessionStore } from "../store/session-store";
 import { DiffBlock } from "./DiffBlock";
 
 type ViewType = "unified" | "split";
-const VIEW_TYPE_KEY = "pi.turnDiff.viewType";
+const VIEW_TYPE_KEY = "forge.turnDiff.viewType";
 
 function readPersistedViewType(): ViewType {
   try {

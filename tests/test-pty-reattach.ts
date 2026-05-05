@@ -1,7 +1,7 @@
 /**
  * pty-manager reattach + idle-reaper integration test.
  *
- * Pins the PTY lifecycle that's the most fiddly bit of the workbench:
+ * Pins the PTY lifecycle that's the most fiddly bit of the pi-forge:
  *   - spawn → attach (sink #1) → detach (idle timer arms) → reattach
  *     (sink #2 receives buffered replay + new output) → input flows.
  *   - same-tabId attach replaces the previous active sink AND closes
@@ -64,7 +64,7 @@ interface PtyManagerModule {
 }
 
 async function main(): Promise<void> {
-  const cwd = await mkdtemp(join(tmpdir(), "pi-workbench-pty-"));
+  const cwd = await mkdtemp(join(tmpdir(), "pi-forge-pty-"));
   process.env.NODE_ENV = "test";
   // Don't import installPtyExitHandler — test isolation: the module
   // load must NOT install a process-wide exit handler.

@@ -221,7 +221,7 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   await fastify.register(swagger, {
     openapi: {
-      info: { title: "pi-workbench API", version: "1.0.0" },
+      info: { title: "pi-forge API", version: "1.0.0" },
       components: {
         securitySchemes: {
           bearerAuth: { type: "http", scheme: "bearer" },
@@ -233,7 +233,7 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   // Bootstrap script injected into the swagger UI page. Resolves an
   // auth token in priority order — URL ?token=, then sessionStorage
-  // (set by an earlier visit), then localStorage["pi-workbench/auth-
+  // (set by an earlier visit), then localStorage["pi-forge/auth-
   // token"] (the JWT the main UI persisted on login). Same-origin so
   // the localStorage read is allowed. Then patches fetch() to attach
   // the token as a Bearer header on every call swagger UI makes to
@@ -251,13 +251,13 @@ export async function buildServer(): Promise<FastifyInstance> {
       var url = new URL(window.location.href);
       var qpToken = url.searchParams.get("token");
       if (qpToken && qpToken.length > 0) {
-        sessionStorage.setItem("pi-workbench/docs-token", qpToken);
+        sessionStorage.setItem("pi-forge/docs-token", qpToken);
         url.searchParams.delete("token");
         window.history.replaceState({}, document.title, url.toString());
       }
       var token =
-        sessionStorage.getItem("pi-workbench/docs-token") ||
-        localStorage.getItem("pi-workbench/auth-token");
+        sessionStorage.getItem("pi-forge/docs-token") ||
+        localStorage.getItem("pi-forge/auth-token");
       if (token && window.fetch) {
         var origFetch = window.fetch.bind(window);
         window.fetch = function (input, init) {
@@ -273,7 +273,7 @@ export async function buildServer(): Promise<FastifyInstance> {
         };
       }
     } catch (err) {
-      console.warn("pi-workbench docs auth bootstrap failed:", err);
+      console.warn("pi-forge docs auth bootstrap failed:", err);
     }
   })();`;
 
@@ -281,7 +281,7 @@ export async function buildServer(): Promise<FastifyInstance> {
     routePrefix: "/api/docs",
     uiConfig: { docExpansion: "list", persistAuthorization: true },
     theme: {
-      js: [{ filename: "pi-workbench-auth.js", content: swaggerThemeJs }],
+      js: [{ filename: "pi-forge-auth.js", content: swaggerThemeJs }],
     },
   });
 
@@ -458,7 +458,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   // so /mcp/settings reports honest connection counts before the
   // first session is created. Project-scope servers load lazily on
   // first session-create per project. Failure here is non-fatal —
-  // a bad mcp.json shouldn't keep the workbench from booting.
+  // a bad mcp.json shouldn't keep pi-forge from booting.
   loadGlobalMcp().catch((err: unknown) => {
     fastify.log.error({ err }, "mcp: initial load failed");
   });
@@ -467,22 +467,20 @@ export async function buildServer(): Promise<FastifyInstance> {
 }
 
 async function start(): Promise<void> {
-  // Ensure the workspace + workbench data dirs exist before anything
+  // Ensure the workspace + forge data dirs exist before anything
   // tries to write under them. mkdir(recursive:true) is a no-op on an
   // existing dir, so this is safe to run on every boot. We do NOT
   // create PI_CONFIG_DIR — that's the SDK's territory and the SDK
   // creates it itself on first auth/models read.
-  for (const dir of [config.workspacePath, config.workbenchDataDir]) {
+  for (const dir of [config.workspacePath, config.forgeDataDir]) {
     try {
       await mkdir(dir, { recursive: true });
     } catch (err) {
       // EACCES on `/workspace` (the legacy default) was the most common
       // dev startup failure. Surface a clear hint instead of letting
       // Fastify start in a broken state.
-      console.error(`[pi-workbench] failed to create directory ${dir}:`, (err as Error).message);
-      console.error(
-        `[pi-workbench] hint: set WORKSPACE_PATH/WORKBENCH_DATA_DIR to a writable location`,
-      );
+      console.error(`[pi-forge] failed to create directory ${dir}:`, (err as Error).message);
+      console.error(`[pi-forge] hint: set WORKSPACE_PATH/FORGE_DATA_DIR to a writable location`);
       process.exit(1);
     }
   }
@@ -495,7 +493,7 @@ async function start(): Promise<void> {
   logSecretHygieneState();
   try {
     await fastify.listen({ port: config.port, host: config.host });
-    fastify.log.info(`pi-workbench server listening on :${config.port}`);
+    fastify.log.info(`pi-forge server listening on :${config.port}`);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

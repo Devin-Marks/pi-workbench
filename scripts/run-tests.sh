@@ -2,7 +2,7 @@
 #
 # Run the integration test scripts under tests/test-*.ts sequentially.
 #
-# pi-workbench has no test framework — each script under tests/ boots
+# pi-forge has no test framework — each script under tests/ boots
 # the server (or imports the registry directly), drives it, and prints
 # PASS/FAIL per assertion. This script is what `npm run test` and
 # `npm run test:ci` invoke; it loops the scripts in lexical order,

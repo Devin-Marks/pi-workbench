@@ -49,7 +49,7 @@ export const EMPTY_STATUS: McpServerStatus[] = [];
  * Lifecycle: `startPolling()` is idempotent — called once from
  * App.tsx after auth. The interval is cleared on `stopPolling()`
  * (logout / unmount). Polling skips when `document.hidden` is true
- * so a backgrounded tab doesn't keep the workbench warm.
+ * so a backgrounded tab doesn't keep the pi-forge warm.
  */
 
 interface ProjectScopeData {

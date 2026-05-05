@@ -3,7 +3,7 @@ import { api, ApiError, type SessionSummary, type UnifiedSession } from "../lib/
 import { streamSSE } from "../lib/sse-client";
 import { postCrossTab, subscribeCrossTab } from "../lib/cross-tab";
 
-const ACTIVE_SESSION_KEY = "pi-workbench/active-session-id";
+const ACTIVE_SESSION_KEY = "pi-forge/active-session-id";
 
 /**
  * Stable empty constants for Zustand selectors. React 18's useSyncExternalStore
@@ -988,11 +988,11 @@ function summarizeToolInput(name: string, input: Record<string, unknown>): strin
 // module doesn't accumulate listeners. Same pattern auth-store uses
 // for its onUnauthorized handler.
 declare global {
-  var __piWorkbenchSessionCrossTabRegistered: boolean | undefined;
-  var __piWorkbenchSessionCrossTabCleanup: (() => void) | undefined;
+  var __piForgeSessionCrossTabRegistered: boolean | undefined;
+  var __piForgeSessionCrossTabCleanup: (() => void) | undefined;
 }
-if (!globalThis.__piWorkbenchSessionCrossTabRegistered) {
-  globalThis.__piWorkbenchSessionCrossTabCleanup = subscribeCrossTab((msg) => {
+if (!globalThis.__piForgeSessionCrossTabRegistered) {
+  globalThis.__piForgeSessionCrossTabCleanup = subscribeCrossTab((msg) => {
     if (msg.type === "session_created") {
       // Insert the new session into this tab's local list. Idempotent
       // — if we already know about it (race with our own next refetch),
@@ -1054,15 +1054,15 @@ if (!globalThis.__piWorkbenchSessionCrossTabRegistered) {
       return;
     }
   });
-  globalThis.__piWorkbenchSessionCrossTabRegistered = true;
+  globalThis.__piForgeSessionCrossTabRegistered = true;
 }
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    if (globalThis.__piWorkbenchSessionCrossTabCleanup) {
-      globalThis.__piWorkbenchSessionCrossTabCleanup();
+    if (globalThis.__piForgeSessionCrossTabCleanup) {
+      globalThis.__piForgeSessionCrossTabCleanup();
     }
-    globalThis.__piWorkbenchSessionCrossTabRegistered = false;
-    globalThis.__piWorkbenchSessionCrossTabCleanup = undefined;
+    globalThis.__piForgeSessionCrossTabRegistered = false;
+    globalThis.__piForgeSessionCrossTabCleanup = undefined;
   });
 }

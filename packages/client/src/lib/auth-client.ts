@@ -1,6 +1,6 @@
-const TOKEN_KEY = "pi-workbench/auth-token";
-const EXPIRES_KEY = "pi-workbench/auth-expires-at";
-const MUST_CHANGE_KEY = "pi-workbench/auth-must-change-password";
+const TOKEN_KEY = "pi-forge/auth-token";
+const EXPIRES_KEY = "pi-forge/auth-expires-at";
+const MUST_CHANGE_KEY = "pi-forge/auth-must-change-password";
 
 export interface StoredToken {
   token: string;

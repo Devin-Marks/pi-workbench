@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 #
-# Multi-stage Dockerfile for pi-workbench.
+# Multi-stage Dockerfile for pi-forge.
 #
 #   builder  → install deps, compile server TS, build Vite client
 #   runtime  → minimal node:22-bookworm-slim with the compiled output
@@ -48,13 +48,13 @@ RUN npm run build
 FROM node:22-bookworm-slim AS runtime
 
 # `tini` for proper PID-1 signal handling (Ctrl-C → SIGTERM → graceful
-# shutdown of pi-workbench's onClose hook). Without it, dropped SIGTERMs
+# shutdown of pi-forge's onClose hook). Without it, dropped SIGTERMs
 # leave SSE clients hanging on `docker compose down`.
 #
 # PUID/PGID build args let the user match the container's `pi` user to
 # their host UID/GID. Default 1000 is the common Linux interactive UID.
 # Without this, the system-allocated UID won't match the host owner of
-# the bind-mounted /workspace + ~/.pi-workbench dirs, and the container
+# the bind-mounted /workspace + ~/.pi-forge dirs, and the container
 # can't write to them. Override at build time:
 #   docker compose build --build-arg PUID=$(id -u) --build-arg PGID=$(id -g)
 ARG PUID=1000
@@ -103,11 +103,11 @@ COPY --from=builder --chown=pi:pi /app/packages/server/dist ./packages/server/di
 COPY --from=builder --chown=pi:pi /app/packages/client/package.json ./packages/client/package.json
 COPY --from=builder --chown=pi:pi /app/packages/client/dist ./packages/client/dist
 
-# Workspace + pi config + workbench data dirs are mounted at runtime;
+# Workspace + pi config + pi-forge data dirs are mounted at runtime;
 # create them so non-root `pi` can read them on first start even if the
 # host bind is currently empty.
-RUN mkdir -p /workspace /home/pi/.pi/agent /home/pi/.pi-workbench \
- && chown -R pi:pi /workspace /home/pi/.pi /home/pi/.pi-workbench
+RUN mkdir -p /workspace /home/pi/.pi/agent /home/pi/.pi-forge \
+ && chown -R pi:pi /workspace /home/pi/.pi /home/pi/.pi-forge
 
 USER pi
 
@@ -119,7 +119,7 @@ ENV NODE_ENV=production \
     PORT=3000 \
     WORKSPACE_PATH=/workspace \
     PI_CONFIG_DIR=/home/pi/.pi/agent \
-    WORKBENCH_DATA_DIR=/home/pi/.pi-workbench \
+    FORGE_DATA_DIR=/home/pi/.pi-forge \
     SHELL=/bin/bash \
     TERM=xterm-256color
 

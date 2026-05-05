@@ -118,9 +118,9 @@ function flattenTree(node: TreeNode): string[] {
 }
 
 async function main(): Promise<void> {
-  const workspacePath = await mkdtemp(join(tmpdir(), "pi-workbench-ws-"));
-  const configDir = await mkdtemp(join(tmpdir(), "pi-workbench-cfg-"));
-  const dataDir = await mkdtemp(join(tmpdir(), "pi-workbench-data-"));
+  const workspacePath = await mkdtemp(join(tmpdir(), "pi-forge-ws-"));
+  const configDir = await mkdtemp(join(tmpdir(), "pi-forge-cfg-"));
+  const dataDir = await mkdtemp(join(tmpdir(), "pi-forge-data-"));
   const projectPath = join(workspacePath, "demo");
   await mkdir(projectPath, { recursive: true });
   // Seed a project tree with the noisy dirs the route should skip.
@@ -149,7 +149,7 @@ async function main(): Promise<void> {
       NODE_ENV: "test",
       WORKSPACE_PATH: workspacePath,
       PI_CONFIG_DIR: configDir,
-      WORKBENCH_DATA_DIR: dataDir,
+      FORGE_DATA_DIR: dataDir,
       SESSION_DIR: join(workspacePath, ".pi", "sessions"),
       API_KEY: apiKey,
       UI_PASSWORD: undefined,
