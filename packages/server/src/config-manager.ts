@@ -480,7 +480,7 @@ export class SkillNotFoundError extends Error {
  *   one-arg form) writes to pi's `settings.skills` — the canonical
  *   global enable/disable list.
  * - `scope: "project"` writes to the workbench-private overrides
- *   file at `${WORKBENCH_DATA_DIR}/skills-overrides.json` for the
+ *   file at `${FORGE_DATA_DIR}/skills-overrides.json` for the
  *   given `projectId`. Tri-state: `enabled` / `disabled` /
  *   (passing `enabled: undefined` clears the override = inherit
  *   from global).

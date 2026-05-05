@@ -29,6 +29,7 @@ import { disposeAll as disposeAllMcp, loadGlobal as loadGlobalMcp } from "./mcp/
 import { disposeAllSessions } from "./session-registry.js";
 import { disposeAllPtys, installPtyExitHandler } from "./pty-manager.js";
 import { logSecretHygieneState } from "./agent-resource-loader.js";
+import { migrateLegacyDataDir } from "./data-dir-migration.js";
 
 /**
  * Per-route auth metadata. Routes that should skip the auth preHandler set
@@ -221,7 +222,7 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   await fastify.register(swagger, {
     openapi: {
-      info: { title: "pi-workbench API", version: "1.0.0" },
+      info: { title: "pi-forge API", version: "1.0.0" },
       components: {
         securitySchemes: {
           bearerAuth: { type: "http", scheme: "bearer" },
@@ -233,7 +234,7 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   // Bootstrap script injected into the swagger UI page. Resolves an
   // auth token in priority order — URL ?token=, then sessionStorage
-  // (set by an earlier visit), then localStorage["pi-workbench/auth-
+  // (set by an earlier visit), then localStorage["pi-forge/auth-
   // token"] (the JWT the main UI persisted on login). Same-origin so
   // the localStorage read is allowed. Then patches fetch() to attach
   // the token as a Bearer header on every call swagger UI makes to
@@ -251,13 +252,13 @@ export async function buildServer(): Promise<FastifyInstance> {
       var url = new URL(window.location.href);
       var qpToken = url.searchParams.get("token");
       if (qpToken && qpToken.length > 0) {
-        sessionStorage.setItem("pi-workbench/docs-token", qpToken);
+        sessionStorage.setItem("pi-forge/docs-token", qpToken);
         url.searchParams.delete("token");
         window.history.replaceState({}, document.title, url.toString());
       }
       var token =
-        sessionStorage.getItem("pi-workbench/docs-token") ||
-        localStorage.getItem("pi-workbench/auth-token");
+        sessionStorage.getItem("pi-forge/docs-token") ||
+        localStorage.getItem("pi-forge/auth-token");
       if (token && window.fetch) {
         var origFetch = window.fetch.bind(window);
         window.fetch = function (input, init) {
@@ -273,7 +274,7 @@ export async function buildServer(): Promise<FastifyInstance> {
         };
       }
     } catch (err) {
-      console.warn("pi-workbench docs auth bootstrap failed:", err);
+      console.warn("pi-forge docs auth bootstrap failed:", err);
     }
   })();`;
 
@@ -281,7 +282,7 @@ export async function buildServer(): Promise<FastifyInstance> {
     routePrefix: "/api/docs",
     uiConfig: { docExpansion: "list", persistAuthorization: true },
     theme: {
-      js: [{ filename: "pi-workbench-auth.js", content: swaggerThemeJs }],
+      js: [{ filename: "pi-forge-auth.js", content: swaggerThemeJs }],
     },
   });
 
@@ -467,22 +468,37 @@ export async function buildServer(): Promise<FastifyInstance> {
 }
 
 async function start(): Promise<void> {
-  // Ensure the workspace + workbench data dirs exist before anything
+  // v1.0.x → v1.1.0 one-shot: rename ~/.pi-workbench/ → ~/.pi-forge/
+  // before anything reads from the data dir. Idempotent; no-op on
+  // fresh installs and on subsequent boots once the rename is done.
+  // Uses the bare console here because Fastify's logger isn't built
+  // until later in start(); failure to migrate is fatal — operators
+  // need the loud signal, not a buried log line.
+  try {
+    await migrateLegacyDataDir({
+      info: (obj, msg) => console.log(`[pi-forge] ${msg ?? "info"}`, JSON.stringify(obj)),
+      warn: (obj, msg) => console.warn(`[pi-forge] ${msg ?? "warn"}`, JSON.stringify(obj)),
+    });
+  } catch (err) {
+    console.error(`[pi-forge] data dir migration failed:`, (err as Error).message);
+    console.error(`[pi-forge] hint: move ~/.pi-workbench → ~/.pi-forge manually, then restart`);
+    process.exit(1);
+  }
+
+  // Ensure the workspace + forge data dirs exist before anything
   // tries to write under them. mkdir(recursive:true) is a no-op on an
   // existing dir, so this is safe to run on every boot. We do NOT
   // create PI_CONFIG_DIR — that's the SDK's territory and the SDK
   // creates it itself on first auth/models read.
-  for (const dir of [config.workspacePath, config.workbenchDataDir]) {
+  for (const dir of [config.workspacePath, config.forgeDataDir]) {
     try {
       await mkdir(dir, { recursive: true });
     } catch (err) {
       // EACCES on `/workspace` (the legacy default) was the most common
       // dev startup failure. Surface a clear hint instead of letting
       // Fastify start in a broken state.
-      console.error(`[pi-workbench] failed to create directory ${dir}:`, (err as Error).message);
-      console.error(
-        `[pi-workbench] hint: set WORKSPACE_PATH/WORKBENCH_DATA_DIR to a writable location`,
-      );
+      console.error(`[pi-forge] failed to create directory ${dir}:`, (err as Error).message);
+      console.error(`[pi-forge] hint: set WORKSPACE_PATH/FORGE_DATA_DIR to a writable location`);
       process.exit(1);
     }
   }
@@ -495,7 +511,7 @@ async function start(): Promise<void> {
   logSecretHygieneState();
   try {
     await fastify.listen({ port: config.port, host: config.host });
-    fastify.log.info(`pi-workbench server listening on :${config.port}`);
+    fastify.log.info(`pi-forge server listening on :${config.port}`);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

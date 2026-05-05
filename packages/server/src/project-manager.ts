@@ -25,12 +25,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * One-time migration of the legacy `projects.json` location. Up through the
- * Phase-9 wrap-up, pi-workbench wrote its project registry into
+ * Phase-9 wrap-up, this project wrote its project registry into
  * `${PI_CONFIG_DIR}/projects.json` (mixing our state into the pi SDK's
  * config dir). We now own a dedicated dir; if a user is upgrading and
  * already has the legacy file, move it on first read so they don't lose
  * their projects. Idempotent: only fires when the new path is missing
  * AND the legacy path exists.
+ *
+ * Note: a SEPARATE migration runs at server boot in index.ts that
+ * renames the entire legacy `~/.pi-workbench/` data dir to `~/.pi-forge/`
+ * (the v1.1.0 rename). That happens BEFORE this function's first call,
+ * so by the time we get here, `config.forgeDataDir` is already correct
+ * and any `projects.json` that lived at the old data-dir location has
+ * already moved.
  */
 let legacyMigrationDone = false;
 let migrationInflight: Promise<void> | undefined;
@@ -44,12 +51,12 @@ async function migrateLegacyProjectsFile(): Promise<void> {
   // up as a 500 to one of the two requests.
   if (migrationInflight !== undefined) return migrationInflight;
   migrationInflight = (async () => {
-    if (config.workbenchDataDir === config.piConfigDir) {
+    if (config.forgeDataDir === config.piConfigDir) {
       legacyMigrationDone = true;
       return;
     }
     const legacy = join(config.piConfigDir, "projects.json");
-    const target = join(config.workbenchDataDir, "projects.json");
+    const target = join(config.forgeDataDir, "projects.json");
     const [legacyStat, targetStat] = await Promise.all([
       stat(legacy).catch(() => undefined),
       stat(target).catch(() => undefined),
@@ -63,7 +70,7 @@ async function migrateLegacyProjectsFile(): Promise<void> {
     // Only mark done once the rename actually succeeds — if mkdir or
     // rename throws (cross-filesystem move, permissions), the next
     // readProjects() will retry rather than silently giving up.
-    await mkdir(config.workbenchDataDir, { recursive: true });
+    await mkdir(config.forgeDataDir, { recursive: true });
     try {
       await rename(legacy, target);
     } catch (err) {
@@ -135,7 +142,7 @@ export class DuplicatePathError extends Error {
   }
 }
 
-const PROJECTS_FILE = (): string => join(config.workbenchDataDir, "projects.json");
+const PROJECTS_FILE = (): string => join(config.forgeDataDir, "projects.json");
 
 /** True iff `target` is the same path as `root` or strictly inside it. */
 export function isInsideWorkspace(target: string, root: string = config.workspacePath): boolean {
@@ -148,7 +155,7 @@ export function isInsideWorkspace(target: string, root: string = config.workspac
 
 async function ensureConfigDir(): Promise<void> {
   await migrateLegacyProjectsFile();
-  await mkdir(config.workbenchDataDir, { recursive: true });
+  await mkdir(config.forgeDataDir, { recursive: true });
 }
 
 /**
@@ -241,7 +248,7 @@ export async function createProject(name: string, path: string): Promise<Project
   const lexicalPath = resolve(path);
   // Realpath both sides before the inside-workspace check. The lexical
   // check alone accepts a symlink under WORKSPACE_PATH that points
-  // OUTSIDE the realpath bound — e.g. `~/.pi-workbench/workspace/external
+  // OUTSIDE the realpath bound — e.g. `~/.pi-forge/workspace/external
   // -> /etc` — and registers `/external` (the symlink target) as a
   // legitimate project root. Subsequent file-manager ops would then
   // realpath-bound to the symlink target, NOT to WORKSPACE_PATH.

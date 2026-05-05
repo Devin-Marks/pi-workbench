@@ -6,7 +6,7 @@ import { config } from "./config.js";
 
 /**
  * Workbench-private per-project skill overrides at
- * `${WORKBENCH_DATA_DIR}/skills-overrides.json`. Each project keeps a
+ * `${FORGE_DATA_DIR}/skills-overrides.json`. Each project keeps a
  * tri-state position on every skill: enabled / disabled / inherit
  * (the absent case). The effective skills list a session sees is
  * `(global ∪ project.enabled) − project.disabled`.

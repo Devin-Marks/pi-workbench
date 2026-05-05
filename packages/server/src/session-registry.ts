@@ -148,7 +148,7 @@ export const BUILTIN_TOOL_NAMES: readonly string[] = [
 /**
  * Build the `tools` allowlist passed to `createAgentSession` for this
  * session, applying both global and per-project overrides from
- * `${WORKBENCH_DATA_DIR}/tool-overrides.json`. Allow-by-default: a
+ * `${FORGE_DATA_DIR}/tool-overrides.json`. Allow-by-default: a
  * tool is enabled unless either the global disabled set OR the
  * project's tri-state override says otherwise (project explicit
  * enable / disable wins; absent = inherit global).
@@ -1087,7 +1087,7 @@ async function buildSessionSettingsManager(
  * Resolve the `customTools` array passed to `createAgentSession`.
  *
  * Returns the union of every connected, enabled MCP server's tools —
- * global servers (from ${WORKBENCH_DATA_DIR}/mcp.json) plus the
+ * global servers (from ${FORGE_DATA_DIR}/mcp.json) plus the
  * project-scoped servers (from <projectPath>/.mcp.json), with
  * project entries winning on name collisions.
  *

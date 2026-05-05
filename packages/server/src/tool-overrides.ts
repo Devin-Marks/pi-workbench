@@ -1,6 +1,6 @@
 /**
  * Workbench-private per-tool overrides at
- * `${WORKBENCH_DATA_DIR}/tool-overrides.json`.
+ * `${FORGE_DATA_DIR}/tool-overrides.json`.
  *
  * Two layers, both allow-by-default:
  *

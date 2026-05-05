@@ -24,7 +24,7 @@ interface ClosableTransport {
  * `customTools` array fed to `createAgentSession`.
  *
  * Scope:
- *  - "global": loaded from `${WORKBENCH_DATA_DIR}/mcp.json`. Available
+ *  - "global": loaded from `${FORGE_DATA_DIR}/mcp.json`. Available
  *    to every project's sessions.
  *  - "project:<projectId>": loaded from `<projectPath>/.mcp.json`.
  *    Only available to sessions in that project. Project servers OVER-
@@ -392,7 +392,7 @@ async function openStreamableHttp(
     url,
     headers !== undefined ? { requestInit: { headers } } : undefined,
   );
-  const client = new Client({ name: "pi-workbench", version: "1.0.0" }, { capabilities: {} });
+  const client = new Client({ name: "pi-forge", version: "1.0.0" }, { capabilities: {} });
   await client.connect(transport as unknown as SdkTransport);
   return { client, transport, resolvedTransport: "streamable-http" };
 }
@@ -422,7 +422,7 @@ async function openSse(
           } as unknown as EventSourceInit,
         })
       : new SSEClientTransport(url);
-  const client = new Client({ name: "pi-workbench", version: "1.0.0" }, { capabilities: {} });
+  const client = new Client({ name: "pi-forge", version: "1.0.0" }, { capabilities: {} });
   await client.connect(transport);
   return { client, transport, resolvedTransport: "sse" };
 }

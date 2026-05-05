@@ -459,7 +459,7 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
           "Toggle a skill's enabled state. Default scope=`global` mutates " +
           "pi's `settings.skills` (canonical enable/disable list shared with " +
           "the pi TUI). scope=`project` writes to the workbench-private " +
-          "overrides file at `${WORKBENCH_DATA_DIR}/skills-overrides.json` " +
+          "overrides file at `${FORGE_DATA_DIR}/skills-overrides.json` " +
           "for the project named in `?projectId=`. Project-scope overrides " +
           "follow tri-state semantics: `enabled` adds, `disabled` removes; " +
           "absence (cleared via DELETE) inherits from global. Skill changes " +
@@ -603,8 +603,8 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
         const ts = new Date().toISOString().replace(/[:.]/g, "-");
         reply
           .header("Content-Type", "application/gzip")
-          .header("Content-Disposition", `attachment; filename="pi-workbench-config-${ts}.tar.gz"`)
-          .header("X-Pi-Workbench-Files", files.join(","));
+          .header("Content-Disposition", `attachment; filename="pi-forge-config-${ts}.tar.gz"`)
+          .header("X-Pi-Forge-Files", files.join(","));
         return reply.send(stream);
       } catch (err) {
         return internalError(reply, err);
@@ -720,8 +720,8 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
         const ts = new Date().toISOString().replace(/[:.]/g, "-");
         reply
           .header("Content-Type", "application/gzip")
-          .header("Content-Disposition", `attachment; filename="pi-workbench-skills-${ts}.tar.gz"`)
-          .header("X-Pi-Workbench-File-Count", String(fileCount));
+          .header("Content-Disposition", `attachment; filename="pi-forge-skills-${ts}.tar.gz"`)
+          .header("X-Pi-Forge-File-Count", String(fileCount));
         return reply.send(stream);
       } catch (err) {
         return internalError(reply, err);
