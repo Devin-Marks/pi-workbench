@@ -15,6 +15,7 @@ import { useActiveProject, useProjectStore } from "../store/project-store";
 import { useUiConfigStore } from "../store/ui-config-store";
 import { EMPTY_STATUS, useMcpStore } from "../store/mcp-store";
 import { THEME_DEFS, useThemeStore, type ThemeId } from "../lib/theme";
+import { getStoredToken } from "../lib/auth-client";
 
 type Tab = "providers" | "agent" | "mcp" | "tools" | "skills" | "appearance" | "backup";
 
@@ -118,13 +119,37 @@ export function SettingsPanel({ onClose, initialTab }: Props) {
               </button>
             ))}
           </div>
-          <button
-            onClick={onClose}
-            className="rounded border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-500"
-            title="Close (Esc)"
-          >
-            Close
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                // Carry the user's current token over to the swagger
+                // UI page via a one-shot `?token=...` query param. The
+                // server-side bootstrap (see swaggerThemeJs in
+                // packages/server/src/index.ts) strips the token from
+                // the URL on load and re-presents it as a Bearer
+                // header on every API call from swagger UI. When auth
+                // is disabled the token is absent and the page loads
+                // unconditionally.
+                const stored = getStoredToken();
+                const url =
+                  stored !== undefined
+                    ? `/api/docs?token=${encodeURIComponent(stored.token)}`
+                    : "/api/docs";
+                window.open(url, "_blank", "noopener,noreferrer");
+              }}
+              className="rounded border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-500"
+              title="Open the OpenAPI / Swagger UI in a new tab. Carries your auth token automatically."
+            >
+              API Docs ↗
+            </button>
+            <button
+              onClick={onClose}
+              className="rounded border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-500"
+              title="Close (Esc)"
+            >
+              Close
+            </button>
+          </div>
         </header>
 
         {error !== undefined && (

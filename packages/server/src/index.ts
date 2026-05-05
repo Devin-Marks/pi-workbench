@@ -231,9 +231,53 @@ export async function buildServer(): Promise<FastifyInstance> {
     },
   });
 
+  // Bootstrap script injected into the swagger UI page. Three jobs:
+  //   1. Capture the `?token=...` from the URL on load and stash it in
+  //      sessionStorage (so it survives intra-page nav within swagger
+  //      UI but not other tabs).
+  //   2. Strip the token from the URL via history.replaceState the
+  //      moment the page mounts so it doesn't sit in the URL bar /
+  //      browser history.
+  //   3. Patch fetch() so every same-origin request swagger UI makes
+  //      to /api/v1/* carries the bearer header automatically. Means
+  //      the user doesn't have to copy-paste their JWT into the
+  //      swagger "Authorize" dialog after navigating from the UI.
+  // No-op when no token is in the URL (e.g. when auth is disabled).
+  const swaggerThemeJs = `(function () {
+    try {
+      var url = new URL(window.location.href);
+      var qpToken = url.searchParams.get("token");
+      if (qpToken && qpToken.length > 0) {
+        sessionStorage.setItem("pi-workbench/docs-token", qpToken);
+        url.searchParams.delete("token");
+        window.history.replaceState({}, document.title, url.toString());
+      }
+      var token = sessionStorage.getItem("pi-workbench/docs-token");
+      if (token && window.fetch) {
+        var origFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) {
+          init = init || {};
+          var url2 = typeof input === "string" ? input : input.url;
+          if (url2 && url2.indexOf("/api/v1/") !== -1) {
+            init.headers = new Headers(init.headers || {});
+            if (!init.headers.has("Authorization")) {
+              init.headers.set("Authorization", "Bearer " + token);
+            }
+          }
+          return origFetch(input, init);
+        };
+      }
+    } catch (err) {
+      console.warn("pi-workbench docs auth bootstrap failed:", err);
+    }
+  })();`;
+
   await fastify.register(swaggerUi, {
     routePrefix: "/api/docs",
-    uiConfig: { docExpansion: "list" },
+    uiConfig: { docExpansion: "list", persistAuthorization: true },
+    theme: {
+      js: [{ filename: "pi-workbench-auth.js", content: swaggerThemeJs }],
+    },
   });
 
   /**
@@ -264,7 +308,20 @@ export async function buildServer(): Promise<FastifyInstance> {
         return;
       }
       if (!authEnabled()) return;
-      const presented = extractBearer(req.headers.authorization);
+      // Browsers can't attach an Authorization header on top-level
+      // navigation, so the swagger UI page itself accepts a token
+      // from the `?token=<jwt-or-api-key>` query string as well.
+      // The injected swagger UI bootstrap (see swaggerThemeJs)
+      // strips the token from the URL via history.replaceState the
+      // moment the page loads and re-presents it via a Bearer header
+      // on every subsequent API call, so the token only appears in
+      // the URL bar for the initial GET.
+      const headerToken = extractBearer(req.headers.authorization);
+      const queryToken =
+        typeof (req.query as Record<string, unknown>).token === "string"
+          ? ((req.query as Record<string, string>).token ?? "")
+          : "";
+      const presented = headerToken ?? (queryToken.length > 0 ? queryToken : undefined);
       if (
         presented === undefined ||
         (verifyToken(presented) === undefined && !verifyApiKey(presented))
