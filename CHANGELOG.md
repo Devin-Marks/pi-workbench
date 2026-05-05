@@ -12,6 +12,49 @@ the README for the support window policy.
 
 ## [Unreleased]
 
+### Added
+
+- **Copy buttons on chat messages and code blocks.** Each user and
+  assistant message bubble now has a Copy icon next to the
+  raw/rendered toggle that copies the message text to the clipboard.
+  Fenced code blocks rendered by `ChatMarkdown` get an additional
+  hover-revealed Copy button in the top-right corner. Both fall back
+  to a synthetic textarea + `document.execCommand('copy')` when the
+  async clipboard API is unavailable (older Safari, insecure HTTP).
+- **Default model named in the model picker.** The "Use agent
+  default" row in the chat-input model dropdown now shows the
+  resolved provider/model from `settings.json` (e.g. `anthropic /
+  claude-sonnet-4-5 (default)` in the trigger label, monospace name
+  in the dropdown row). The picker now fetches `settings.json`
+  alongside the providers listing.
+- **`API Docs ↗` button in the Settings header.** Opens the
+  OpenAPI / Swagger UI in a new tab and carries the user's auth
+  token across via a one-shot `?token=...` query param. The server-
+  side bootstrap script strips the token from the URL on page load
+  and re-presents it as a Bearer header on every API call swagger
+  UI makes — so logged-in users can explore and exercise the API
+  surface without manually pasting their JWT into the swagger
+  Authorize dialog.
+
+### Changed
+
+- **Forked sessions get disambiguated names.** When a session is
+  forked from another, the new session's name is set to
+  `<source name> (clone)` (or `(clone)` if the source has no
+  explicit name). Subsequent forks within the same project bump the
+  suffix (`(clone) 2`, `(clone) 3`, …) so the sidebar doesn't show
+  multiple identically-named entries.
+
+### Fixed
+
+- **Text selection no longer bleeds across chat message bubbles.**
+  Selection in Safari (and other browsers) was extending past the
+  bubble's rounded border and across adjacent messages, making it
+  impossible to copy a single message cleanly. The chat message
+  list is now `user-select: none` and each `.message-bubble` re-
+  enables `user-select: text` with `isolation: isolate` so each
+  bubble is its own selection root.
+
 ## [1.0.2] — 2026-05-04
 
 ### Added
