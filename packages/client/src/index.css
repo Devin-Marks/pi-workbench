@@ -186,6 +186,27 @@
   color: var(--forge-text-primary);
 }
 
+/* The generic composer button rule above makes every button use the panel
+   surface. Palette rows are an interactive exception: a mouse hover and the
+   keyboard-selected row must use the separately configurable highlight pair.
+   Apply the text color to descendants too because their Tailwind text classes
+   otherwise override the button's inherited foreground under a server theme. */
+[data-server-theme="on"]
+  .forge-chat-input-root
+  .forge-palette-item[data-forge-palette-active="true"],
+[data-server-theme="on"] .forge-chat-input-root .forge-palette-item:not(:disabled):hover {
+  background-color: var(--forge-highlight-bg) !important;
+  color: var(--forge-highlight-text) !important;
+}
+
+[data-server-theme="on"]
+  .forge-chat-input-root
+  .forge-palette-item[data-forge-palette-active="true"]
+  *,
+[data-server-theme="on"] .forge-chat-input-root .forge-palette-item:not(:disabled):hover * {
+  color: var(--forge-highlight-text) !important;
+}
+
 [data-server-theme="on"] .message-bubble[data-message-role="user"] {
   background: var(--forge-user-bubble-bg);
   color: var(--forge-text-primary);
