@@ -221,8 +221,6 @@ function removeSessionFromState(current: SessionState, sessionId: string): Parti
   delete nextExtensionNotifications[sessionId];
   const nextStreamingText = { ...current.streamingTextBySession };
   delete nextStreamingText[sessionId];
-  const nextStreamingTimelinePosition = { ...current.streamingTimelinePositionBySession };
-  delete nextStreamingTimelinePosition[sessionId];
   const nextActiveTool = { ...current.activeToolBySession };
   delete nextActiveTool[sessionId];
   const nextToolCallGeneration = { ...current.toolCallGenerationBySession };
@@ -250,7 +248,6 @@ function removeSessionFromState(current: SessionState, sessionId: string): Parti
     bannerBySession: nextBanner,
     extensionNotificationsBySession: nextExtensionNotifications,
     streamingTextBySession: nextStreamingText,
-    streamingTimelinePositionBySession: nextStreamingTimelinePosition,
     activeToolBySession: nextActiveTool,
     toolCallGenerationBySession: nextToolCallGeneration,
     agentEndCountBySession: nextAgentEndCount,
@@ -307,8 +304,6 @@ interface SessionState {
    * messages array refetched by `getMessages` then carries the final text).
    */
   streamingTextBySession: Record<string, string>;
-  /** Receipt position for the live assistant entry currently in the chat. */
-  streamingTimelinePositionBySession: Record<string, ChatTimelinePosition | undefined>;
   /**
    * Per-session "agent is currently running tool X" indicator. Set on
    * tool_execution_start, cleared on tool_execution_end. The chat view
@@ -460,7 +455,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   bannerBySession: {},
   extensionNotificationsBySession: {},
   streamingTextBySession: {},
-  streamingTimelinePositionBySession: {},
   activeToolBySession: {},
   toolCallGenerationBySession: {},
   agentEndCountBySession: {},
@@ -990,13 +984,6 @@ function applyEvent(
         ...s.streamingBySession,
         [sessionId]: event.isStreaming ?? false,
       },
-      streamingTimelinePositionBySession: {
-        ...s.streamingTimelinePositionBySession,
-        [sessionId]:
-          event.isStreaming === true
-            ? (s.streamingTimelinePositionBySession[sessionId] ?? createChatTimelinePosition())
-            : undefined,
-      },
       bannerBySession: {
         ...s.bannerBySession,
         [sessionId]:
@@ -1022,10 +1009,6 @@ function applyEvent(
     set((s) => ({
       streamingBySession: { ...s.streamingBySession, [sessionId]: true },
       streamingTextBySession: { ...s.streamingTextBySession, [sessionId]: "" },
-      streamingTimelinePositionBySession: {
-        ...s.streamingTimelinePositionBySession,
-        [sessionId]: createChatTimelinePosition(),
-      },
       bannerBySession: { ...s.bannerBySession, [sessionId]: undefined },
       turnWriteCountBySession: { ...s.turnWriteCountBySession, [sessionId]: 0 },
       toolCallGenerationBySession: { ...s.toolCallGenerationBySession, [sessionId]: undefined },
@@ -1072,10 +1055,6 @@ function applyEvent(
             messagesBySession: { ...s.messagesBySession, [sessionId]: messages },
             streamingBySession: { ...s.streamingBySession, [sessionId]: false },
             streamingTextBySession: { ...s.streamingTextBySession, [sessionId]: "" },
-            streamingTimelinePositionBySession: {
-              ...s.streamingTimelinePositionBySession,
-              [sessionId]: undefined,
-            },
             activeToolBySession: { ...s.activeToolBySession, [sessionId]: undefined },
             toolCallGenerationBySession: {
               ...s.toolCallGenerationBySession,
@@ -1108,10 +1087,6 @@ function applyEvent(
         // disappears and the chat looks healthy when it isn't.
         set((s) => ({
           streamingBySession: { ...s.streamingBySession, [sessionId]: false },
-          streamingTimelinePositionBySession: {
-            ...s.streamingTimelinePositionBySession,
-            [sessionId]: undefined,
-          },
           activeToolBySession: { ...s.activeToolBySession, [sessionId]: undefined },
           toolCallGenerationBySession: { ...s.toolCallGenerationBySession, [sessionId]: undefined },
           bannerBySession: {
