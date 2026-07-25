@@ -138,7 +138,7 @@ export function ProjectSidebar({ className = "" }: ProjectSidebarProps = {}) {
 
   return (
     <aside
-      className={`flex h-full w-64 flex-col border-r border-neutral-800 bg-neutral-950 ${className}`}
+      className={`forge-project-sidebar flex h-full w-64 flex-col border-r border-neutral-800 bg-neutral-950 ${className}`}
       // Safe-area-aware top + bottom padding so the drawer chrome
       // (header, sessions list) doesn't slide under iPhone notches /
       // Android cutouts when the drawer is fullscreen-tall on
