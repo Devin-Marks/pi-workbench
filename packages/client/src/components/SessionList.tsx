@@ -5,7 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { ChevronDown, ChevronRight, X } from "lucide-react";
+import { ChevronDown, ChevronRight, LoaderCircle, X } from "lucide-react";
 import { EMPTY_SESSIONS, useSessionStore } from "../store/session-store";
 import { useProjectStore } from "../store/project-store";
 import { ConfirmDialog } from "./Modal";
@@ -27,6 +27,7 @@ export function SessionList({ projectId }: Props) {
   // for why we don't write `?? []` directly in Zustand selectors.
   const sessions = useSessionStore((s) => s.byProject[projectId] ?? EMPTY_SESSIONS);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const streamingBySession = useSessionStore((s) => s.streamingBySession);
   const loadSessionsForProject = useSessionStore((s) => s.loadSessionsForProject);
   const setActiveSession = useSessionStore((s) => s.setActiveSession);
   const disposeSession = useSessionStore((s) => s.disposeSession);
@@ -272,6 +273,7 @@ export function SessionList({ projectId }: Props) {
         key={s.sessionId}
         session={s}
         isActive={s.sessionId === activeSessionId}
+        isRunning={streamingBySession[s.sessionId] ?? false}
         isSelected={selectedIds.has(s.sessionId)}
         isRenaming={renamingId === s.sessionId}
         renameDraft={renameDraft}
@@ -355,6 +357,7 @@ const CLICK_TO_CONFIRM_MS = 3000;
 interface SessionRowProps {
   session: UnifiedSession;
   isActive: boolean;
+  isRunning: boolean;
   isSelected: boolean;
   isRenaming: boolean;
   renameDraft: string;
@@ -379,6 +382,7 @@ function SessionRow(props: SessionRowProps) {
   const {
     session: s,
     isActive,
+    isRunning,
     isSelected,
     isRenaming,
     renameDraft,
@@ -431,6 +435,15 @@ function SessionRow(props: SessionRowProps) {
         </button>
       ) : (
         <span className="inline-block h-4 w-4 shrink-0" aria-hidden="true" />
+      )}
+      {isRunning ? (
+        <LoaderCircle
+          size={12}
+          className="shrink-0 animate-spin text-cyan-400"
+          aria-label="Agent is working"
+        />
+      ) : (
+        <span className="inline-block h-3 w-3 shrink-0" aria-hidden="true" />
       )}
       {isRenaming ? (
         <input
