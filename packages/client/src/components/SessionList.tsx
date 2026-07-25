@@ -28,6 +28,7 @@ export function SessionList({ projectId }: Props) {
   const sessions = useSessionStore((s) => s.byProject[projectId] ?? EMPTY_SESSIONS);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const streamingBySession = useSessionStore((s) => s.streamingBySession);
+  const unreadResponseBySession = useSessionStore((s) => s.unreadResponseBySession);
   const loadSessionsForProject = useSessionStore((s) => s.loadSessionsForProject);
   const setActiveSession = useSessionStore((s) => s.setActiveSession);
   const disposeSession = useSessionStore((s) => s.disposeSession);
@@ -274,6 +275,7 @@ export function SessionList({ projectId }: Props) {
         session={s}
         isActive={s.sessionId === activeSessionId}
         isRunning={streamingBySession[s.sessionId] ?? false}
+        hasUnreadResponse={unreadResponseBySession[s.sessionId] ?? false}
         isSelected={selectedIds.has(s.sessionId)}
         isRenaming={renamingId === s.sessionId}
         renameDraft={renameDraft}
@@ -358,6 +360,7 @@ interface SessionRowProps {
   session: UnifiedSession;
   isActive: boolean;
   isRunning: boolean;
+  hasUnreadResponse: boolean;
   isSelected: boolean;
   isRenaming: boolean;
   renameDraft: string;
@@ -383,6 +386,7 @@ function SessionRow(props: SessionRowProps) {
     session: s,
     isActive,
     isRunning,
+    hasUnreadResponse,
     isSelected,
     isRenaming,
     renameDraft,
@@ -441,6 +445,13 @@ function SessionRow(props: SessionRowProps) {
           size={12}
           className="shrink-0 animate-spin text-cyan-400"
           aria-label="Agent is working"
+        />
+      ) : hasUnreadResponse ? (
+        <span
+          className="forge-session-unread h-2 w-2 shrink-0 rounded-full bg-amber-400"
+          role="status"
+          aria-label="New response"
+          title="New response"
         />
       ) : (
         <span className="inline-block h-3 w-3 shrink-0" aria-hidden="true" />

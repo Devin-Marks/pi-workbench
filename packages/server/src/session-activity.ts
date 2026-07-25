@@ -2,6 +2,7 @@ export interface SessionActivity {
   sessionId: string;
   projectId: string;
   running: boolean;
+  reason?: "completed" | "disposed" | undefined;
 }
 
 type Listener = (activity: SessionActivity) => void;

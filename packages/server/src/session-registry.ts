@@ -191,8 +191,12 @@ export function listRunningSessionActivity(): SessionActivity[] {
     .map((live) => ({ sessionId: live.sessionId, projectId: live.projectId, running: true }));
 }
 
-function publishActivity(live: LiveSession, running: boolean): void {
-  publishSessionActivity({ sessionId: live.sessionId, projectId: live.projectId, running });
+function publishActivity(
+  live: LiveSession,
+  running: boolean,
+  reason?: "completed" | "disposed",
+): void {
+  publishSessionActivity({ sessionId: live.sessionId, projectId: live.projectId, running, reason });
 }
 
 /**
@@ -489,7 +493,7 @@ function makeSubscribeHandler(live: LiveSession): () => void {
     // `agent_end` with no detail, the chat UI hides its spinner with
     // no error banner, and the user sees an empty assistant message.
     if (e.type === "agent_end") {
-      publishActivity(live, false);
+      publishActivity(live, false, "completed");
       // Primary: session-level `errorMessage` — the SDK's
       // documented authoritative field. Most failure modes set
       // this (auth failures, validation, etc.).
@@ -1239,7 +1243,7 @@ export async function disposeSession(sessionId: string): Promise<boolean> {
     // because we await it last.
     await processManager.disposeSession(sessionId).catch(() => undefined);
   } finally {
-    publishActivity(live, false);
+    publishActivity(live, false, "disposed");
     registry.delete(sessionId);
     // Tombstone the id so a polling SSE client can't re-resume the
     // session before deleteColdSession's file unlink runs. The
