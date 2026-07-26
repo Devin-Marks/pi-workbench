@@ -72,6 +72,7 @@ route handlers).
 | `webhooks.json` | Webhook configs (HMAC secrets stored here — mode 0600) | `webhooks/store.ts` |
 | `webhook-deliveries.json` | Rolling delivery history (cap 100 / webhook) | `webhooks/store.ts` |
 | `session-orchestration.json` | Supervisor opt-in + supervisor↔worker links (mode 0600) | `orchestration/store.ts` |
+| `session-index.json` | Versioned, rebuildable per-project JSONL session-discovery cache | `session-index.ts` |
 | `orchestrator-inbox.json` | Per-supervisor pending event queue (cap 200 / supervisor) | `orchestration/store.ts` |
 | `jwt-secret` | Auto-generated HS256 signing key (mode 0600) | `config.ts` (`loadOrGenerateJwtSecret`) |
 | `password-hash` | scrypt hash of the user's persisted password (mode 0600) | `auth.ts` (`persistPassword`) |
