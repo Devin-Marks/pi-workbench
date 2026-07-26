@@ -62,6 +62,8 @@ interface ProjectCache {
   lastReconciledAt: number;
   footprint: Map<string, string>;
   watchers: FSWatcher[];
+  /** Persisted records omit previews, so the first sidebar read rebuilds them. */
+  needsPreviewHydration: boolean;
 }
 
 const projects = new Map<string, ProjectCache>();
@@ -328,6 +330,7 @@ async function cacheProject(
     lastReconciledAt: Date.now(),
     footprint: currentFootprint,
     watchers: [],
+    needsPreviewHydration: true,
   };
   installWatchers(cache);
   projects.set(projectId, cache);
@@ -353,6 +356,7 @@ async function rebuildProject(
         ...sessions.map((session) => session.path),
       ]),
       watchers: [],
+      needsPreviewHydration: false,
     };
     const previous = projects.get(projectId);
     if (previous !== undefined) {
@@ -380,7 +384,7 @@ export async function getIndexedProjectSessions(
   const cache = await cacheProject(projectId, workspacePath, sessionDir);
   if (cache !== undefined) {
     await reconcile(cache);
-    if (!cache.dirty) return cache.sessions;
+    if (!cache.dirty && !cache.needsPreviewHydration) return cache.sessions;
   }
   return rebuildProject(projectId, workspacePath, sessionDir, discover);
 }

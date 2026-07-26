@@ -86,7 +86,7 @@ async function main(): Promise<void> {
     const stored = persisted.projects?.[projectId]?.sessions?.[0];
     assert(
       "versioned index persists sidebar and location fields",
-      persisted.version === 1 &&
+      persisted.version === 2 &&
         stored?.parentSessionId === record.parentSessionId &&
         stored?.runId === record.runId &&
         stored?.externalState === record.externalState &&
