@@ -109,7 +109,7 @@ export function FileBrowserPanel() {
 
   useEffect(() => {
     if (project !== undefined) void loadTree(project.id);
-  }, [project?.id, showExcludedTreeEntries, loadTree]);
+  }, [project, showExcludedTreeEntries, loadTree]);
 
   if (project === undefined) {
     return (
