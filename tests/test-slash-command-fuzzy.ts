@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import {
   completeSlashCommand,
   fuzzyFilterSlashCommands,
@@ -42,9 +44,45 @@ assert(
   "returns no match when all query characters are unavailable",
   fuzzyFilterSlashCommands(commands, "xyz").length === 0,
 );
+assert("completion appends a trailing space", completeSlashCommand("/compact") === "/compact ");
+
+const chatInputSource = await readFile(
+  new URL("../packages/client/src/components/ChatInput.tsx", import.meta.url),
+  "utf8",
+);
+const plainTabHandler = chatInputSource.match(
+  /if \(e\.key === "Tab" && !e\.metaKey && !e\.ctrlKey && !e\.shiftKey && !e\.altKey\) \{\s*e\.preventDefault\(\);\s*slashCompleteSelected\(\);\s*return;\s*\}/s,
+)?.[0];
+
 assert(
-  "completion appends a trailing space without dispatching",
-  completeSlashCommand("/compact") === "/compact ",
+  "plain Tab completes and never dispatches the selected command",
+  plainTabHandler !== undefined && !plainTabHandler.includes("slashRunSelected"),
+);
+assert(
+  "completion restores the caret after the trailing space",
+  /const slashCompleteSelected = \(\): void => \{[\s\S]*?setSelectionRange\(insert\.length, insert\.length\);/.test(
+    chatInputSource,
+  ),
+);
+assert(
+  "Enter retains selected-command dispatch semantics",
+  /if \(e\.key === "Enter"\) \{[\s\S]*?slashRunSelected\(\);/.test(chatInputSource),
+);
+assert(
+  "palette clicks retain indexed command dispatch semantics",
+  chatInputSource.includes("slashRunSelected(i);"),
+);
+assert(
+  "completion guards unavailable or removed selected commands",
+  /const cmd = slashFiltered\[slashSelectedIdx\];\s*if \(cmd === undefined \|\| !cmd\.available\) return;/.test(
+    chatInputSource,
+  ),
+);
+assert(
+  "query changes reset selection and catalog changes clamp it to a valid index",
+  /useEffect\(\(\) => \{\s*setSlashSelectedIdx\(0\);\s*\}, \[slashQuery\]\);[\s\S]*?setSlashSelectedIdx\(\(idx\) => Math\.min\(idx, Math\.max\(slashFiltered\.length - 1, 0\)\)\);/.test(
+    chatInputSource,
+  ),
 );
 
 if (failures > 0) {
