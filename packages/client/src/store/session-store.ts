@@ -2,6 +2,16 @@ import { create } from "zustand";
 import { api, ApiError, type SessionSummary, type UnifiedSession } from "../lib/api-client";
 import { streamSSE } from "../lib/sse-client";
 import { extractToolCallGeneration, type ToolCallGeneration } from "../lib/tool-call-streaming";
+
+type SessionActivityEvent =
+  | { type: "session_activity_snapshot"; running: { sessionId: string }[] }
+  | {
+      type: "session_activity_changed";
+      sessionId: string;
+      projectId: string;
+      running: boolean;
+      reason?: "completed" | "disposed";
+    };
 import { postCrossTab, subscribeCrossTab } from "../lib/cross-tab";
 import { useAskUserQuestionStore, type PendingAskQuestion } from "./ask-user-question-store";
 import { useTodoStore, type Task as TodoTaskShape } from "./todo-store";
@@ -66,6 +76,7 @@ const refetchState = new Map<string, RefetchState>();
  * through `set()`.
  */
 const controllers = new Map<string, AbortController>();
+let activityController: AbortController | undefined;
 
 /**
  * Phase 8 keeps the message type loose — pi's AgentMessage union is rich
@@ -188,6 +199,8 @@ function removeSessionFromState(current: SessionState, sessionId: string): Parti
   delete nextMessages[sessionId];
   const nextStreaming = { ...current.streamingBySession };
   delete nextStreaming[sessionId];
+  const nextUnreadResponse = { ...current.unreadResponseBySession };
+  delete nextUnreadResponse[sessionId];
   const nextBanner = { ...current.bannerBySession };
   delete nextBanner[sessionId];
   const nextStreamingText = { ...current.streamingTextBySession };
@@ -213,6 +226,7 @@ function removeSessionFromState(current: SessionState, sessionId: string): Parti
   return {
     messagesBySession: nextMessages,
     streamingBySession: nextStreaming,
+    unreadResponseBySession: nextUnreadResponse,
     bannerBySession: nextBanner,
     streamingTextBySession: nextStreamingText,
     activeToolBySession: nextActiveTool,
@@ -254,6 +268,8 @@ interface SessionState {
   pendingDraftBySession: Record<string, string>;
   /** Per-session streaming state from snapshot/agent_start/agent_end. */
   streamingBySession: Record<string, boolean>;
+  /** Completed responses in chats that have not been selected since completion. */
+  unreadResponseBySession: Record<string, boolean>;
   /** Per-session last-known toolEvent + retry banners (lightly modelled). */
   bannerBySession: Record<string, string | undefined>;
   /**
@@ -334,6 +350,9 @@ interface SessionState {
   setActiveSession: (sessionId: string | undefined) => void;
   openStream: (sessionId: string) => void;
   closeStream: (sessionId: string) => void;
+  /** Opens the single global sidebar activity stream. */
+  openActivityStream: () => void;
+  closeActivityStream: () => void;
   /**
    * Force a one-shot messages refetch for a session, independent of
    * the SSE event loop. Used after operations that change the
@@ -388,6 +407,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   compactionsBySession: {},
   pendingDraftBySession: {},
   streamingBySession: {},
+  unreadResponseBySession: {},
   bannerBySession: {},
   streamingTextBySession: {},
   activeToolBySession: {},
@@ -416,6 +436,46 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         error: err instanceof ApiError ? err.code : (err as Error).message,
       });
     }
+  },
+
+  openActivityStream: () => {
+    if (activityController !== undefined) return;
+    const ctrl = new AbortController();
+    activityController = ctrl;
+    void streamSSE<SessionActivityEvent>("/api/v1/session-activity/stream", {
+      signal: ctrl.signal,
+      onEvent: (event) => {
+        if (event.type === "session_activity_snapshot") {
+          set((s) => {
+            const next: Record<string, boolean> = Object.fromEntries(
+              Object.keys(s.streamingBySession).map((id) => [id, false]),
+            );
+            for (const entry of event.running) next[entry.sessionId] = true;
+            return { streamingBySession: next };
+          });
+          return;
+        }
+        if (event.type === "session_activity_changed") {
+          set((s) => ({
+            streamingBySession: { ...s.streamingBySession, [event.sessionId]: event.running },
+            unreadResponseBySession:
+              event.reason === "completed" && event.sessionId !== s.activeSessionId
+                ? { ...s.unreadResponseBySession, [event.sessionId]: true }
+                : s.unreadResponseBySession,
+          }));
+        }
+      },
+      onClose: () => {
+        if (activityController === ctrl) activityController = undefined;
+      },
+    }).catch(() => {
+      if (activityController === ctrl) activityController = undefined;
+    });
+  },
+
+  closeActivityStream: () => {
+    activityController?.abort();
+    activityController = undefined;
   },
 
   createSession: async (projectId) => {
@@ -543,7 +603,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setActiveSession: (sessionId) => {
     if (sessionId !== undefined) localStorage.setItem(ACTIVE_SESSION_KEY, sessionId);
     else localStorage.removeItem(ACTIVE_SESSION_KEY);
-    set({ activeSessionId: sessionId });
+    set((s) => ({
+      activeSessionId: sessionId,
+      unreadResponseBySession:
+        sessionId === undefined
+          ? s.unreadResponseBySession
+          : { ...s.unreadResponseBySession, [sessionId]: false },
+    }));
   },
 
   openStream: (sessionId) => {

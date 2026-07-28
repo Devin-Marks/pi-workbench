@@ -17,6 +17,7 @@ import { authRoutes } from "./routes/auth.js";
 import { projectRoutes } from "./routes/projects.js";
 import { sessionRoutes } from "./routes/sessions.js";
 import { streamRoutes } from "./routes/stream.js";
+import { sessionActivityRoutes } from "./routes/session-activity.js";
 import { promptRoutes } from "./routes/prompt.js";
 import { controlRoutes } from "./routes/control.js";
 import { configRoutes } from "./routes/config.js";
@@ -439,6 +440,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       await api.register(projectRoutes);
       await api.register(sessionRoutes);
       await api.register(streamRoutes);
+      await api.register(sessionActivityRoutes);
       await api.register(promptRoutes);
       await api.register(controlRoutes);
       await api.register(configRoutes);

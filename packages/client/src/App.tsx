@@ -75,6 +75,14 @@ export function App() {
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
 
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const openActivityStream = useSessionStore((s) => s.openActivityStream);
+  const closeActivityStream = useSessionStore((s) => s.closeActivityStream);
+
+  useEffect(() => {
+    if (!isAuthenticated || mustChangePassword) return;
+    openActivityStream();
+    return closeActivityStream;
+  }, [isAuthenticated, mustChangePassword, openActivityStream, closeActivityStream]);
 
   /* Mobile drawer state. The sidebar slides off-screen at < 768 px and
      reappears via the hamburger button OR a left-edge swipe gesture.
