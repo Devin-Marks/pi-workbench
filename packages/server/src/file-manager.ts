@@ -379,6 +379,7 @@ async function walk(
   });
   for (const ent of entries) {
     const isExcludedDir = ent.isDirectory() && TREE_SKIP_DIRS.has(ent.name);
+    if (!includeExcluded && isExcludedDir) continue;
     const childRel = relPath === "" ? ent.name : `${relPath}${sep}${ent.name}`;
     const childAbs = join(dir, ent.name);
     const countAsExcluded = insideExcludedDir || isExcludedDir;
@@ -396,7 +397,11 @@ async function walk(
       continue;
     }
     if (ent.isDirectory()) {
-      if (countAsExcluded) state.excludedEntries += 1;
+      const childState =
+        isExcludedDir && !insideExcludedDir
+          ? { excludedEntries: 0, maxExcludedEntries: state.maxExcludedEntries }
+          : state;
+      if (countAsExcluded) childState.excludedEntries += 1;
       const sub = await walk(
         childAbs,
         root,
@@ -405,7 +410,7 @@ async function walk(
         maxDepth,
         includeExcluded,
         countAsExcluded,
-        state,
+        childState,
       );
       node.children?.push(sub);
     } else if (ent.isFile()) {
@@ -418,9 +423,14 @@ async function walk(
     } else if (ent.isSymbolicLink()) {
       const linked = await safeLinkedStat(childAbs, root).catch(() => undefined);
       if (linked?.isDirectory()) {
-        const linkCountAsExcluded = insideExcludedDir || TREE_SKIP_DIRS.has(ent.name);
+        const isExcludedLinkDir = TREE_SKIP_DIRS.has(ent.name);
+        const linkCountAsExcluded = insideExcludedDir || isExcludedLinkDir;
         if (!includeExcluded && linkCountAsExcluded) continue;
-        if (linkCountAsExcluded && state.excludedEntries >= state.maxExcludedEntries) {
+        const childState =
+          isExcludedLinkDir && !insideExcludedDir
+            ? { excludedEntries: 0, maxExcludedEntries: state.maxExcludedEntries }
+            : state;
+        if (linkCountAsExcluded && childState.excludedEntries >= childState.maxExcludedEntries) {
           node.children?.push({
             name: ent.name,
             path: childRel,
@@ -429,7 +439,7 @@ async function walk(
           });
           continue;
         }
-        if (linkCountAsExcluded) state.excludedEntries += 1;
+        if (linkCountAsExcluded) childState.excludedEntries += 1;
         const sub = await walk(
           childAbs,
           root,
@@ -438,7 +448,7 @@ async function walk(
           maxDepth,
           includeExcluded,
           linkCountAsExcluded,
-          state,
+          childState,
         );
         node.children?.push(sub);
       } else if (linked?.isFile()) {
