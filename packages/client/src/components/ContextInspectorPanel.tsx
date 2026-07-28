@@ -133,8 +133,8 @@ export function ContextInspectorPanel() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-neutral-950 text-xs text-neutral-200">
-      <div className="flex items-center justify-between border-b border-neutral-800 bg-neutral-900/40 px-3 py-1.5">
+    <div className="forge-context-inspector flex h-full flex-col bg-neutral-950 text-xs text-neutral-200">
+      <div className="forge-context-inspector-header flex items-center justify-between border-b border-neutral-800 bg-neutral-900/40 px-3 py-1.5">
         <span className="text-[10px] uppercase tracking-wider text-neutral-400">
           Context inspector
         </span>

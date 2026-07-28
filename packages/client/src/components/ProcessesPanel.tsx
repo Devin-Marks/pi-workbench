@@ -85,7 +85,7 @@ export function ProcessesPanel({ sessionId }: Props) {
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-neutral-950 text-neutral-200 light:bg-white light:text-neutral-900">
+    <div className="forge-processes-panel flex h-full flex-col overflow-hidden bg-neutral-950 text-neutral-200 light:bg-white light:text-neutral-900">
       <header className="flex items-center gap-2 border-b border-neutral-800 px-3 py-1.5 text-xs light:border-neutral-200">
         <span className="font-semibold uppercase tracking-wider text-neutral-400 light:text-neutral-600">
           Processes

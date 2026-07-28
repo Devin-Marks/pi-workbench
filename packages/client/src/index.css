@@ -163,6 +163,20 @@
   color: var(--forge-text-primary);
 }
 
+/* Structural surfaces must opt into the custom application background
+   individually. A blanket override of Tailwind's neutral utilities would
+   flatten intentional row, badge, and selection contrast. */
+[data-server-theme="on"] .forge-project-sidebar,
+[data-server-theme="on"] .forge-right-pane-tabs,
+[data-server-theme="on"] .forge-right-pane-content,
+[data-server-theme="on"] .forge-file-browser,
+[data-server-theme="on"] .forge-file-browser > div:first-child,
+[data-server-theme="on"] .forge-processes-panel,
+[data-server-theme="on"] .forge-context-inspector,
+[data-server-theme="on"] .forge-context-inspector-header {
+  background-color: var(--forge-app-bg);
+}
+
 [data-server-theme="on"] .text-neutral-50,
 [data-server-theme="on"] .text-neutral-100,
 [data-server-theme="on"] .text-neutral-200 {

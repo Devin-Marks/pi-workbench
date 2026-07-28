@@ -773,7 +773,7 @@ export function App() {
                     {/* Right-pane tabs: file browser vs the turn-diff
                         "Changes" view. Both share width + position so
                         they don't compete for screen real estate. */}
-                    <div className="flex border-b border-neutral-800 bg-neutral-900/40">
+                    <div className="forge-right-pane-tabs flex border-b border-neutral-800 bg-neutral-900/40">
                       {(minimal
                         ? // Minimal mode keeps Files + Search + Context.
                           // Context (token usage / message inspector) is
@@ -823,7 +823,7 @@ export function App() {
                         </button>
                       ))}
                     </div>
-                    <div className="flex flex-1 flex-col overflow-hidden">
+                    <div className="forge-right-pane-content flex flex-1 flex-col overflow-hidden">
                       <div className="flex-1 overflow-hidden">
                         {rightTab === "files" ? (
                           <FileBrowserPanel />
