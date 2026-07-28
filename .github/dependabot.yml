@@ -1,61 +1,43 @@
-# Dependabot config for pi-forge.
+# Dependabot version-update config for pi-forge.
 #
-# Three ecosystems, daily cadence each. The npm entry covers root
-# plus every workspace under packages/* — Dependabot's npm support
-# auto-discovers workspace-managed packages, so a single root entry
-# is sufficient (no per-workspace duplication needed).
+# We intentionally keep routine, non-security Dependabot noise disabled. The only
+# scheduled version-update PRs we want are for the pinned pi SDK trio:
+#   - @earendil-works/pi-coding-agent
+#   - @earendil-works/pi-agent-core
+#   - @earendil-works/pi-ai
 #
-# The pi SDK trio (`@mariozechner/pi-coding-agent`,
-# `@mariozechner/pi-agent-core`, `@mariozechner/pi-ai`) is pinned to
-# exact versions and requires a manual breaking-change audit per
-# CLAUDE.md. We DO NOT ignore those packages here — Dependabot still
-# opens PRs for them, but the policy is "review carefully, never
-# auto-merge." The PR is a free notification mechanism even when the
-# bump itself isn't safe to land unsupervised.
-#
-# Stale generated dirs (publish/, workspace/) are git-ignored, so
-# Dependabot can't see them — no exclusions needed.
+# Other ecosystems remain listed below with open-pull-requests-limit: 0 so the
+# workflows are easy to re-enable later without reconstructing their settings.
+# Keep GitHub's Dependabot security settings enabled for vulnerability PRs;
+# widening this allowlist is only for routine version updates.
 
 version: 2
 updates:
-  # ----- npm (root + workspaces) -----
+  # ----- npm (root + workspaces): enabled for the pi SDK trio only -----
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10
+    allow:
+      - dependency-name: "@earendil-works/pi-coding-agent"
+      - dependency-name: "@earendil-works/pi-agent-core"
+      - dependency-name: "@earendil-works/pi-ai"
     labels:
       - "dependencies"
       - "npm"
+      - "pi-sdk"
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
       include: "scope"
-    ignore:
-      # Suppress @xterm/xterm major bumps until the satellite addon
-      # ecosystem catches up. As of writing, `@xterm/xterm@6` is
-      # stable but `@xterm/addon-fit` and `@xterm/addon-web-links`
-      # only have `0.12.0-beta.X` releases that match v6 — their
-      # current stable lines (0.10 / 0.11) peer-dep `@xterm/xterm@^5`.
-      # Auto-bumping xterm alone (as #49 did) leaves a peer-dep
-      # mismatch that soft-passes on existing lockfiles but breaks
-      # `npm ci` / Docker rebuilds with strict resolution.
-      #
-      # Re-evaluate periodically with:
-      #   npm view @xterm/addon-fit versions --json     | jq '. | map(select(test("^0\\.12\\.[0-9]+$")))'
-      #   npm view @xterm/addon-web-links versions --json | jq '. | map(select(test("^0\\.13\\.[0-9]+$")))'
-      # When both have a non-beta release, drop this rule and cut a
-      # coordinated `@xterm/*` upgrade PR (xterm + both addons in
-      # lockstep).
-      - dependency-name: "@xterm/xterm"
-        update-types:
-          - "version-update:semver-major"
 
-  # ----- GitHub Actions (.github/workflows/*.yml) -----
+  # ----- GitHub Actions (.github/workflows/*.yml): disabled -----
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "daily"
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
       - "github-actions"
@@ -63,34 +45,15 @@ updates:
       prefix: "chore(ci)"
       include: "scope"
 
-  # ----- Docker (docker/Dockerfile) -----
+  # ----- Docker (docker/Dockerfile): disabled -----
   - package-ecosystem: "docker"
     directory: "/docker"
     schedule:
       interval: "daily"
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
       - "docker"
     commit-message:
       prefix: "chore(docker)"
       include: "scope"
-    ignore:
-      # Pin the Docker base image to the current LTS major. Dependabot
-      # still surfaces patch / minor bumps within the LTS line (which
-      # we want — security fixes), but suppresses cross-major bumps
-      # that would jump to an odd-numbered "current" Node line (23,
-      # 25, 27, ...) before it stabilizes as the next LTS.
-      #
-      # Node's release cadence ships odd-numbered current lines that
-      # aren't supported long-term, plus even-numbered LTS lines (22,
-      # 24, 26, ...). Auto-bumping to a current line trades one
-      # known-good Node for an unsupported one, and we hit exactly
-      # that class of pain with the 22.22.2 bundled-npm regression
-      # (release.yml had to pin 22.22.1 mid-flight).
-      #
-      # Re-evaluate when 24 reaches Active LTS (April 2027) and we're
-      # ready to migrate. Update this rule + cut a manual upgrade PR
-      # rather than letting Dependabot drive the bump.
-      - dependency-name: "node"
-        update-types:
-          - "version-update:semver-major"
