@@ -146,6 +146,7 @@ const TREE_SKIP_DIRS = new Set([
 export const SEARCH_SKIP_DIRS: ReadonlySet<string> = TREE_SKIP_DIRS;
 
 const DEFAULT_TREE_DEPTH = 32;
+const DEFAULT_TREE_MAX_EXCLUDED_ENTRIES = 2_000;
 
 /* ----------------------------- guards ----------------------------- */
 
@@ -305,12 +306,19 @@ export interface TreeNode {
   type: "file" | "directory";
   /** Present on `directory` nodes only. */
   children?: TreeNode[];
-  /** True when the node is a directory we declined to recurse into (depth cap or skip set). */
+  /** True when the node is a directory we declined to fully recurse into (depth, permission, or entry cap). */
   truncated?: boolean;
 }
 
 export interface GetTreeOptions {
   maxDepth?: number;
+  /** Include directories normally omitted from the Files tree. */
+  includeExcluded?: boolean;
+}
+
+interface WalkState {
+  excludedEntries: number;
+  maxExcludedEntries: number;
 }
 
 export async function getTree(rootPath: string, opts: GetTreeOptions = {}): Promise<TreeNode> {
@@ -321,8 +329,13 @@ export async function getTree(rootPath: string, opts: GetTreeOptions = {}): Prom
   if (!st?.isDirectory()) {
     throw new NotFoundError(root);
   }
+  const includeExcluded = opts.includeExcluded ?? false;
   const maxDepth = opts.maxDepth ?? DEFAULT_TREE_DEPTH;
-  return walk(root, root, "", 0, maxDepth);
+  const state: WalkState = {
+    excludedEntries: 0,
+    maxExcludedEntries: DEFAULT_TREE_MAX_EXCLUDED_ENTRIES,
+  };
+  return walk(root, root, "", 0, maxDepth, includeExcluded, false, state);
 }
 
 async function walk(
@@ -331,6 +344,9 @@ async function walk(
   relPath: string,
   depth: number,
   maxDepth: number,
+  includeExcluded: boolean,
+  insideExcludedDir: boolean,
+  state: WalkState,
 ): Promise<TreeNode> {
   const name = relPath === "" ? "" : (relPath.split(sep).pop() ?? "");
   const node: TreeNode = {
@@ -362,13 +378,43 @@ async function walk(
     return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   });
   for (const ent of entries) {
-    if (ent.isDirectory() && TREE_SKIP_DIRS.has(ent.name)) continue;
+    const isExcludedDir = ent.isDirectory() && TREE_SKIP_DIRS.has(ent.name);
+    if (!includeExcluded && isExcludedDir) continue;
     const childRel = relPath === "" ? ent.name : `${relPath}${sep}${ent.name}`;
     const childAbs = join(dir, ent.name);
+    const countAsExcluded = insideExcludedDir || isExcludedDir;
+    if (countAsExcluded && state.excludedEntries >= state.maxExcludedEntries) {
+      if (ent.isDirectory()) {
+        node.children?.push({
+          name: ent.name,
+          path: childRel,
+          type: "directory",
+          truncated: true,
+        });
+      } else {
+        node.truncated = true;
+      }
+      continue;
+    }
     if (ent.isDirectory()) {
-      const sub = await walk(childAbs, root, childRel, depth + 1, maxDepth);
+      const childState =
+        isExcludedDir && !insideExcludedDir
+          ? { excludedEntries: 0, maxExcludedEntries: state.maxExcludedEntries }
+          : state;
+      if (countAsExcluded) childState.excludedEntries += 1;
+      const sub = await walk(
+        childAbs,
+        root,
+        childRel,
+        depth + 1,
+        maxDepth,
+        includeExcluded,
+        countAsExcluded,
+        childState,
+      );
       node.children?.push(sub);
     } else if (ent.isFile()) {
+      if (countAsExcluded) state.excludedEntries += 1;
       node.children?.push({
         name: ent.name,
         path: childRel,
@@ -377,10 +423,38 @@ async function walk(
     } else if (ent.isSymbolicLink()) {
       const linked = await safeLinkedStat(childAbs, root).catch(() => undefined);
       if (linked?.isDirectory()) {
-        if (TREE_SKIP_DIRS.has(ent.name)) continue;
-        const sub = await walk(childAbs, root, childRel, depth + 1, maxDepth);
+        const isExcludedLinkDir = TREE_SKIP_DIRS.has(ent.name);
+        const linkCountAsExcluded = insideExcludedDir || isExcludedLinkDir;
+        if (!includeExcluded && linkCountAsExcluded) continue;
+        const childState =
+          isExcludedLinkDir && !insideExcludedDir
+            ? { excludedEntries: 0, maxExcludedEntries: state.maxExcludedEntries }
+            : state;
+        if (linkCountAsExcluded && childState.excludedEntries >= childState.maxExcludedEntries) {
+          node.children?.push({
+            name: ent.name,
+            path: childRel,
+            type: "directory",
+            truncated: true,
+          });
+          continue;
+        }
+        if (linkCountAsExcluded) childState.excludedEntries += 1;
+        const sub = await walk(
+          childAbs,
+          root,
+          childRel,
+          depth + 1,
+          maxDepth,
+          includeExcluded,
+          linkCountAsExcluded,
+          childState,
+        );
         node.children?.push(sub);
       } else if (linked?.isFile()) {
+        const linkCountAsExcluded = insideExcludedDir || TREE_SKIP_DIRS.has(ent.name);
+        if (!includeExcluded && linkCountAsExcluded) continue;
+        if (linkCountAsExcluded) state.excludedEntries += 1;
         node.children?.push({
           name: ent.name,
           path: childRel,
