@@ -1994,7 +1994,10 @@ export function ChatInput({ sessionId }: Props) {
                       }}
                       onMouseEnter={() => setSlashSelectedIdx(i)}
                       disabled={!cmd.available}
-                      className={`block w-full px-3 py-2.5 text-left text-[14px] md:py-1 md:text-[12px] ${
+                      data-forge-palette-active={
+                        i === slashSelectedIdx && cmd.available ? "true" : "false"
+                      }
+                      className={`forge-palette-item block w-full px-3 py-2.5 text-left text-[14px] md:py-1 md:text-[12px] ${
                         i === slashSelectedIdx && cmd.available
                           ? "bg-neutral-800 text-neutral-100"
                           : "text-neutral-300 hover:bg-neutral-900/80"
@@ -2044,7 +2047,8 @@ export function ChatInput({ sessionId }: Props) {
                         acInsert(path);
                       }}
                       onMouseEnter={() => setAcSelectedIdx(i)}
-                      className={`block w-full truncate px-3 py-2.5 text-left font-mono text-[14px] md:py-1 md:text-[12px] ${
+                      data-forge-palette-active={i === acSelectedIdx ? "true" : "false"}
+                      className={`forge-palette-item block w-full truncate px-3 py-2.5 text-left font-mono text-[14px] md:py-1 md:text-[12px] ${
                         i === acSelectedIdx
                           ? "bg-neutral-800 text-neutral-100"
                           : "text-neutral-300 hover:bg-neutral-900/80"
