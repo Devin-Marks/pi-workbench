@@ -146,7 +146,7 @@ const TREE_SKIP_DIRS = new Set([
 export const SEARCH_SKIP_DIRS: ReadonlySet<string> = TREE_SKIP_DIRS;
 
 const DEFAULT_TREE_DEPTH = 32;
-const DEFAULT_TREE_MAX_EXCLUDED_ENTRIES = 100_000;
+const DEFAULT_TREE_MAX_EXCLUDED_ENTRIES = 2_000;
 
 /* ----------------------------- guards ----------------------------- */
 
