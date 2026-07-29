@@ -2,7 +2,8 @@
  * Session index persistence/cache contract:
  * - malformed persisted index is ignored and rebuilt from the supplied JSONL scan
  * - a clean project is served from the in-memory/persistent index
- * - explicit invalidation forces the next lookup to rebuild
+ * - explicit invalidation and manual reset force the next lookup to rebuild
+ * - reset does not mutate source JSONLs or allow a stale in-flight scan to win
  */
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -36,27 +37,27 @@ async function main(): Promise<void> {
   let scans = 0;
   const record = {
     sessionId: "child-session",
-    path: join(projectSessionDir, "parent", "run-1", "session.jsonl"),
+    path: join(projectSessionDir, "session-index-test.jsonl"),
     cwd: sessionDir,
     name: "Child session",
     createdAt: new Date("2026-01-02T03:04:05.000Z"),
     modifiedAt: new Date("2026-01-02T03:05:06.000Z"),
     messageCount: 7,
     firstMessage: "hello",
-    parentSessionId: "parent-session",
-    runId: "run-1",
-    isExternalLive: true,
-    externalState: "running" as const,
   };
 
   await mkdir(dirname(record.path), { recursive: true });
+  await writeFile(record.path, '{"type":"session"}\n', "utf8");
 
   const index = (await import(
     resolve(repoRoot, "packages/server/dist/session-index.js")
   )) as typeof import("../packages/server/src/session-index.js");
+  let records = [record];
+  let delayedScan: Promise<void> | undefined;
   const discover = async () => {
     scans += 1;
-    return [record];
+    await delayedScan;
+    return records;
   };
 
   try {
@@ -85,17 +86,62 @@ async function main(): Promise<void> {
     };
     const stored = persisted.projects?.[projectId]?.sessions?.[0];
     assert(
-      "versioned index persists sidebar and location fields",
+      "versioned index persists only metadata and no preview content",
       persisted.version === 2 &&
-        stored?.parentSessionId === record.parentSessionId &&
-        stored?.runId === record.runId &&
-        stored?.externalState === record.externalState &&
-        stored?.path === record.path,
+        stored?.path === record.path &&
+        stored?.firstMessage === undefined &&
+        stored?.parentSessionId === undefined &&
+        stored?.runId === undefined &&
+        stored?.externalState === undefined,
     );
 
     index.invalidateSessionIndex(projectId);
     await index.getIndexedProjectSessions(projectId, sessionDir, projectSessionDir, discover);
     assert("explicit invalidation rebuilds on next lookup", scans === 2);
+
+    const sourceBeforeReset = await readFile(record.path, "utf8");
+    await index.resetSessionIndex(projectId);
+    const afterReset = JSON.parse(await readFile(join(dataDir, "session-index.json"), "utf8")) as {
+      projects?: Record<string, unknown>;
+    };
+    assert(
+      "reset removes only the persisted project cache entry",
+      afterReset.projects?.[projectId] === undefined,
+    );
+    assert(
+      "reset does not alter session source files",
+      (await readFile(record.path, "utf8")) === sourceBeforeReset,
+    );
+    await index.getIndexedProjectSessions(projectId, sessionDir, projectSessionDir, discover);
+    assert("reset forces the next lookup to rebuild", scans === 3);
+
+    let releaseDelayedScan!: () => void;
+    index.invalidateSessionIndex(projectId);
+    delayedScan = new Promise<void>((resolveDelay) => {
+      releaseDelayedScan = resolveDelay;
+    });
+    const staleRebuild = index.getIndexedProjectSessions(
+      projectId,
+      sessionDir,
+      projectSessionDir,
+      discover,
+    );
+    while (scans !== 4) await new Promise((resolveDelay) => setTimeout(resolveDelay, 1));
+    await index.resetSessionIndex(projectId);
+    records = [{ ...record, sessionId: "fresh-session" }];
+    releaseDelayedScan();
+    await staleRebuild;
+    delayedScan = undefined;
+    const refreshed = await index.getIndexedProjectSessions(
+      projectId,
+      sessionDir,
+      projectSessionDir,
+      discover,
+    );
+    assert(
+      "delayed stale rebuild cannot repopulate a reset generation",
+      scans === 5 && refreshed[0]?.sessionId === "fresh-session",
+    );
   } finally {
     await rm(dataDir, { recursive: true, force: true });
     await rm(sessionDir, { recursive: true, force: true });

@@ -1800,6 +1800,12 @@ export const api = {
     const qs = projectId !== undefined ? `?projectId=${encodeURIComponent(projectId)}` : "";
     return request(`/api/v1/sessions${qs}`, vUnifiedSessionList);
   },
+  refreshProjectSessionIndex: (projectId: string) =>
+    request(
+      `/api/v1/projects/${encodeURIComponent(projectId)}/session-index/refresh`,
+      vUnifiedSessionList,
+      { method: "POST" },
+    ),
   createSession: (projectId: string) =>
     request("/api/v1/sessions", vSessionSummary, {
       method: "POST",

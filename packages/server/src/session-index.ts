@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { watch, type FSWatcher } from "node:fs";
-import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { config } from "./config.js";
 import { makeDedupe, makeLock } from "./concurrency.js";
@@ -22,10 +22,6 @@ export interface IndexedSession {
   modifiedAt: Date;
   messageCount: number;
   firstMessage: string;
-  parentSessionId?: string;
-  runId?: string;
-  isExternalLive?: boolean;
-  externalState?: "queued" | "running" | "complete" | "failed" | "paused";
 }
 
 interface PersistedSession {
@@ -36,10 +32,6 @@ interface PersistedSession {
   createdAt: string;
   modifiedAt: string;
   messageCount: number;
-  parentSessionId?: string;
-  runId?: string;
-  isExternalLive?: boolean;
-  externalState?: "queued" | "running" | "complete" | "failed" | "paused";
 }
 
 interface PersistedProjectIndex {
@@ -67,23 +59,18 @@ interface ProjectCache {
 }
 
 const projects = new Map<string, ProjectCache>();
+const projectGenerations = new Map<string, number>();
 let persisted: PersistedIndex = { version: INDEX_VERSION, projects: {} };
 let loaded = false;
 const writeLock = makeLock();
 const rebuildInflight = makeDedupe<string, IndexedSession[]>();
 
-function indexPath(): string {
-  return `${config.forgeDataDir}/session-index.json`;
+function projectGeneration(projectId: string): number {
+  return projectGenerations.get(projectId) ?? 0;
 }
 
-function isExternalState(value: unknown): value is NonNullable<IndexedSession["externalState"]> {
-  return (
-    value === "queued" ||
-    value === "running" ||
-    value === "complete" ||
-    value === "failed" ||
-    value === "paused"
-  );
+function indexPath(): string {
+  return `${config.forgeDataDir}/session-index.json`;
 }
 
 function parseSession(value: unknown): PersistedSession | undefined {
@@ -102,13 +89,7 @@ function parseSession(value: unknown): PersistedSession | undefined {
   ) {
     return undefined;
   }
-  if (
-    (s.name !== undefined && typeof s.name !== "string") ||
-    (s.parentSessionId !== undefined && typeof s.parentSessionId !== "string") ||
-    (s.runId !== undefined && typeof s.runId !== "string") ||
-    (s.isExternalLive !== undefined && typeof s.isExternalLive !== "boolean") ||
-    (s.externalState !== undefined && !isExternalState(s.externalState))
-  ) {
+  if (s.name !== undefined && typeof s.name !== "string") {
     return undefined;
   }
   return s as unknown as PersistedSession;
@@ -184,11 +165,14 @@ function fromPersisted(session: PersistedSession): IndexedSession {
 }
 
 function toPersisted(session: IndexedSession): PersistedSession {
-  const { firstMessage: _firstMessage, ...safe } = session;
   return {
-    ...safe,
+    sessionId: session.sessionId,
+    path: session.path,
+    cwd: session.cwd,
+    ...(session.name !== undefined ? { name: session.name } : {}),
     createdAt: session.createdAt.toISOString(),
     modifiedAt: session.modifiedAt.toISOString(),
+    messageCount: session.messageCount,
   };
 }
 
@@ -210,10 +194,14 @@ async function atomicWriteIndex(): Promise<void> {
   });
 }
 
-function isInsideSessionDir(sessionDir: string, path: string): boolean {
-  const root = resolve(sessionDir);
-  const rel = relative(root, resolve(path));
-  return rel === "" || (!rel.startsWith("..") && !rel.startsWith(`..${sep}`));
+async function isInsideSessionDir(sessionDir: string, path: string): Promise<boolean> {
+  try {
+    const [root, candidate] = await Promise.all([realpath(sessionDir), realpath(path)]);
+    const rel = relative(root, candidate);
+    return rel === "" || (!rel.startsWith("..") && !rel.startsWith(`..${sep}`));
+  } catch {
+    return false;
+  }
 }
 
 function pathsToWatch(sessionDir: string, sessions: readonly IndexedSession[]): string[] {
@@ -305,14 +293,23 @@ async function cacheProject(
   const stored = persisted.projects[projectId];
   if (stored === undefined || stored.workspacePath !== workspacePath) return undefined;
   // Do not trust a manually edited/corrupted cache to make us stat or return
-  // paths outside this project's session root. The rebuild scanner remains the
-  // sole authority for paths that enter the cache.
-  if (stored.sessions.some((session) => !isInsideSessionDir(sessionDir, session.path))) {
+  // paths outside this project's canonical session root. Validate both session
+  // records and footprint paths before any stat call; realpath prevents a
+  // symlink inside the session tree from escaping that root.
+  const storedFootprint = new Map(Object.entries(stored.footprint));
+  const cachedPaths = [
+    ...stored.sessions.map((session) => session.path),
+    ...storedFootprint.keys(),
+  ];
+  if (
+    (await Promise.all(cachedPaths.map((path) => isInsideSessionDir(sessionDir, path)))).some(
+      (inside) => !inside,
+    )
+  ) {
     delete persisted.projects[projectId];
     return undefined;
   }
   const sessions = stored.sessions.map(fromPersisted);
-  const storedFootprint = new Map(Object.entries(stored.footprint));
   const currentFootprint = await fingerprint([...storedFootprint.keys()]);
   if (
     currentFootprint.size !== storedFootprint.size ||
@@ -343,18 +340,24 @@ async function rebuildProject(
   sessionDir: string,
   discover: () => Promise<IndexedSession[]>,
 ): Promise<IndexedSession[]> {
-  return rebuildInflight(projectId, async () => {
+  const generation = projectGeneration(projectId);
+  return rebuildInflight(`${projectId}:${generation}`, async () => {
     const sessions = await discover();
+    // A reset that begins during source discovery wins. Its newer generation
+    // must not be overwritten by this stale scan.
+    if (generation !== projectGeneration(projectId)) return sessions;
+    const footprint = await fingerprint([
+      ...pathsToWatch(sessionDir, sessions),
+      ...sessions.map((session) => session.path),
+    ]);
+    if (generation !== projectGeneration(projectId)) return sessions;
     const cache: ProjectCache = {
       workspacePath,
       sessionDir,
       sessions,
       dirty: false,
       lastReconciledAt: Date.now(),
-      footprint: await fingerprint([
-        ...pathsToWatch(sessionDir, sessions),
-        ...sessions.map((session) => session.path),
-      ]),
+      footprint,
       watchers: [],
       needsPreviewHydration: false,
     };
@@ -393,4 +396,20 @@ export async function getIndexedProjectSessions(
 export function invalidateSessionIndex(projectId: string): void {
   const cache = projects.get(projectId);
   if (cache !== undefined) cache.dirty = true;
+}
+
+/**
+ * Remove only one project's derived cache and force its next lookup to scan
+ * source JSONLs again. Session files and project data are never modified.
+ */
+export async function resetSessionIndex(projectId: string): Promise<void> {
+  await ensureLoaded();
+  projectGenerations.set(projectId, projectGeneration(projectId) + 1);
+  const cache = projects.get(projectId);
+  if (cache !== undefined) {
+    for (const watcher of cache.watchers) watcher.close();
+    projects.delete(projectId);
+  }
+  delete persisted.projects[projectId];
+  await atomicWriteIndex();
 }

@@ -49,7 +49,11 @@ import { generateSessionTitleFromPrompt, isGenericSessionName } from "./session-
 import { getExternalSubagentStatusForSession } from "./subagents-external.js";
 import { readSandboxSettings } from "./sandbox-settings.js";
 import { publishSessionActivity, type SessionActivity } from "./session-activity.js";
-import { getIndexedProjectSessions, invalidateSessionIndex } from "./session-index.js";
+import {
+  getIndexedProjectSessions,
+  invalidateSessionIndex,
+  resetSessionIndex,
+} from "./session-index.js";
 
 /**
  * Minimal SSE client contract used by the registry to fan out events.
@@ -1431,6 +1435,19 @@ export async function discoverSessionsOnDisk(
   return getIndexedProjectSessions(projectId, workspacePath, dir, () =>
     discoverSessionsOnDiskUncached(projectId, workspacePath, dir),
   );
+}
+
+/** Reset only the derived cache, then rebuild this project's JSONL discovery. */
+const refreshProjectSessionIndexInflight = makeDedupe<string, DiscoveredSession[]>();
+
+export async function refreshProjectSessionIndex(
+  projectId: string,
+  workspacePath: string,
+): Promise<DiscoveredSession[]> {
+  return refreshProjectSessionIndexInflight(projectId, async () => {
+    await resetSessionIndex(projectId);
+    return discoverSessionsOnDisk(projectId, workspacePath);
+  });
 }
 
 /** JSONL source-of-truth scan used exclusively to rebuild the session index. */
