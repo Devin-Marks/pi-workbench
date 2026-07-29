@@ -1,7 +1,7 @@
 /**
  * Session index persistence/cache contract:
  * - malformed persisted index is ignored and rebuilt from the supplied JSONL scan
- * - a clean project is served from the in-memory/persistent index
+ * - each lookup returns a current discovery result, never a cached pathname
  * - explicit invalidation and manual reset force the next lookup to rebuild
  * - reset does not mutate source JSONLs or allow a stale in-flight scan to win
  * - persisted records contain generic metadata only; names/previews rehydrate from JSONL
@@ -80,8 +80,8 @@ async function main(): Promise<void> {
       discover,
     );
     assert(
-      "clean project lookup preserves the source-derived session name",
-      scans === 1 && second.length === 1 && second[0]?.name === record.name,
+      "clean project lookup returns a fresh source-derived session name",
+      scans === 2 && second.length === 1 && second[0]?.name === record.name,
     );
 
     const persisted = JSON.parse(await readFile(join(dataDir, "session-index.json"), "utf8")) as {
@@ -91,17 +91,25 @@ async function main(): Promise<void> {
     const stored = persisted.projects?.[projectId]?.sessions?.[0];
     assert(
       "versioned index persists generic metadata only, never names or preview content",
-      persisted.version === 3 &&
-        stored?.path === record.path &&
+      persisted.version === 4 &&
+        stored?.relativePath === "session-index-test.jsonl" &&
         JSON.stringify(Object.keys(stored ?? {}).sort()) ===
-          JSON.stringify(["createdAt", "cwd", "messageCount", "modifiedAt", "path", "sessionId"]) &&
+          JSON.stringify([
+            "createdAt",
+            "cwd",
+            "messageCount",
+            "modifiedAt",
+            "relativePath",
+            "sessionId",
+          ]) &&
+        !JSON.stringify(persisted).includes(record.path) &&
         !JSON.stringify(stored).includes(record.name) &&
         !JSON.stringify(stored).includes(record.firstMessage),
     );
 
     index.invalidateSessionIndex(projectId);
     await index.getIndexedProjectSessions(projectId, sessionDir, projectSessionDir, discover);
-    assert("explicit invalidation rebuilds on next lookup", scans === 2);
+    assert("explicit invalidation rebuilds on next lookup", scans === 3);
 
     const outsideDir = await mkdtemp(join(tmpdir(), "pi-forge-session-index-outside-"));
     const outsidePath = join(outsideDir, "foreign.jsonl");
@@ -118,13 +126,14 @@ async function main(): Promise<void> {
     );
     const escapedPersisted = JSON.parse(
       await readFile(join(dataDir, "session-index.json"), "utf8"),
-    ) as { projects?: Record<string, { sessions?: { path?: string }[] }> };
+    ) as { projects?: Record<string, { sessions?: { relativePath?: string }[] }> };
     assert(
-      "discovery rejects and does not persist an external symlink target",
-      escaped.length === 0 &&
-        !escapedPersisted.projects?.[projectId]?.sessions?.some(
-          (session) => session.path === outsidePath || session.path === escapedPath,
-        ),
+      "a symlink swap cannot make cached metadata return or watch an external file",
+      scans === 4 &&
+        escaped.length === 0 &&
+        !JSON.stringify(escapedPersisted).includes(outsidePath) &&
+        !JSON.stringify(escapedPersisted).includes(escapedPath) &&
+        !JSON.stringify(escapedPersisted).includes("footprint"),
     );
     await rm(outsideDir, { recursive: true, force: true });
     records = [record];
@@ -143,7 +152,7 @@ async function main(): Promise<void> {
       (await readFile(record.path, "utf8")) === sourceBeforeReset,
     );
     await index.getIndexedProjectSessions(projectId, sessionDir, projectSessionDir, discover);
-    assert("reset forces the next lookup to rebuild", scans === 4);
+    assert("reset forces the next lookup to rebuild", scans === 5);
 
     let releaseDelayedScan!: () => void;
     index.invalidateSessionIndex(projectId);
@@ -156,7 +165,7 @@ async function main(): Promise<void> {
       projectSessionDir,
       discover,
     );
-    while (scans !== 5) await new Promise((resolveDelay) => setTimeout(resolveDelay, 1));
+    while (scans !== 6) await new Promise((resolveDelay) => setTimeout(resolveDelay, 1));
     index.invalidateSessionIndex(projectId);
     records = [{ ...record, sessionId: "fresh-session" }];
     releaseDelayedScan();
@@ -170,7 +179,7 @@ async function main(): Promise<void> {
     );
     assert(
       "delayed stale rebuild cannot overwrite an invalidated generation",
-      scans === 6 && refreshed[0]?.sessionId === "fresh-session",
+      Number(scans) === 7 && refreshed[0]?.sessionId === "fresh-session",
     );
   } finally {
     await rm(dataDir, { recursive: true, force: true });

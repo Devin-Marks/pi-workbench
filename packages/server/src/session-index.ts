@@ -1,27 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { constants, watch, type FSWatcher } from "node:fs";
-import {
-  mkdir,
-  open,
-  readFile,
-  realpath,
-  rename,
-  stat,
-  unlink,
-  writeFile,
-  type FileHandle,
-} from "node:fs/promises";
-import { dirname, relative, resolve, sep } from "node:path";
+import { constants } from "node:fs";
+import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { relative, resolve, sep } from "node:path";
 import { config } from "./config.js";
 import { makeDedupe, makeLock } from "./concurrency.js";
 
 /**
- * Persistent, best-effort cache for session discovery. JSONL files remain the
- * source of truth: a missing, malformed, stale, or unwritable index simply
- * causes the caller-supplied disk discovery function to run again.
+ * Persistent, best-effort metadata cache for session discovery. Session JSONLs
+ * remain the source of truth. In particular, this cache deliberately never
+ * retains a usable session pathname: a pathname is a mutable lookup, not a
+ * capability. Each caller receives paths only from its current discovery pass.
  */
-const INDEX_VERSION = 3;
-const RECONCILE_INTERVAL_MS = 30_000;
+const INDEX_VERSION = 4;
 
 export interface IndexedSession {
   sessionId: string;
@@ -36,7 +26,8 @@ export interface IndexedSession {
 
 interface PersistedSession {
   sessionId: string;
-  path: string;
+  /** Relative diagnostic metadata only; it is never resolved or used for I/O. */
+  relativePath: string;
   cwd: string;
   createdAt: string;
   modifiedAt: string;
@@ -46,8 +37,6 @@ interface PersistedSession {
 interface PersistedProjectIndex {
   workspacePath: string;
   sessions: PersistedSession[];
-  /** File and directory metadata used to validate a persisted cache on restart. */
-  footprint: Record<string, string>;
 }
 
 interface PersistedIndex {
@@ -57,17 +46,8 @@ interface PersistedIndex {
 
 interface ProjectCache {
   workspacePath: string;
-  sessionDir: string;
-  sessions: IndexedSession[];
-  dirty: boolean;
-  lastReconciledAt: number;
-  footprint: Map<string, string>;
-  watchers: FSWatcher[];
-  /**
-   * Persisted records omit all user-content fields (including names and
-   * previews), so the first sidebar read rebuilds them from the JSONL source.
-   */
-  needsPreviewHydration: boolean;
+  /** Metadata only. No cached field is ever used as a filesystem path. */
+  sessions: PersistedSession[];
 }
 
 const projects = new Map<string, ProjectCache>();
@@ -87,21 +67,21 @@ function indexPath(): string {
 
 function parseSession(value: unknown): PersistedSession | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  const s = value as Record<string, unknown>;
+  const session = value as Record<string, unknown>;
   if (
-    typeof s.sessionId !== "string" ||
-    typeof s.path !== "string" ||
-    typeof s.cwd !== "string" ||
-    typeof s.createdAt !== "string" ||
-    typeof s.modifiedAt !== "string" ||
-    typeof s.messageCount !== "number" ||
-    !Number.isFinite(s.messageCount) ||
-    Number.isNaN(Date.parse(s.createdAt)) ||
-    Number.isNaN(Date.parse(s.modifiedAt))
+    typeof session.sessionId !== "string" ||
+    typeof session.relativePath !== "string" ||
+    typeof session.cwd !== "string" ||
+    typeof session.createdAt !== "string" ||
+    typeof session.modifiedAt !== "string" ||
+    typeof session.messageCount !== "number" ||
+    !Number.isFinite(session.messageCount) ||
+    Number.isNaN(Date.parse(session.createdAt)) ||
+    Number.isNaN(Date.parse(session.modifiedAt))
   ) {
     return undefined;
   }
-  return s as unknown as PersistedSession;
+  return session as unknown as PersistedSession;
 }
 
 function parseIndex(value: unknown): PersistedIndex | undefined {
@@ -114,33 +94,19 @@ function parseIndex(value: unknown): PersistedIndex | undefined {
   ) {
     return undefined;
   }
-  const validProjects: Record<string, PersistedProjectIndex> = {};
+  const projects: Record<string, PersistedProjectIndex> = {};
   for (const [projectId, rawProject] of Object.entries(parsed.projects)) {
     if (typeof rawProject !== "object" || rawProject === null) continue;
     const project = rawProject as Record<string, unknown>;
-    if (
-      typeof project.workspacePath !== "string" ||
-      !Array.isArray(project.sessions) ||
-      typeof project.footprint !== "object" ||
-      project.footprint === null
-    ) {
-      continue;
-    }
+    if (typeof project.workspacePath !== "string" || !Array.isArray(project.sessions)) continue;
     const sessions = project.sessions.map(parseSession);
-    const footprint = Object.entries(project.footprint as Record<string, unknown>);
-    if (
-      sessions.some((session) => session === undefined) ||
-      footprint.some(([path, value]) => typeof path !== "string" || typeof value !== "string")
-    ) {
-      continue;
-    }
-    validProjects[projectId] = {
+    if (sessions.some((session) => session === undefined)) continue;
+    projects[projectId] = {
       workspacePath: project.workspacePath,
       sessions: sessions as PersistedSession[],
-      footprint: Object.fromEntries(footprint) as Record<string, string>,
     };
   }
-  return { version: INDEX_VERSION, projects: validProjects };
+  return { version: INDEX_VERSION, projects };
 }
 
 async function ensureLoaded(): Promise<void> {
@@ -149,8 +115,7 @@ async function ensureLoaded(): Promise<void> {
   try {
     const raw = await readFile(indexPath(), "utf8");
     const parsed = parseIndex(JSON.parse(raw));
-    // A malformed or old index is deliberately ignored. The next project
-    // lookup rebuilds its entry from JSONL and atomically replaces this file.
+    // Old formats contained absolute session paths and are intentionally ignored.
     if (parsed !== undefined) persisted = parsed;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -159,29 +124,6 @@ async function ensureLoaded(): Promise<void> {
       );
     }
   }
-}
-
-function fromPersisted(session: PersistedSession): IndexedSession {
-  return {
-    ...session,
-    // Names and conversation previews remain exclusively in the source JSONLs,
-    // not in this generic metadata cache. Hydration below re-derives both from
-    // the JSONL source before the sidebar consumes a persisted cache.
-    firstMessage: "",
-    createdAt: new Date(session.createdAt),
-    modifiedAt: new Date(session.modifiedAt),
-  };
-}
-
-function toPersisted(session: IndexedSession): PersistedSession {
-  return {
-    sessionId: session.sessionId,
-    path: session.path,
-    cwd: session.cwd,
-    createdAt: session.createdAt.toISOString(),
-    modifiedAt: session.modifiedAt.toISOString(),
-    messageCount: session.messageCount,
-  };
 }
 
 async function atomicWriteIndex(): Promise<void> {
@@ -194,7 +136,6 @@ async function atomicWriteIndex(): Promise<void> {
       await rename(temporary, target);
     } catch (err) {
       await unlink(temporary).catch(() => undefined);
-      // The in-memory cache is still usable and JSONLs remain authoritative.
       process.stderr.write(
         `${JSON.stringify({ level: "warn", msg: "session-index: failed to persist index", error: err instanceof Error ? err.message : String(err) })}\n`,
       );
@@ -202,185 +143,49 @@ async function atomicWriteIndex(): Promise<void> {
   });
 }
 
-async function isInsideSessionDir(sessionDir: string, path: string): Promise<boolean> {
+function safeRelativePath(sessionDir: string, path: string): string | undefined {
+  const relativePath = relative(resolve(sessionDir), resolve(path));
+  if (
+    relativePath === "" ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${sep}`) ||
+    relativePath.startsWith(sep)
+  ) {
+    return undefined;
+  }
+  return relativePath;
+}
+
+function toPersisted(sessionDir: string, session: IndexedSession): PersistedSession | undefined {
+  const relativePath = safeRelativePath(sessionDir, session.path);
+  if (relativePath === undefined) return undefined;
+  return {
+    sessionId: session.sessionId,
+    relativePath,
+    cwd: session.cwd,
+    createdAt: session.createdAt.toISOString(),
+    modifiedAt: session.modifiedAt.toISOString(),
+    messageCount: session.messageCount,
+  };
+}
+
+async function isCurrentRegularSessionPath(sessionDir: string, path: string): Promise<boolean> {
+  if (safeRelativePath(sessionDir, path) === undefined) return false;
   try {
-    const [root, candidate] = await Promise.all([realpath(sessionDir), realpath(path)]);
-    const rel = relative(root, candidate);
-    return rel === "" || (!rel.startsWith("..") && !rel.startsWith(`..${sep}`));
+    // This applies only to the current discovery result. The handle is not
+    // cached and the pathname is never canonicalized for later reuse.
+    const handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    try {
+      return (await handle.stat()).isFile();
+    } finally {
+      await handle.close();
+    }
   } catch {
     return false;
   }
-}
-
-function pathsToWatch(sessionDir: string, sessions: readonly IndexedSession[]): string[] {
-  const root = resolve(sessionDir);
-  const paths = new Set<string>([root]);
-  for (const session of sessions) {
-    let current = resolve(dirname(session.path));
-    while (
-      current === root ||
-      (relative(root, current) !== "" && !relative(root, current).startsWith(".."))
-    ) {
-      paths.add(current);
-      if (current === root) break;
-      current = dirname(current);
-    }
-  }
-  return [...paths];
-}
-
-function fingerprintInfo(info: { isDirectory(): boolean; size: number; mtimeMs: number }): string {
-  return `${info.isDirectory() ? "d" : "f"}:${info.size}:${info.mtimeMs}`;
-}
-
-async function fingerprint(paths: readonly string[]): Promise<Map<string, string>> {
-  const result = new Map<string, string>();
-  await Promise.all(
-    paths.map(async (path) => {
-      try {
-        result.set(path, fingerprintInfo(await stat(path)));
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") result.set(path, "missing");
-        else result.set(path, "unreadable");
-      }
-    }),
-  );
-  return result;
-}
-
-interface ValidatedSessionPath {
-  path: string;
-  fingerprint: string;
-}
-
-/**
- * Open the discovered file before resolving it so a final-component symlink
- * cannot be exchanged after a separate containment check. The inode comparison
- * also rejects an ancestor-directory exchange that resolves outside the root.
- */
-async function validateDiscoveredSessionPath(
-  sessionRoot: string,
-  path: string,
-): Promise<ValidatedSessionPath | undefined> {
-  let handle: FileHandle | undefined;
-  try {
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    const info = await handle.stat();
-    if (!info.isFile()) return undefined;
-
-    const canonicalPath = await realpath(path);
-    const canonicalInfo = await stat(canonicalPath);
-    const rel = relative(sessionRoot, canonicalPath);
-    if (
-      (rel !== "" && (rel.startsWith("..") || rel.startsWith(`..${sep}`))) ||
-      canonicalInfo.dev !== info.dev ||
-      canonicalInfo.ino !== info.ino
-    ) {
-      return undefined;
-    }
-    return { path: canonicalPath, fingerprint: fingerprintInfo(info) };
-  } catch {
-    return undefined;
-  } finally {
-    await handle?.close();
-  }
-}
-
-function installWatchers(cache: ProjectCache): void {
-  for (const watcher of cache.watchers) watcher.close();
-  cache.watchers = [];
-  for (const path of pathsToWatch(cache.sessionDir, cache.sessions)) {
-    try {
-      const watcher = watch(path, { persistent: false }, () => {
-        cache.dirty = true;
-      });
-      watcher.on("error", () => {
-        cache.dirty = true;
-      });
-      cache.watchers.push(watcher);
-    } catch {
-      // A missing or inaccessible directory is reconciled conservatively.
-      cache.dirty = true;
-    }
-  }
-}
-
-async function reconcile(cache: ProjectCache): Promise<void> {
-  if (Date.now() - cache.lastReconciledAt < RECONCILE_INTERVAL_MS) return;
-  cache.lastReconciledAt = Date.now();
-  const next = await fingerprint([...cache.footprint.keys()]);
-  if (next.size !== cache.footprint.size) {
-    cache.dirty = true;
-    return;
-  }
-  for (const [path, value] of cache.footprint) {
-    if (next.get(path) !== value) {
-      cache.dirty = true;
-      return;
-    }
-  }
-}
-
-async function cacheProject(
-  projectId: string,
-  workspacePath: string,
-  sessionDir: string,
-): Promise<ProjectCache | undefined> {
-  await ensureLoaded();
-  const current = projects.get(projectId);
-  if (
-    current !== undefined &&
-    current.workspacePath === workspacePath &&
-    current.sessionDir === sessionDir
-  ) {
-    return current;
-  }
-  if (current !== undefined) {
-    for (const watcher of current.watchers) watcher.close();
-    projects.delete(projectId);
-  }
-  const stored = persisted.projects[projectId];
-  if (stored === undefined || stored.workspacePath !== workspacePath) return undefined;
-  // Do not trust a manually edited/corrupted cache to make us stat or return
-  // paths outside this project's canonical session root. Validate both session
-  // records and footprint paths before any stat call; realpath prevents a
-  // symlink inside the session tree from escaping that root.
-  const storedFootprint = new Map(Object.entries(stored.footprint));
-  const cachedPaths = [
-    ...stored.sessions.map((session) => session.path),
-    ...storedFootprint.keys(),
-  ];
-  if (
-    (await Promise.all(cachedPaths.map((path) => isInsideSessionDir(sessionDir, path)))).some(
-      (inside) => !inside,
-    )
-  ) {
-    delete persisted.projects[projectId];
-    return undefined;
-  }
-  const sessions = stored.sessions.map(fromPersisted);
-  const currentFootprint = await fingerprint([...storedFootprint.keys()]);
-  if (
-    currentFootprint.size !== storedFootprint.size ||
-    [...storedFootprint].some(([path, value]) => currentFootprint.get(path) !== value)
-  ) {
-    // The disk changed while this process was stopped. Rebuild before serving
-    // so deleted or externally-created child sessions are never ghosted.
-    return undefined;
-  }
-  const cache: ProjectCache = {
-    workspacePath,
-    sessionDir,
-    sessions,
-    dirty: false,
-    lastReconciledAt: Date.now(),
-    footprint: currentFootprint,
-    watchers: [],
-    needsPreviewHydration: true,
-  };
-  installWatchers(cache);
-  projects.set(projectId, cache);
-  return cache;
 }
 
 async function rebuildProject(
@@ -391,96 +196,60 @@ async function rebuildProject(
 ): Promise<IndexedSession[]> {
   const generation = projectGeneration(projectId);
   return rebuildInflight(`${projectId}:${generation}`, async () => {
-    // Discovery is caller-provided, so validate every result before it can be
-    // watched, fingerprinted, cached, or persisted. Opening with O_NOFOLLOW
-    // binds validation to one regular-file handle instead of trusting a path
-    // which could be exchanged for an external symlink between checks.
-    const sessionRoot = await realpath(sessionDir).catch(() => undefined);
+    // Do not validate, fingerprint, watch, canonicalize, or return a path from
+    // a prior cache entry. Discovery owns current path handling; its result is
+    // returned directly so a cache cannot turn an earlier pathname validation
+    // into a durable capability.
     const discovered = await discover();
-    const validated = await Promise.all(
-      discovered.map(async (session) => {
-        if (sessionRoot === undefined) return undefined;
-        const validatedPath = await validateDiscoveredSessionPath(sessionRoot, session.path);
-        return validatedPath === undefined ? undefined : { session, validatedPath };
-      }),
-    );
-    const sessions: IndexedSession[] = [];
-    const sessionFingerprints = new Map<string, string>();
-    for (const entry of validated) {
-      if (entry === undefined) continue;
-      sessions.push({ ...entry.session, path: entry.validatedPath.path });
-      sessionFingerprints.set(entry.validatedPath.path, entry.validatedPath.fingerprint);
-    }
-    // A reset that begins during source discovery wins. Its newer generation
-    // must not be overwritten by this stale scan.
+    const sessions = (
+      await Promise.all(
+        discovered.map(async (session) =>
+          (await isCurrentRegularSessionPath(sessionDir, session.path)) ? session : undefined,
+        ),
+      )
+    ).filter((session): session is IndexedSession => session !== undefined);
     if (generation !== projectGeneration(projectId)) return sessions;
-    // Fingerprint discovered files from their validated handles; re-statting
-    // their pathnames here would reopen the symlink exchange race.
-    const footprint = await fingerprint(pathsToWatch(sessionDir, sessions));
-    for (const [path, value] of sessionFingerprints) footprint.set(path, value);
-    if (generation !== projectGeneration(projectId)) return sessions;
-    const cache: ProjectCache = {
-      workspacePath,
-      sessionDir,
-      sessions,
-      dirty: false,
-      lastReconciledAt: Date.now(),
-      footprint,
-      watchers: [],
-      needsPreviewHydration: false,
-    };
-    const previous = projects.get(projectId);
-    if (previous !== undefined) {
-      for (const watcher of previous.watchers) watcher.close();
-    }
+
+    const metadata = sessions
+      .map((session) => toPersisted(sessionDir, session))
+      .filter((session): session is PersistedSession => session !== undefined);
+    const cache = { workspacePath, sessions: metadata };
     projects.set(projectId, cache);
-    installWatchers(cache);
-    persisted.projects[projectId] = {
-      workspacePath,
-      sessions: sessions.map(toPersisted),
-      footprint: Object.fromEntries(cache.footprint),
-    };
+    persisted.projects[projectId] = cache;
     await atomicWriteIndex();
     return sessions;
   });
 }
 
-/** Return the cached project list or rebuild it from the caller's JSONL scanner. */
+/**
+ * Discover the current JSONL paths and update metadata opportunistically.
+ * Concurrent requests share one scan, but sequential reads intentionally do
+ * not serve old pathnames from the cache.
+ */
 export async function getIndexedProjectSessions(
   projectId: string,
   workspacePath: string,
   sessionDir: string,
   discover: () => Promise<IndexedSession[]>,
 ): Promise<IndexedSession[]> {
-  const cache = await cacheProject(projectId, workspacePath, sessionDir);
-  if (cache !== undefined) {
-    await reconcile(cache);
-    if (!cache.dirty && !cache.needsPreviewHydration) return cache.sessions;
-  }
+  await ensureLoaded();
   return rebuildProject(projectId, workspacePath, sessionDir, discover);
 }
 
-/** Mark one project's entry stale after a known session filesystem mutation. */
+/** Mark one project's metadata stale after a known session filesystem mutation. */
 export function invalidateSessionIndex(projectId: string): void {
-  // Invalidation wins over any scan that was already in flight. A later lookup
-  // uses the next generation and cannot be overwritten by that stale result.
   projectGenerations.set(projectId, projectGeneration(projectId) + 1);
-  const cache = projects.get(projectId);
-  if (cache !== undefined) cache.dirty = true;
+  projects.delete(projectId);
 }
 
 /**
- * Remove only one project's derived cache and force its next lookup to scan
+ * Remove only one project's derived metadata and force its next lookup to scan
  * source JSONLs again. Session files and project data are never modified.
  */
 export async function resetSessionIndex(projectId: string): Promise<void> {
   await ensureLoaded();
   projectGenerations.set(projectId, projectGeneration(projectId) + 1);
-  const cache = projects.get(projectId);
-  if (cache !== undefined) {
-    for (const watcher of cache.watchers) watcher.close();
-    projects.delete(projectId);
-  }
+  projects.delete(projectId);
   delete persisted.projects[projectId];
   await atomicWriteIndex();
 }
