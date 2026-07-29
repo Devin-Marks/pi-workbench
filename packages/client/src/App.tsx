@@ -73,6 +73,30 @@ function readPersistedProjectsWidth(): number {
   return Math.min(Math.max(parsed, MIN_PROJECTS_WIDTH), MAX_PROJECTS_WIDTH);
 }
 
+export function getProjectsMaxWidth(
+  viewportWidth: number,
+  filesWidth: number,
+  editorWidth: number,
+  filesOpen: boolean,
+  editorVisible: boolean,
+): number {
+  return Math.max(
+    MIN_PROJECTS_WIDTH,
+    Math.min(
+      MAX_PROJECTS_WIDTH,
+      viewportWidth -
+        MIN_CHAT_WIDTH -
+        (filesOpen ? filesWidth + 4 : 0) -
+        (editorVisible ? editorWidth + 4 : 0) -
+        4,
+    ),
+  );
+}
+
+export function clampProjectsWidth(width: number, maxWidth: number): number {
+  return Math.min(Math.max(width, MIN_PROJECTS_WIDTH), maxWidth);
+}
+
 export function App() {
   const ready = useAuthStore((s) => s.ready);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -231,6 +255,7 @@ export function App() {
   // it through the ref so the divider can read the start width without
   // a stale-closure bug across drags.
   const [projectsWidth, setProjectsWidth] = useState<number>(readPersistedProjectsWidth);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [filesWidth, setFilesWidth] = useState<number>(() =>
     readPersistedWidth(FILES_WIDTH_KEY, DEFAULT_FILES_WIDTH),
   );
@@ -255,6 +280,23 @@ export function App() {
 
   const openFilesCount = useFileStore((s) => s.openFiles.length);
   const editorVisible = editorOpen && openFilesCount > 0;
+  const projectsMaxWidth = getProjectsMaxWidth(
+    viewportWidth,
+    filesWidth,
+    editorWidth,
+    filesOpen,
+    editorVisible,
+  );
+
+  useEffect(() => {
+    const onResize = (): void => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    setProjectsWidth((current) => clampProjectsWidth(current, projectsMaxWidth));
+  }, [projectsMaxWidth]);
 
   // Drives the modified-file count badge on the Git tab. Polls via
   // the hook regardless of which tab is currently visible — we want
@@ -650,14 +692,8 @@ export function App() {
               onResize={setProjectsWidth}
               direction={1}
               minSize={MIN_PROJECTS_WIDTH}
-              maxSize={Math.max(
-                MIN_PROJECTS_WIDTH,
-                window.innerWidth -
-                  MIN_CHAT_WIDTH -
-                  (filesOpen ? filesWidth + 4 : 0) -
-                  (editorVisible ? editorWidth + 4 : 0) -
-                  4,
-              )}
+              maxSize={projectsMaxWidth}
+              ariaLabel="Resize project sidebar"
             />
           )}
           <main className="flex flex-1 overflow-hidden">
