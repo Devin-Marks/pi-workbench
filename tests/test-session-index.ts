@@ -116,9 +116,15 @@ async function main(): Promise<void> {
       projectSessionDir,
       discover,
     );
+    const escapedPersisted = JSON.parse(
+      await readFile(join(dataDir, "session-index.json"), "utf8"),
+    ) as { projects?: Record<string, { sessions?: { path?: string }[] }> };
     assert(
-      "discovery rejects symlink paths outside the project session root",
-      escaped.length === 0,
+      "discovery rejects and does not persist an external symlink target",
+      escaped.length === 0 &&
+        !escapedPersisted.projects?.[projectId]?.sessions?.some(
+          (session) => session.path === outsidePath || session.path === escapedPath,
+        ),
     );
     await rm(outsideDir, { recursive: true, force: true });
     records = [record];

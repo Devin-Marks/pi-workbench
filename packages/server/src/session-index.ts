@@ -1,6 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { watch, type FSWatcher } from "node:fs";
-import { mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { constants, watch, type FSWatcher } from "node:fs";
+import {
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+  type FileHandle,
+} from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { config } from "./config.js";
 import { makeDedupe, makeLock } from "./concurrency.js";
@@ -219,13 +229,16 @@ function pathsToWatch(sessionDir: string, sessions: readonly IndexedSession[]): 
   return [...paths];
 }
 
+function fingerprintInfo(info: { isDirectory(): boolean; size: number; mtimeMs: number }): string {
+  return `${info.isDirectory() ? "d" : "f"}:${info.size}:${info.mtimeMs}`;
+}
+
 async function fingerprint(paths: readonly string[]): Promise<Map<string, string>> {
   const result = new Map<string, string>();
   await Promise.all(
     paths.map(async (path) => {
       try {
-        const info = await stat(path);
-        result.set(path, `${info.isDirectory() ? "d" : "f"}:${info.size}:${info.mtimeMs}`);
+        result.set(path, fingerprintInfo(await stat(path)));
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") result.set(path, "missing");
         else result.set(path, "unreadable");
@@ -233,6 +246,44 @@ async function fingerprint(paths: readonly string[]): Promise<Map<string, string
     }),
   );
   return result;
+}
+
+interface ValidatedSessionPath {
+  path: string;
+  fingerprint: string;
+}
+
+/**
+ * Open the discovered file before resolving it so a final-component symlink
+ * cannot be exchanged after a separate containment check. The inode comparison
+ * also rejects an ancestor-directory exchange that resolves outside the root.
+ */
+async function validateDiscoveredSessionPath(
+  sessionRoot: string,
+  path: string,
+): Promise<ValidatedSessionPath | undefined> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const info = await handle.stat();
+    if (!info.isFile()) return undefined;
+
+    const canonicalPath = await realpath(path);
+    const canonicalInfo = await stat(canonicalPath);
+    const rel = relative(sessionRoot, canonicalPath);
+    if (
+      (rel !== "" && (rel.startsWith("..") || rel.startsWith(`..${sep}`))) ||
+      canonicalInfo.dev !== info.dev ||
+      canonicalInfo.ino !== info.ino
+    ) {
+      return undefined;
+    }
+    return { path: canonicalPath, fingerprint: fingerprintInfo(info) };
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close();
+  }
 }
 
 function installWatchers(cache: ProjectCache): void {
@@ -341,24 +392,32 @@ async function rebuildProject(
   const generation = projectGeneration(projectId);
   return rebuildInflight(`${projectId}:${generation}`, async () => {
     // Discovery is caller-provided, so validate every result before it can be
-    // watched, fingerprinted, cached, or persisted. Canonical paths prevent a
-    // symlink below the project session root from escaping that project.
+    // watched, fingerprinted, cached, or persisted. Opening with O_NOFOLLOW
+    // binds validation to one regular-file handle instead of trusting a path
+    // which could be exchanged for an external symlink between checks.
+    const sessionRoot = await realpath(sessionDir).catch(() => undefined);
     const discovered = await discover();
-    const sessions = (
-      await Promise.all(
-        discovered.map(async (session) => {
-          if (!(await isInsideSessionDir(sessionDir, session.path))) return undefined;
-          return { ...session, path: await realpath(session.path) };
-        }),
-      )
-    ).filter((session): session is IndexedSession => session !== undefined);
+    const validated = await Promise.all(
+      discovered.map(async (session) => {
+        if (sessionRoot === undefined) return undefined;
+        const validatedPath = await validateDiscoveredSessionPath(sessionRoot, session.path);
+        return validatedPath === undefined ? undefined : { session, validatedPath };
+      }),
+    );
+    const sessions: IndexedSession[] = [];
+    const sessionFingerprints = new Map<string, string>();
+    for (const entry of validated) {
+      if (entry === undefined) continue;
+      sessions.push({ ...entry.session, path: entry.validatedPath.path });
+      sessionFingerprints.set(entry.validatedPath.path, entry.validatedPath.fingerprint);
+    }
     // A reset that begins during source discovery wins. Its newer generation
     // must not be overwritten by this stale scan.
     if (generation !== projectGeneration(projectId)) return sessions;
-    const footprint = await fingerprint([
-      ...pathsToWatch(sessionDir, sessions),
-      ...sessions.map((session) => session.path),
-    ]);
+    // Fingerprint discovered files from their validated handles; re-statting
+    // their pathnames here would reopen the symlink exchange race.
+    const footprint = await fingerprint(pathsToWatch(sessionDir, sessions));
+    for (const [path, value] of sessionFingerprints) footprint.set(path, value);
     if (generation !== projectGeneration(projectId)) return sessions;
     const cache: ProjectCache = {
       workspacePath,
