@@ -218,6 +218,10 @@ async function main(): Promise<void> {
       assert("OpenAPI spec has openapi version", typeof spec.openapi === "string");
       assert("spec includes /sessions path", spec.paths?.["/api/v1/sessions"] !== undefined);
       assert(
+        "spec includes session-index refresh path",
+        spec.paths?.["/api/v1/projects/{projectId}/session-index/refresh"] !== undefined,
+      );
+      assert(
         "spec includes /sessions/{id}/prompt",
         spec.paths?.["/api/v1/sessions/{id}/prompt"] !== undefined,
       );
@@ -258,6 +262,34 @@ async function main(): Promise<void> {
       );
       assert("create project → 201", proj.status === 201);
       projectId = (proj.body as { id: string }).id;
+
+      const anonymousRefresh = await jsend(
+        "POST",
+        `${base}/api/v1/projects/${projectId}/session-index/refresh`,
+        {},
+      );
+      assert("session-index refresh requires authentication", anonymousRefresh.status === 401);
+      const refreshed = await jsend(
+        "POST",
+        `${base}/api/v1/projects/${projectId}/session-index/refresh`,
+        {},
+        auth,
+      );
+      assert(
+        "session-index refresh rebuilds and returns the project session list",
+        refreshed.status === 200 &&
+          Array.isArray((refreshed.body as { sessions?: unknown }).sessions),
+      );
+      const refreshBurst = await Promise.all(
+        Array.from({ length: 11 }, () =>
+          jsend("POST", `${base}/api/v1/projects/${projectId}/session-index/refresh`, {}, auth),
+        ),
+      );
+      assert(
+        "session-index refresh burst is route-rate-limited",
+        refreshBurst.some((response) => response.status === 429),
+        `statuses=${refreshBurst.map((response) => response.status).join(",")}`,
+      );
     }
 
     let sessionId: string;

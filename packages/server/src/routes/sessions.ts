@@ -10,6 +10,7 @@ import {
   getSession,
   listExtensionCommands,
   listSessionsForProject,
+  refreshProjectSessionIndex,
   rejectOrDisposeExternallyActiveSession,
   resumeSessionById,
   type UnifiedSession,
@@ -201,6 +202,38 @@ export const sessionRoutes: FastifyPluginAsync = async (fastify) => {
       const all: UnifiedSession[] = settled.flat();
       all.sort((a, b) => b.lastActivityAt.getTime() - a.lastActivityAt.getTime());
       return { sessions: all.map(unifiedFromUnified) };
+    },
+  );
+
+  fastify.post<{ Params: { projectId: string } }>(
+    "/projects/:projectId/session-index/refresh",
+    {
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+      schema: {
+        description:
+          "Clear only the derived session index cache and rebuild this project's session discovery.",
+        tags: ["sessions"],
+        params: {
+          type: "object",
+          required: ["projectId"],
+          properties: { projectId: { type: "string" } },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["sessions"],
+            properties: { sessions: { type: "array", items: unifiedSchema } },
+          },
+          404: errorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const project = await getProject(req.params.projectId);
+      if (project === undefined) return reply.code(404).send({ error: "project_not_found" });
+      await refreshProjectSessionIndex(project.id, project.path);
+      const sessions = await listSessionsForProject(project.id, project.path);
+      return { sessions: sessions.map(unifiedFromUnified) };
     },
   );
 

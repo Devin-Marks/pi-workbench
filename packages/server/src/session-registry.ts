@@ -49,6 +49,11 @@ import { generateSessionTitleFromPrompt, isGenericSessionName } from "./session-
 import { getExternalSubagentStatusForSession } from "./subagents-external.js";
 import { readSandboxSettings } from "./sandbox-settings.js";
 import { publishSessionActivity, type SessionActivity } from "./session-activity.js";
+import {
+  getIndexedProjectSessions,
+  invalidateSessionIndex,
+  resetSessionIndex,
+} from "./session-index.js";
 
 /**
  * Minimal SSE client contract used by the registry to fan out events.
@@ -486,6 +491,10 @@ function makeSubscribeHandler(live: LiveSession): () => void {
   const verbose = process.env.DEBUG_AGENT_EVENTS === "1";
   return live.session.subscribe((event: AgentSessionEvent) => {
     live.lastActivityAt = new Date();
+    // Session JSONL mutations are observable through the SDK subscription.
+    // Marking the project stale makes the next sidebar/location lookup refresh
+    // from source even when a filesystem watcher event is delayed or lost.
+    invalidateSessionIndex(live.projectId);
     if (event.type === "agent_start") {
       publishActivity(live, true);
       // Capture BEFORE the SDK appends turn messages, so the index points
@@ -864,6 +873,7 @@ export async function createSession(
   };
   live.unsubscribe = makeSubscribeHandler(live);
   registry.set(live.sessionId, live);
+  invalidateSessionIndex(projectId);
   await bindWebExtensionContext(live);
 
   // Set a meaningful default name on the new session so the sidebar
@@ -1271,13 +1281,17 @@ export async function deleteColdSession(
           sessionPath: match.path,
           ...(siblingDir !== undefined ? { subagentDir: siblingDir } : {}),
         });
+        invalidateSessionIndex(project.id);
       } catch (err) {
         // ENOENT (vanished mid-flight) is fine — collapse to "deleted" since
         // the file is now gone from live discovery, which is what the caller
         // asked for. Any other error (permissions, IO) is a real failure and
         // should NOT silently look like "not_found" to the operator.
         const code = (err as NodeJS.ErrnoException).code;
-        if (code === "ENOENT") return "deleted";
+        if (code === "ENOENT") {
+          invalidateSessionIndex(project.id);
+          return "deleted";
+        }
         throw err;
       }
       return "deleted";
@@ -1418,6 +1432,30 @@ export async function discoverSessionsOnDisk(
   workspacePath: string,
 ): Promise<DiscoveredSession[]> {
   const dir = sessionDirFor(projectId);
+  return getIndexedProjectSessions(projectId, dir, () =>
+    discoverSessionsOnDiskUncached(projectId, workspacePath, dir),
+  );
+}
+
+/** Reset only the derived cache, then rebuild this project's JSONL discovery. */
+const refreshProjectSessionIndexInflight = makeDedupe<string, DiscoveredSession[]>();
+
+export async function refreshProjectSessionIndex(
+  projectId: string,
+  workspacePath: string,
+): Promise<DiscoveredSession[]> {
+  return refreshProjectSessionIndexInflight(projectId, async () => {
+    await resetSessionIndex(projectId);
+    return discoverSessionsOnDisk(projectId, workspacePath);
+  });
+}
+
+/** JSONL source-of-truth scan used exclusively to rebuild the session index. */
+async function discoverSessionsOnDiskUncached(
+  projectId: string,
+  workspacePath: string,
+  dir: string,
+): Promise<DiscoveredSession[]> {
   // SDK's list() guards `existsSync(dir)` and returns [] for missing dirs,
   // so we don't need an outer ENOENT catch.
   const infos: SessionInfo[] = await SessionManager.list(workspacePath, dir);
@@ -1891,6 +1929,7 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
   };
   live.unsubscribe = makeSubscribeHandler(live);
   registry.set(live.sessionId, live);
+  invalidateSessionIndex(source.projectId);
   await bindWebExtensionContext(live);
 
   // Disambiguate the fork's display name from its source. The SDK

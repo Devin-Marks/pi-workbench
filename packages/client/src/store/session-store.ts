@@ -373,6 +373,7 @@ interface SessionState {
   loadingList: boolean;
 
   loadSessionsForProject: (projectId: string) => Promise<void>;
+  refreshProjectSessionIndex: (projectId: string) => Promise<void>;
   createSession: (projectId: string) => Promise<SessionSummary>;
   renameSession: (sessionId: string, name: string) => Promise<void>;
   setActiveSession: (sessionId: string | undefined) => void;
@@ -481,6 +482,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         loadingList: false,
         error: err instanceof ApiError ? err.code : (err as Error).message,
       });
+    }
+  },
+
+  refreshProjectSessionIndex: async (projectId) => {
+    set({ loadingList: true, error: undefined });
+    try {
+      const { sessions } = await api.refreshProjectSessionIndex(projectId);
+      set((s) => ({
+        byProject: { ...s.byProject, [projectId]: sessions },
+        loadingList: false,
+      }));
+    } catch (err) {
+      set({
+        loadingList: false,
+        error: err instanceof ApiError ? err.code : (err as Error).message,
+      });
+      throw err;
     }
   },
 

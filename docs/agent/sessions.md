@@ -31,6 +31,10 @@ These are facts about the pi SDK that are easy to get wrong:
   (`session-store.ts`), (c) cascade-deleting the parent's sibling subagent
   dir in `deleteColdSession`. The plugin shells out to the `pi` CLI; the
   Docker image puts it on PATH via `/app/node_modules/.bin`.
+- The session index is metadata-only and never returns cached paths. Before
+  persisting metadata from SDK discovery, it rejects candidates whose
+  root-relative path contains a symlink. This contains cache exposure only;
+  it does not attempt to repair the SDK's general symlink-opening behavior.
 - `session.fork()` creates a new session FILE. The new session ID is returned.
   The registry must then load this new session before it can be used.
 - `session.navigateTree()` operates IN-PLACE on the current session file. It does
