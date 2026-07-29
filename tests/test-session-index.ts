@@ -5,7 +5,7 @@
  * - explicit invalidation and manual reset force the next lookup to rebuild
  * - reset does not mutate source JSONLs or allow a stale in-flight scan to win
  */
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,7 +50,7 @@ async function main(): Promise<void> {
   await writeFile(record.path, '{"type":"session"}\n', "utf8");
 
   const index = (await import(
-    resolve(repoRoot, "packages/server/dist/session-index.js")
+    resolve(repoRoot, "packages/server/src/session-index.ts")
   )) as typeof import("../packages/server/src/session-index.js");
   let records = [record];
   let delayedScan: Promise<void> | undefined;
@@ -89,15 +89,41 @@ async function main(): Promise<void> {
       "versioned index persists only metadata and no preview content",
       persisted.version === 2 &&
         stored?.path === record.path &&
-        stored?.firstMessage === undefined &&
-        stored?.parentSessionId === undefined &&
-        stored?.runId === undefined &&
-        stored?.externalState === undefined,
+        JSON.stringify(Object.keys(stored ?? {}).sort()) ===
+          JSON.stringify([
+            "createdAt",
+            "cwd",
+            "messageCount",
+            "modifiedAt",
+            "name",
+            "path",
+            "sessionId",
+          ]),
     );
 
     index.invalidateSessionIndex(projectId);
     await index.getIndexedProjectSessions(projectId, sessionDir, projectSessionDir, discover);
     assert("explicit invalidation rebuilds on next lookup", scans === 2);
+
+    const outsideDir = await mkdtemp(join(tmpdir(), "pi-forge-session-index-outside-"));
+    const outsidePath = join(outsideDir, "foreign.jsonl");
+    const escapedPath = join(projectSessionDir, "escaped.jsonl");
+    await writeFile(outsidePath, '{"type":"session"}\n', "utf8");
+    await symlink(outsidePath, escapedPath);
+    records = [{ ...record, sessionId: "escaped-session", path: escapedPath }];
+    index.invalidateSessionIndex(projectId);
+    const escaped = await index.getIndexedProjectSessions(
+      projectId,
+      sessionDir,
+      projectSessionDir,
+      discover,
+    );
+    assert(
+      "discovery rejects symlink paths outside the project session root",
+      escaped.length === 0,
+    );
+    await rm(outsideDir, { recursive: true, force: true });
+    records = [record];
 
     const sourceBeforeReset = await readFile(record.path, "utf8");
     await index.resetSessionIndex(projectId);
@@ -113,7 +139,7 @@ async function main(): Promise<void> {
       (await readFile(record.path, "utf8")) === sourceBeforeReset,
     );
     await index.getIndexedProjectSessions(projectId, sessionDir, projectSessionDir, discover);
-    assert("reset forces the next lookup to rebuild", scans === 3);
+    assert("reset forces the next lookup to rebuild", scans === 4);
 
     let releaseDelayedScan!: () => void;
     index.invalidateSessionIndex(projectId);
@@ -126,8 +152,8 @@ async function main(): Promise<void> {
       projectSessionDir,
       discover,
     );
-    while (scans !== 4) await new Promise((resolveDelay) => setTimeout(resolveDelay, 1));
-    await index.resetSessionIndex(projectId);
+    while (scans !== 5) await new Promise((resolveDelay) => setTimeout(resolveDelay, 1));
+    index.invalidateSessionIndex(projectId);
     records = [{ ...record, sessionId: "fresh-session" }];
     releaseDelayedScan();
     await staleRebuild;
@@ -139,8 +165,8 @@ async function main(): Promise<void> {
       discover,
     );
     assert(
-      "delayed stale rebuild cannot repopulate a reset generation",
-      scans === 5 && refreshed[0]?.sessionId === "fresh-session",
+      "delayed stale rebuild cannot overwrite an invalidated generation",
+      scans === 6 && refreshed[0]?.sessionId === "fresh-session",
     );
   } finally {
     await rm(dataDir, { recursive: true, force: true });

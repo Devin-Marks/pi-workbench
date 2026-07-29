@@ -342,7 +342,18 @@ async function rebuildProject(
 ): Promise<IndexedSession[]> {
   const generation = projectGeneration(projectId);
   return rebuildInflight(`${projectId}:${generation}`, async () => {
-    const sessions = await discover();
+    // Discovery is caller-provided, so validate every result before it can be
+    // watched, fingerprinted, cached, or persisted. Canonical paths prevent a
+    // symlink below the project session root from escaping that project.
+    const discovered = await discover();
+    const sessions = (
+      await Promise.all(
+        discovered.map(async (session) => {
+          if (!(await isInsideSessionDir(sessionDir, session.path))) return undefined;
+          return { ...session, path: await realpath(session.path) };
+        }),
+      )
+    ).filter((session): session is IndexedSession => session !== undefined);
     // A reset that begins during source discovery wins. Its newer generation
     // must not be overwritten by this stale scan.
     if (generation !== projectGeneration(projectId)) return sessions;
@@ -394,6 +405,9 @@ export async function getIndexedProjectSessions(
 
 /** Mark one project's entry stale after a known session filesystem mutation. */
 export function invalidateSessionIndex(projectId: string): void {
+  // Invalidation wins over any scan that was already in flight. A later lookup
+  // uses the next generation and cannot be overwritten by that stale result.
+  projectGenerations.set(projectId, projectGeneration(projectId) + 1);
   const cache = projects.get(projectId);
   if (cache !== undefined) cache.dirty = true;
 }
