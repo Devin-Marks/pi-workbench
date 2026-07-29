@@ -1432,7 +1432,7 @@ export async function discoverSessionsOnDisk(
   workspacePath: string,
 ): Promise<DiscoveredSession[]> {
   const dir = sessionDirFor(projectId);
-  return getIndexedProjectSessions(projectId, workspacePath, dir, () =>
+  return getIndexedProjectSessions(projectId, dir, () =>
     discoverSessionsOnDiskUncached(projectId, workspacePath, dir),
   );
 }

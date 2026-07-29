@@ -1,10 +1,10 @@
 /**
  * Session index persistence/cache contract:
- * - malformed persisted index is ignored and rebuilt from the supplied JSONL scan
- * - each lookup returns a current discovery result, never a cached pathname
- * - explicit invalidation and manual reset force the next lookup to rebuild
+ * - malformed persisted index is ignored and rebuilt from SDK discovery
+ * - each lookup returns a current discovery result, never cached paths
+ * - persisted records contain generic metadata only; paths/names/previews never persist
  * - reset does not mutate source JSONLs or allow a stale in-flight scan to win
- * - persisted records contain generic metadata only; names/previews rehydrate from JSONL
+ * - SDK discovery remains the sole enumeration authority around symlinks
  */
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,11 +15,11 @@ const __filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(__filename), "..");
 
 let failures = 0;
-function assert(label: string, ok: boolean, detail?: string): void {
+function assert(label: string, ok: boolean): void {
   if (ok) console.log(`  PASS  ${label}`);
   else {
     failures += 1;
-    console.log(`  FAIL  ${label}${detail ? ` — ${detail}` : ""}`);
+    console.log(`  FAIL  ${label}`);
   }
 }
 
@@ -46,8 +46,6 @@ async function main(): Promise<void> {
     messageCount: 7,
     firstMessage: "hello",
   };
-
-  await mkdir(dirname(record.path), { recursive: true });
   await writeFile(record.path, '{"type":"session"}\n', "utf8");
 
   const index = (await import(
@@ -62,23 +60,13 @@ async function main(): Promise<void> {
   };
 
   try {
-    const first = await index.getIndexedProjectSessions(
-      projectId,
-      sessionDir,
-      projectSessionDir,
-      discover,
-    );
+    const first = await index.getIndexedProjectSessions(projectId, sessionDir, discover);
     assert(
       "malformed index rebuilds from source",
       scans === 1 && first[0]?.sessionId === record.sessionId,
     );
 
-    const second = await index.getIndexedProjectSessions(
-      projectId,
-      sessionDir,
-      projectSessionDir,
-      discover,
-    );
+    const second = await index.getIndexedProjectSessions(projectId, sessionDir, discover);
     assert(
       "clean project lookup returns a fresh source-derived session name",
       scans === 2 && second.length === 1 && second[0]?.name === record.name,
@@ -86,57 +74,63 @@ async function main(): Promise<void> {
 
     const persisted = JSON.parse(await readFile(join(dataDir, "session-index.json"), "utf8")) as {
       version?: number;
-      projects?: Record<string, { sessions?: Record<string, unknown>[] }>;
+      projects?: Record<
+        string,
+        { refreshedAt?: string; sessionCount?: number; sessions?: Record<string, unknown>[] }
+      >;
     };
     const stored = persisted.projects?.[projectId]?.sessions?.[0];
     assert(
-      "versioned index persists generic metadata only, never names or preview content",
-      persisted.version === 4 &&
-        stored?.relativePath === "session-index-test.jsonl" &&
+      "versioned index persists path-free generic metadata only",
+      persisted.version === 5 &&
+        persisted.projects?.[projectId]?.sessionCount === 1 &&
+        typeof persisted.projects?.[projectId]?.refreshedAt === "string" &&
         JSON.stringify(Object.keys(stored ?? {}).sort()) ===
-          JSON.stringify([
-            "createdAt",
-            "cwd",
-            "messageCount",
-            "modifiedAt",
-            "relativePath",
-            "sessionId",
-          ]) &&
+          JSON.stringify(["createdAt", "messageCount", "modifiedAt", "sessionId"]) &&
         !JSON.stringify(persisted).includes(record.path) &&
+        !JSON.stringify(persisted).includes(sessionDir) &&
         !JSON.stringify(stored).includes(record.name) &&
         !JSON.stringify(stored).includes(record.firstMessage),
     );
 
     index.invalidateSessionIndex(projectId);
-    await index.getIndexedProjectSessions(projectId, sessionDir, projectSessionDir, discover);
+    await index.getIndexedProjectSessions(projectId, sessionDir, discover);
     assert("explicit invalidation rebuilds on next lookup", scans === 3);
 
     const outsideDir = await mkdtemp(join(tmpdir(), "pi-forge-session-index-outside-"));
     const outsidePath = join(outsideDir, "foreign.jsonl");
-    const escapedPath = join(projectSessionDir, "escaped.jsonl");
+    const finalSymlink = join(projectSessionDir, "final.jsonl");
+    const nestedSymlinkDir = join(projectSessionDir, "nested");
+    const ancestorSymlink = join(sessionDir, "ancestor-project");
     await writeFile(outsidePath, '{"type":"session"}\n', "utf8");
-    await symlink(outsidePath, escapedPath);
-    records = [{ ...record, sessionId: "escaped-session", path: escapedPath }];
+    await symlink(outsidePath, finalSymlink);
+    await symlink(outsideDir, nestedSymlinkDir);
+    await symlink(projectSessionDir, ancestorSymlink);
+    // Model candidates returned by SDK discovery. The cache must return them
+    // unchanged, but reject final and ancestor symlink paths before persistence.
+    records = [
+      record,
+      { ...record, sessionId: "final-symlink-session", path: finalSymlink },
+      {
+        ...record,
+        sessionId: "ancestor-symlink-session",
+        path: join(ancestorSymlink, "session-index-test.jsonl"),
+      },
+    ];
     index.invalidateSessionIndex(projectId);
-    const escaped = await index.getIndexedProjectSessions(
-      projectId,
-      sessionDir,
-      projectSessionDir,
-      discover,
-    );
-    const escapedPersisted = JSON.parse(
+    const symlinked = await index.getIndexedProjectSessions(projectId, sessionDir, discover);
+    const symlinkPersisted = JSON.parse(
       await readFile(join(dataDir, "session-index.json"), "utf8"),
-    ) as { projects?: Record<string, { sessions?: { relativePath?: string }[] }> };
+    ) as { projects?: Record<string, { sessions?: { sessionId?: string }[] }> };
+    const persistedIds = symlinkPersisted.projects?.[projectId]?.sessions?.map((s) => s.sessionId);
     assert(
-      "a symlink swap cannot make cached metadata return or watch an external file",
+      "final and ancestor symlink candidates are excluded before cache persistence",
       scans === 4 &&
-        escaped.length === 0 &&
-        !JSON.stringify(escapedPersisted).includes(outsidePath) &&
-        !JSON.stringify(escapedPersisted).includes(escapedPath) &&
-        !JSON.stringify(escapedPersisted).includes("footprint"),
+        symlinked.length === 3 &&
+        JSON.stringify(persistedIds) === JSON.stringify([record.sessionId]),
     );
-    await rm(outsideDir, { recursive: true, force: true });
     records = [record];
+    await rm(outsideDir, { recursive: true, force: true });
 
     const sourceBeforeReset = await readFile(record.path, "utf8");
     await index.resetSessionIndex(projectId);
@@ -151,7 +145,7 @@ async function main(): Promise<void> {
       "reset does not alter session source files",
       (await readFile(record.path, "utf8")) === sourceBeforeReset,
     );
-    await index.getIndexedProjectSessions(projectId, sessionDir, projectSessionDir, discover);
+    await index.getIndexedProjectSessions(projectId, sessionDir, discover);
     assert("reset forces the next lookup to rebuild", scans === 5);
 
     let releaseDelayedScan!: () => void;
@@ -159,24 +153,14 @@ async function main(): Promise<void> {
     delayedScan = new Promise<void>((resolveDelay) => {
       releaseDelayedScan = resolveDelay;
     });
-    const staleRebuild = index.getIndexedProjectSessions(
-      projectId,
-      sessionDir,
-      projectSessionDir,
-      discover,
-    );
+    const staleRebuild = index.getIndexedProjectSessions(projectId, sessionDir, discover);
     while (scans !== 6) await new Promise((resolveDelay) => setTimeout(resolveDelay, 1));
     index.invalidateSessionIndex(projectId);
     records = [{ ...record, sessionId: "fresh-session" }];
     releaseDelayedScan();
     await staleRebuild;
     delayedScan = undefined;
-    const refreshed = await index.getIndexedProjectSessions(
-      projectId,
-      sessionDir,
-      projectSessionDir,
-      discover,
-    );
+    const refreshed = await index.getIndexedProjectSessions(projectId, sessionDir, discover);
     assert(
       "delayed stale rebuild cannot overwrite an invalidated generation",
       Number(scans) === 7 && refreshed[0]?.sessionId === "fresh-session",
