@@ -10,7 +10,7 @@ import { makeDedupe, makeLock } from "./concurrency.js";
  * source of truth: a missing, malformed, stale, or unwritable index simply
  * causes the caller-supplied disk discovery function to run again.
  */
-const INDEX_VERSION = 2;
+const INDEX_VERSION = 3;
 const RECONCILE_INTERVAL_MS = 30_000;
 
 export interface IndexedSession {
@@ -28,7 +28,6 @@ interface PersistedSession {
   sessionId: string;
   path: string;
   cwd: string;
-  name?: string;
   createdAt: string;
   modifiedAt: string;
   messageCount: number;
@@ -54,7 +53,10 @@ interface ProjectCache {
   lastReconciledAt: number;
   footprint: Map<string, string>;
   watchers: FSWatcher[];
-  /** Persisted records omit previews, so the first sidebar read rebuilds them. */
+  /**
+   * Persisted records omit all user-content fields (including names and
+   * previews), so the first sidebar read rebuilds them from the JSONL source.
+   */
   needsPreviewHydration: boolean;
 }
 
@@ -87,9 +89,6 @@ function parseSession(value: unknown): PersistedSession | undefined {
     Number.isNaN(Date.parse(s.createdAt)) ||
     Number.isNaN(Date.parse(s.modifiedAt))
   ) {
-    return undefined;
-  }
-  if (s.name !== undefined && typeof s.name !== "string") {
     return undefined;
   }
   return s as unknown as PersistedSession;
@@ -155,9 +154,9 @@ async function ensureLoaded(): Promise<void> {
 function fromPersisted(session: PersistedSession): IndexedSession {
   return {
     ...session,
-    // Conversation previews remain exclusively in the source JSONLs, not in
-    // this metadata cache. A validated warm cache therefore never persists
-    // user/assistant content under FORGE_DATA_DIR.
+    // Names and conversation previews remain exclusively in the source JSONLs,
+    // not in this generic metadata cache. Hydration below re-derives both from
+    // the JSONL source before the sidebar consumes a persisted cache.
     firstMessage: "",
     createdAt: new Date(session.createdAt),
     modifiedAt: new Date(session.modifiedAt),
@@ -169,7 +168,6 @@ function toPersisted(session: IndexedSession): PersistedSession {
     sessionId: session.sessionId,
     path: session.path,
     cwd: session.cwd,
-    ...(session.name !== undefined ? { name: session.name } : {}),
     createdAt: session.createdAt.toISOString(),
     modifiedAt: session.modifiedAt.toISOString(),
     messageCount: session.messageCount,

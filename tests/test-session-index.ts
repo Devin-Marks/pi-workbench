@@ -4,6 +4,7 @@
  * - a clean project is served from the in-memory/persistent index
  * - explicit invalidation and manual reset force the next lookup to rebuild
  * - reset does not mutate source JSONLs or allow a stale in-flight scan to win
+ * - persisted records contain generic metadata only; names/previews rehydrate from JSONL
  */
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -78,7 +79,10 @@ async function main(): Promise<void> {
       projectSessionDir,
       discover,
     );
-    assert("clean project lookup avoids repeated discovery", scans === 1 && second.length === 1);
+    assert(
+      "clean project lookup preserves the source-derived session name",
+      scans === 1 && second.length === 1 && second[0]?.name === record.name,
+    );
 
     const persisted = JSON.parse(await readFile(join(dataDir, "session-index.json"), "utf8")) as {
       version?: number;
@@ -86,19 +90,13 @@ async function main(): Promise<void> {
     };
     const stored = persisted.projects?.[projectId]?.sessions?.[0];
     assert(
-      "versioned index persists only metadata and no preview content",
-      persisted.version === 2 &&
+      "versioned index persists generic metadata only, never names or preview content",
+      persisted.version === 3 &&
         stored?.path === record.path &&
         JSON.stringify(Object.keys(stored ?? {}).sort()) ===
-          JSON.stringify([
-            "createdAt",
-            "cwd",
-            "messageCount",
-            "modifiedAt",
-            "name",
-            "path",
-            "sessionId",
-          ]),
+          JSON.stringify(["createdAt", "cwd", "messageCount", "modifiedAt", "path", "sessionId"]) &&
+        !JSON.stringify(stored).includes(record.name) &&
+        !JSON.stringify(stored).includes(record.firstMessage),
     );
 
     index.invalidateSessionIndex(projectId);
