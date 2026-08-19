@@ -798,9 +798,13 @@ function makeFetchWithMcpHeaders(
   if (headers === undefined) return baseFetch;
   return async (input, init) => {
     const resolved = resolveMcpHeaders(headers);
+    const mergedHeaders = new Headers(init?.headers);
+    for (const [name, value] of Object.entries(resolved ?? {})) {
+      mergedHeaders.set(name, value);
+    }
     return await baseFetch(input, {
       ...init,
-      headers: { ...((init?.headers as Record<string, string>) ?? {}), ...(resolved ?? {}) },
+      headers: mergedHeaders,
     });
   };
 }

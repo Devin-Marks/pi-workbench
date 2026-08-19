@@ -45,6 +45,8 @@ interface FixtureServer {
   url: string;
   /** Counts tool invocations since spawn — handy for probe assertions. */
   callCount: () => number;
+  /** Captured Content-Type headers from JSON-RPC POST /messages requests. */
+  postContentTypes: () => string[];
   /** Simulates an MCP server restart that drops known session ids while keeping the URL stable. */
   dropSessions: () => Promise<void>;
   close: () => Promise<void>;
@@ -105,6 +107,7 @@ async function spawnFixtureServer(opts?: {
   // without breaking the prior one). Real production servers do this
   // — Case F (probe) exercises the reconnect path.
   const sessions = new Map<string, SSEServerTransport>();
+  const postContentTypes: string[] = [];
 
   const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
@@ -128,6 +131,7 @@ async function spawnFixtureServer(opts?: {
           return;
         }
         if (req.method === "POST" && url.pathname === "/messages") {
+          postContentTypes.push(req.headers["content-type"] ?? "");
           const sessionId = url.searchParams.get("sessionId") ?? "";
           const transport = sessions.get(sessionId);
           if (transport === undefined) {
@@ -168,6 +172,7 @@ async function spawnFixtureServer(opts?: {
   return {
     url,
     callCount: () => calls,
+    postContentTypes: () => [...postContentTypes],
     dropSessions: async () => {
       const oldSessions = Array.from(sessions.values());
       sessions.clear();
@@ -381,6 +386,25 @@ async function main(): Promise<void> {
       assert(
         "headers: env-backed value resolves and connects",
         manager.getStatus().find((s) => s.name === "headered")?.state === "connected",
+      );
+      const headeredTools = manager.customToolsForProject("any-project-id");
+      const headeredEcho = headeredTools.find((t) => t.name === "headered__echo");
+      assert("headers: env-backed echo tool present", headeredEcho !== undefined);
+      if (headeredEcho !== undefined) {
+        await headeredEcho.execute(
+          "tcid-headered",
+          { text: "content-type-check" },
+          undefined,
+          undefined,
+          {} as Parameters<typeof headeredEcho.execute>[4],
+        );
+      }
+      assert(
+        "headers: JSON-RPC POST keeps application/json content-type",
+        headerFixture
+          .postContentTypes()
+          .some((value) => value.toLowerCase().startsWith("application/json")),
+        JSON.stringify(headerFixture.postContentTypes()),
       );
       delete process.env.TEST_MCP_HEADER_TOKEN;
       await manager.probe("global", "headered");
