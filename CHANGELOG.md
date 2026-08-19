@@ -15,6 +15,27 @@ section. See the "Versions" section of the README for the support window policy.
 
 ## [Unreleased]
 
+## [1.4.8] — 2026-08-19
+
+### Added
+
+- **Skill and extension slash commands.** Prompt composition now supports slash command discovery and insertion for skills and extensions, including UI notifications and integration coverage.
+- **Session activity indicators.** The session list and streams now surface activity state so users can distinguish active, idle, and recently updated sessions.
+- **File tree excluded-folder toggles.** The file browser can show or hide excluded folders on demand while preserving workspace path safety.
+- **Env-backed MCP headers.** MCP server headers can reference environment-backed values so deployments can configure sensitive header values without storing raw secrets in forge data.
+- **Rootless Podman quickstart.** Container documentation now includes a rootless Podman compose quickstart and related deployment guidance.
+
+### Changed
+
+- **Dependabot update volume is capped.** Dependency update configuration now limits open version-update pull requests to reduce release noise.
+
+### Fixed
+
+- **Long-running SSE streams stay connected.** Stream handling now keeps extended agent output alive instead of timing out during long-running turns.
+- **MCP tool failures are isolated and reported safely.** MCP bridge handling now hardens tool failure paths so individual MCP failures do not destabilize the session stream.
+- **Sandboxed agents can read pi docs.** Tool sandbox policy now allows required read-only access to pi documentation paths used by project instructions.
+- **Theme contrast and inspector backgrounds are consistent.** Palette selection contrast and inspector surfaces now respect the active theme/background more reliably.
+
 ## [1.4.7] — 2026-07-22
 
 ### Added
