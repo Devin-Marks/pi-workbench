@@ -493,8 +493,84 @@ async function connectEntry(entry: PoolEntry): Promise<void> {
     entry.tools = [];
     entry.bridged = [];
     entry.state = "error";
-    entry.lastError = err instanceof Error ? err.message : String(err);
+    entry.lastError = sanitizeMcpDiagnostic(err instanceof Error ? err.message : String(err));
+    logMcpConnectionFailure(entry, err);
   }
+}
+
+function logMcpConnectionFailure(entry: PoolEntry, err: unknown): void {
+  const error = err as { name?: unknown; code?: unknown; cause?: unknown };
+  const code =
+    typeof error?.code === "string" || typeof error?.code === "number" ? error.code : undefined;
+  const name = typeof error?.name === "string" ? error.name : undefined;
+  const cause =
+    error?.cause instanceof Error ? sanitizeMcpDiagnostic(error.cause.message) : undefined;
+  console.warn(
+    "[mcp] connection failure",
+    JSON.stringify({
+      server: entry.name,
+      scope: entry.scope === "global" ? "global" : `project:${entry.scope.project}`,
+      kind: isStdioConfig(entry.config) ? "stdio" : "remote",
+      ...(name !== undefined ? { errorName: name } : {}),
+      ...(code !== undefined ? { code } : {}),
+      message: sanitizeMcpDiagnostic(err instanceof Error ? err.message : String(err)),
+      ...(cause !== undefined ? { cause } : {}),
+    }),
+  );
+}
+
+function attachStdioStderrLogger(
+  transport: StdioClientTransport,
+  command: string,
+  scope: Scope,
+): void {
+  const stderr = transport.stderr;
+  if (stderr === null) return;
+  const safeCommand = sanitizeMcpDiagnostic(command);
+  let chunksLogged = 0;
+  stderr.on("data", (chunk: Buffer | string) => {
+    chunksLogged += 1;
+    if (chunksLogged > 20) {
+      if (chunksLogged === 21) {
+        console.warn(
+          "[mcp] stdio stderr suppressed",
+          JSON.stringify({ command: safeCommand, reason: "too_many_chunks" }),
+        );
+      }
+      return;
+    }
+    console.warn(
+      "[mcp] stdio stderr",
+      JSON.stringify({
+        command: safeCommand,
+        scope: scope === "global" ? "global" : `project:${scope.project}`,
+        message: sanitizeMcpDiagnostic(String(chunk)),
+      }),
+    );
+  });
+  stderr.on("error", (err: Error) => {
+    console.warn(
+      "[mcp] stdio stderr read failed",
+      JSON.stringify({ command: safeCommand, message: sanitizeMcpDiagnostic(err.message) }),
+    );
+  });
+}
+
+function sanitizeMcpDiagnostic(value: string): string {
+  const maxChars = 1_000;
+  const redacted = value
+    .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s"',;]+/gi, "$1[REDACTED]")
+    .replace(
+      /((?:api[_-]?key|token|secret|password|passwd|pwd)\s*[:=]\s*)[^\s"',;]+/gi,
+      "$1[REDACTED]",
+    )
+    .replace(
+      /("(?:api[_-]?key|token|secret|password|passwd|pwd)"\s*:\s*")[^"]*(")/gi,
+      "$1[REDACTED]$2",
+    )
+    .replace(/([A-Za-z0-9_-]{8,}\.)[A-Za-z0-9_-]{8,}(\.[A-Za-z0-9_-]{8,})/g, "$1[REDACTED]$2");
+  if (redacted.length <= maxChars) return redacted;
+  return `${redacted.slice(0, maxChars)}… [truncated ${redacted.length - maxChars} chars]`;
 }
 
 async function recoverStaleSession(scope: Scope, name: string): Promise<boolean> {
@@ -526,8 +602,18 @@ async function disconnectEntry(entry: PoolEntry): Promise<void> {
   // the client never finished handshaking.
   // close() can be sync (void) or async (Promise<void>) depending on
   // the transport — Promise.resolve normalizes either to a thenable.
-  await Promise.resolve(client?.close()).catch(() => undefined);
-  await Promise.resolve(transport?.close()).catch(() => undefined);
+  await Promise.resolve(client?.close()).catch((err: unknown) => {
+    console.warn(
+      "[mcp] client close failed",
+      JSON.stringify({ server: entry.name, message: sanitizeMcpDiagnostic(String(err)) }),
+    );
+  });
+  await Promise.resolve(transport?.close()).catch((err: unknown) => {
+    console.warn(
+      "[mcp] transport close failed",
+      JSON.stringify({ server: entry.name, message: sanitizeMcpDiagnostic(String(err)) }),
+    );
+  });
 }
 
 interface OpenedConnection {
@@ -594,9 +680,9 @@ async function openConnection(cfg: McpServerConfig, scope: Scope): Promise<Opene
  * user's repo root); global entries inherit the pi-forge process
  * cwd. An explicit `cfg.cwd` always wins.
  *
- * **stderr.** Inherited so the operator can see startup failures /
- * tracebacks in the pi-forge log without having to pipe-and-pump
- * the child's stderr ourselves.
+ * **stderr.** Piped through pi-forge so startup failures / tracebacks
+ * remain visible in pod logs, but are size-limited and scrubbed for
+ * common secret shapes before logging.
  */
 async function openStdio(cfg: McpServerConfig, scope: Scope): Promise<OpenedConnection> {
   if (cfg.command === undefined || cfg.command.length === 0) {
@@ -615,8 +701,9 @@ async function openStdio(cfg: McpServerConfig, scope: Scope): Promise<OpenedConn
     args: cfg.args ?? [],
     env,
     ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
-    stderr: "inherit",
+    stderr: "pipe",
   });
+  attachStdioStderrLogger(transport, cfg.command, scope);
   const client = new Client({ name: "pi-forge", version: "1.0.0" }, { capabilities: {} });
   await client.connect(transport);
   return { client, transport, resolvedTransport: undefined };
