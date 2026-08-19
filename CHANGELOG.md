@@ -15,6 +15,12 @@ section. See the "Versions" section of the README for the support window policy.
 
 ## [Unreleased]
 
+## [1.4.9] — 2026-08-19
+
+### Fixed
+
+- **Configured MCP headers preserve SDK JSON transport headers.** MCP requests now merge user-configured headers without dropping SDK-provided transport headers such as `content-type: application/json`.
+
 ## [1.4.8] — 2026-08-19
 
 ### Added
