@@ -64,7 +64,10 @@ interface FixtureServer {
  * SSE on failure, so this also exercises the fallback path
  * end-to-end against a live network listener.
  */
-async function spawnFixtureServer(opts?: { toolPrefix?: string }): Promise<FixtureServer> {
+async function spawnFixtureServer(opts?: {
+  toolPrefix?: string;
+  requiredHeader?: { name: string; value: string };
+}): Promise<FixtureServer> {
   const prefix = opts?.toolPrefix ?? "";
 
   let calls = 0;
@@ -107,6 +110,16 @@ async function spawnFixtureServer(opts?: { toolPrefix?: string }): Promise<Fixtu
     void (async () => {
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
       try {
+        const requiredHeader = opts?.requiredHeader;
+        if (
+          requiredHeader !== undefined &&
+          req.headers[requiredHeader.name.toLowerCase()] !== requiredHeader.value
+        ) {
+          res.statusCode = 401;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ error: "missing required header" }));
+          return;
+        }
         if (req.method === "GET" && url.pathname === "/sse") {
           const transport = new SSEServerTransport("/messages", res);
           sessions.set(transport.sessionId, transport);
@@ -334,7 +347,63 @@ async function main(): Promise<void> {
     await config.setMcpTruncationConfig({ enabled: true, maxChars: 30000 });
     await manager.reloadGlobal();
 
-    // ---- Case D: per-server enabled:false → server moves to disabled ----
+    // ---- Case D: env-backed and literal remote headers ----
+    const headerFixture = await spawnFixtureServer({
+      requiredHeader: { name: "Authorization", value: "Bearer env-secret" },
+    });
+    try {
+      process.env.TEST_MCP_HEADER_TOKEN = "Bearer env-secret";
+      await config.writeMcpJson({
+        servers: {
+          headered: {
+            url: headerFixture.url,
+            headers: {
+              Authorization: { env: "TEST_MCP_HEADER_TOKEN" },
+              "X-Literal": "literal-value",
+            },
+          },
+        },
+      });
+      const redacted = await config.readMcpJsonRedacted();
+      assert(
+        "headers: env-backed value is not redacted away",
+        JSON.stringify(redacted.servers.headered?.headers?.Authorization) ===
+          JSON.stringify({ env: "TEST_MCP_HEADER_TOKEN" }),
+        JSON.stringify(redacted.servers.headered?.headers),
+      );
+      assert(
+        "headers: literal value is redacted",
+        redacted.servers.headered?.headers?.["X-Literal"] === "***REDACTED***",
+        JSON.stringify(redacted.servers.headered?.headers),
+      );
+      await manager.reloadGlobal();
+      await waitForState("headered", {}, "connected");
+      assert(
+        "headers: env-backed value resolves and connects",
+        manager.getStatus().find((s) => s.name === "headered")?.state === "connected",
+      );
+      delete process.env.TEST_MCP_HEADER_TOKEN;
+      await manager.probe("global", "headered");
+      const missingStatus = manager.getStatus().find((s) => s.name === "headered");
+      assert(
+        "headers: missing env var produces user-visible error",
+        missingStatus?.state === "error" &&
+          (missingStatus.lastError ?? "").includes("TEST_MCP_HEADER_TOKEN"),
+        JSON.stringify(missingStatus),
+      );
+    } finally {
+      delete process.env.TEST_MCP_HEADER_TOKEN;
+      await headerFixture.close();
+    }
+
+    // Re-enable original fixture for the next cases.
+    await config.writeMcpJson({
+      servers: { test: { url: fixture.url } },
+    });
+    await manager.reloadGlobal();
+    await waitForState("test", {}, "connected");
+
+    // ---- Case E: per-server enabled:false → server moves to disabled ----
     await config.writeMcpJson({
       servers: { test: { url: fixture.url, enabled: false } },
     });

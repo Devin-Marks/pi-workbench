@@ -9,6 +9,9 @@ Pi does NOT have native MCP (Model Context Protocol) support. MCP is provided by
 ## Owned Data Files
 
 - `FORGE_DATA_DIR/mcp.json` — MCP server registry, owned by `mcp/manager.ts`.
+  Remote `headers` values may be literal strings or `{ env: "VAR_NAME" }`; the
+  latter resolves dynamically from the pi-forge process env without returning the
+  resolved value to clients.
 - Tool overrides can include built-ins and MCP tools; read `docs/agent/config.md` and relevant tests before changing cascade behavior.
 
 ## Tests

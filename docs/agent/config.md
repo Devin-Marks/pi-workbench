@@ -4,11 +4,12 @@ Read this when changing environment variables, CLI flags, pi SDK config files, p
 
 ## Environment Variables & CLI Flags
 
-**All `process.env` reads are centralized in `packages/server/src/config.ts`.**
-Never read `process.env` directly in any other server file — always import the
+**All operational `process.env` reads are centralized in `packages/server/src/config.ts`.**
+Never read fixed pi-forge setting env vars directly in any other server file — always import the
 frozen `config` object from there. The handful of `process.env` reads that DO
 live outside config.ts are debug-only (`DEBUG_FETCH`, `DEBUG_AGENT_EVENTS`,
-`SHELL`) — keep them out of operational config.
+`SHELL`) or user-named dynamic config references such as MCP env-backed HTTP
+headers — keep them out of operational config.
 
 **Every operationally-relevant env var has an equivalent `--flag`** on the
 `pi-forge` command. The table in `packages/server/src/cli.ts` is the single

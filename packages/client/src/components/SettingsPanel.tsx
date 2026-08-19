@@ -4,6 +4,7 @@ import {
   api,
   ApiError,
   type AuthSummary,
+  type McpHeaderValue,
   type McpServerConfig,
   type McpServerStatus,
   type McpTransport,
@@ -3319,6 +3320,15 @@ function BackupTab({ onError }: { onError: (msg: string | undefined) => void }) 
 
 // ---------------- MCP tab ----------------
 
+interface SecretRow {
+  key: string;
+  value: string;
+}
+
+interface HeaderRow extends SecretRow {
+  source: "literal" | "env";
+}
+
 interface McpDraft {
   name: string;
   /** Discriminator. The form picks the field set based on this. */
@@ -3328,7 +3338,7 @@ interface McpDraft {
   url: string;
   transport: McpTransport;
   /** Headers as a flat ordered list so the user can manage rows. */
-  headers: { key: string; value: string }[];
+  headers: HeaderRow[];
   /** Remote-only: allow self-signed / invalid HTTPS certs for this server. */
   ignoreCertificateErrors: boolean;
   // Stdio fields
@@ -3340,13 +3350,22 @@ interface McpDraft {
   argsText: string;
   /** Env as a flat ordered list; same shape + redaction handling as
    *  headers, so the form reuses the same row UI. */
-  env: { key: string; value: string }[];
+  env: SecretRow[];
   /** Optional cwd; blank ↦ default (project path for project
    *  servers, pi-forge process cwd for global). */
   cwd: string;
 }
 
 const SECRET_PLACEHOLDER = "***REDACTED***";
+
+function isHeaderEnvValue(value: McpHeaderValue): value is { env: string } {
+  return typeof value === "object" && value !== null && typeof value.env === "string";
+}
+
+function headerValueToRow(key: string, value: McpHeaderValue): HeaderRow {
+  if (isHeaderEnvValue(value)) return { key, value: value.env, source: "env" };
+  return { key, value, source: "literal" };
+}
 
 function emptyDraft(): McpDraft {
   return {
@@ -3505,7 +3524,7 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
       enabled: cfg.enabled !== false,
       url: cfg.url ?? "",
       transport: cfg.transport ?? "auto",
-      headers: Object.entries(cfg.headers ?? {}).map(([k, v]) => ({ key: k, value: v })),
+      headers: Object.entries(cfg.headers ?? {}).map(([k, v]) => headerValueToRow(k, v)),
       ignoreCertificateErrors: cfg.ignoreCertificateErrors === true,
       command: cfg.command ?? "",
       argsText: (cfg.args ?? []).join("\n"),
@@ -3538,10 +3557,14 @@ function McpTab({ onError }: { onError: (msg: string | undefined) => void }) {
       body.url = draft.url;
       body.transport = draft.transport;
       if (draft.ignoreCertificateErrors) body.ignoreCertificateErrors = true;
-      const headers: Record<string, string> = {};
+      const headers: Record<string, McpHeaderValue> = {};
       for (const h of draft.headers) {
         if (h.key.trim().length === 0) continue;
-        headers[h.key] = h.value;
+        if (h.source === "env" && h.value.trim().length === 0) {
+          onError(`Env var name is required for header '${h.key}'.`);
+          return;
+        }
+        headers[h.key] = h.source === "env" ? { env: h.value.trim() } : h.value;
       }
       if (Object.keys(headers).length > 0) body.headers = headers;
     } else {
@@ -4275,14 +4298,7 @@ function McpDraftForm(props: {
       </div>
 
       {draft.kind === "remote" ? (
-        <SecretRowsEditor
-          label="Headers"
-          emptyHint="No headers. Add `Authorization: Bearer …` here for auth."
-          keyPlaceholder="Authorization"
-          valuePlaceholder="Bearer …"
-          rows={draft.headers}
-          onChange={(next) => setField("headers", next)}
-        />
+        <HeaderRowsEditor rows={draft.headers} onChange={(next) => setField("headers", next)} />
       ) : (
         <SecretRowsEditor
           label="Env"
@@ -4313,20 +4329,101 @@ function McpDraftForm(props: {
   );
 }
 
+function HeaderRowsEditor(props: { rows: HeaderRow[]; onChange: (next: HeaderRow[]) => void }) {
+  const { rows } = props;
+  return (
+    <div className="mt-3">
+      <div className="mb-1 flex items-center justify-between">
+        <h5 className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
+          Headers
+        </h5>
+        <button
+          onClick={() => props.onChange([...rows, { key: "", value: "", source: "literal" }])}
+          className="rounded border border-neutral-700 px-2 py-0.5 text-[11px] text-neutral-300 hover:border-neutral-500"
+        >
+          + Header
+        </button>
+      </div>
+      {rows.length === 0 && (
+        <p className="text-[11px] italic text-neutral-600">
+          No headers. Add literal auth headers or reference an env var such as MY_MCP_TOKEN.
+        </p>
+      )}
+      {rows.map((r, i) => (
+        <div key={i} className="mb-1 grid grid-cols-[1fr_auto_2fr_auto] gap-1">
+          <input
+            value={r.key}
+            onChange={(e) => {
+              const next = [...rows];
+              next[i] = { ...r, key: e.target.value };
+              props.onChange(next);
+            }}
+            placeholder="Authorization"
+            className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-[11px] font-mono text-neutral-100 outline-none focus:border-neutral-500"
+          />
+          <select
+            value={r.source}
+            onChange={(e) => {
+              const next = [...rows];
+              next[i] = { ...r, source: e.target.value as HeaderRow["source"] };
+              props.onChange(next);
+            }}
+            className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-[11px] text-neutral-100 outline-none focus:border-neutral-500"
+          >
+            <option value="literal">literal</option>
+            <option value="env">env</option>
+          </select>
+          <input
+            value={r.value === SECRET_PLACEHOLDER ? "" : r.value}
+            onChange={(e) => {
+              const next = [...rows];
+              next[i] = { ...r, value: e.target.value };
+              props.onChange(next);
+            }}
+            placeholder={
+              r.source === "env"
+                ? "MY_MCP_TOKEN"
+                : r.value === SECRET_PLACEHOLDER
+                  ? "leave blank to keep stored value"
+                  : "Bearer …"
+            }
+            type={r.source === "env" ? "text" : "password"}
+            className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-[11px] font-mono text-neutral-100 outline-none focus:border-neutral-500"
+          />
+          <button
+            onClick={() => props.onChange(rows.filter((_, j) => j !== i))}
+            className="rounded border border-neutral-700 px-2 text-[11px] text-neutral-400 hover:text-red-300 light:hover:text-red-700"
+            title="Remove header"
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      <p className="mt-1 text-[10px] text-neutral-500">
+        Env-backed headers store only the variable name; pi-forge resolves the value when sending
+        MCP requests.
+      </p>
+      {rows.some((r) => r.value === SECRET_PLACEHOLDER) && (
+        <p className="mt-1 text-[10px] italic text-neutral-500">
+          Literal values with the redaction sentinel keep their stored value when you save.
+        </p>
+      )}
+    </div>
+  );
+}
+
 /**
- * Shared key/value editor used by both the Headers (remote) and Env
- * (stdio) sections. Same visual + the same redaction-sentinel
- * round-trip pattern — the value field renders blank when the
- * stored value is the sentinel so the user types a replacement
- * instead of "editing" the placeholder.
+ * Shared key/value editor used by the Env (stdio) section. The value
+ * field renders blank when the stored value is the sentinel so the
+ * user types a replacement instead of "editing" the placeholder.
  */
 function SecretRowsEditor(props: {
   label: string;
   emptyHint: string;
   keyPlaceholder: string;
   valuePlaceholder: string;
-  rows: { key: string; value: string }[];
-  onChange: (next: { key: string; value: string }[]) => void;
+  rows: SecretRow[];
+  onChange: (next: SecretRow[]) => void;
 }) {
   const { rows } = props;
   return (

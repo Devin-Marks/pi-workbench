@@ -43,6 +43,10 @@ export interface ChangePasswordResponse {
 // ---------------- MCP ----------------
 
 export type McpTransport = "auto" | "streamable-http" | "sse";
+export interface McpHeaderEnvValue {
+  env: string;
+}
+export type McpHeaderValue = string | McpHeaderEnvValue;
 export type McpConnectionState =
   | "idle"
   | "connecting"
@@ -56,7 +60,7 @@ export interface McpServerConfig {
   // remote-only (mutually exclusive with `command`)
   url?: string;
   transport?: McpTransport;
-  headers?: Record<string, string>;
+  headers?: Record<string, McpHeaderValue>;
   ignoreCertificateErrors?: boolean;
   // stdio-only (mutually exclusive with `url`)
   command?: string;

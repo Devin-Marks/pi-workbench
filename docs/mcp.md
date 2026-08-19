@@ -26,7 +26,8 @@ falls back to SSE — covers
 which transport they expose.
 
 Static-header auth (Bearer tokens, custom headers) for remote
-servers; explicit env-passthrough for stdio. OAuth per-server
+servers; header values can also be sourced from pi-forge environment
+variables. Stdio servers use explicit env-passthrough. OAuth per-server
 consent flows are not implemented.
 
 ## Where servers live
@@ -59,7 +60,8 @@ to swap a global server for a project-specific one).
       "transport": "auto",
       "enabled": true,
       "headers": {
-        "Authorization": "Bearer sk-..."
+        "Authorization": "Bearer sk-...",
+        "X-API-Key": { "env": "MY_MCP_TOKEN" }
       }
     },
     "everything": {
@@ -97,7 +99,7 @@ shape, so existing files don't need rewriting:
 | `enabled` | boolean | both | `true` | Disabled servers don't connect or contribute tools. |
 | `url` | string | remote | — | The MCP endpoint URL. Required for remote servers. |
 | `transport` | `"auto"` \| `"streamable-http"` \| `"sse"` | remote | `"auto"` | Connection probe order. `auto` tries StreamableHTTP first. |
-| `headers` | `Record<string, string>` | remote | (none) | Forwarded on every MCP RPC. Treated as secret on read — `GET /mcp/servers` returns `***REDACTED***` for every value. |
+| `headers` | `Record<string, string \| { env: string }>` | remote | (none) | Forwarded on every MCP RPC. Literal values are treated as secret on read — `GET /mcp/servers` returns `***REDACTED***`. Env-backed values return only `{ "env": "VAR_NAME" }` and are resolved from pi-forge's environment when requests are sent. |
 | `command` | string | stdio | — | Executable to spawn. Resolved via PATH if not absolute. Required for stdio servers. |
 | `args` | `string[]` | stdio | `[]` | CLI args appended to `command`. |
 | `env` | `Record<string, string>` | stdio | (none) | Subprocess env. Pi-forge env is **not** inherited by default (see "Stdio env" below). Treated as secret on read. |
@@ -239,8 +241,9 @@ was omitted. Image blocks pass through unchanged.
 
 **Status stuck in `error`** — Settings → MCP, expand the row, read
 `lastError`. Common causes:
-- **Remote:** wrong URL, missing `Authorization` header, server
-  returning 4xx on `tools/list`.
+- **Remote:** wrong URL, missing `Authorization` header, env-backed
+  header variable not set in the pi-forge process, server returning
+  4xx on `tools/list`.
 - **Stdio:** command not found (resolve via absolute path or check
   PATH passthrough), missing required env var, subprocess crashed at
   startup (the child's stderr is inherited — check the pi-forge log).
@@ -258,7 +261,9 @@ transport actually works.
 **Headers / env show `***REDACTED***`** — read-path sentinel, not
 real data. The on-disk file still has the real value. On save, a
 sentinel value preserves the prior secret; a new value overwrites it
-(same pattern as `models.json`).
+(same pattern as `models.json`). Env-backed headers instead show the
+env var name (for example `{ "env": "MY_MCP_TOKEN" }`), never the
+resolved value.
 
 **Tools don't appear after editing project `.mcp.json`** — the file
 is read once per project per server lifetime. Probe the row or
