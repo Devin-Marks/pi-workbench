@@ -5,6 +5,7 @@ import {
   setMcpDisabled,
   setMcpTruncationConfig,
   upsertMcpServer,
+  type McpHeaderValue,
   type McpServerConfig,
   type McpTransport,
 } from "../mcp/config.js";
@@ -28,7 +29,7 @@ interface McpServerBody {
   // remote
   url?: string;
   transport?: McpTransport;
-  headers?: Record<string, string>;
+  headers?: Record<string, McpHeaderValue>;
   ignoreCertificateErrors?: boolean;
   // stdio
   command?: string;
@@ -50,7 +51,17 @@ const serverConfigSchema = {
     transport: { type: "string", enum: ["auto", "streamable-http", "sse"] },
     headers: {
       type: "object",
-      additionalProperties: { type: "string" },
+      additionalProperties: {
+        anyOf: [
+          { type: "string" },
+          {
+            type: "object",
+            required: ["env"],
+            additionalProperties: false,
+            properties: { env: { type: "string", minLength: 1 } },
+          },
+        ],
+      },
     },
     ignoreCertificateErrors: { type: "boolean" },
     command: { type: "string", minLength: 1 },

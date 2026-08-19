@@ -13,6 +13,8 @@ import {
   isStdioConfig,
   normalizeMcpTruncationConfig,
   readMcpJson,
+  resolveMcpHeaders,
+  type McpHeaderValue,
   type McpServerConfig,
   type McpTransport,
 } from "./config.js";
@@ -656,13 +658,15 @@ const insecureHttpsAgent = new UndiciAgent({ connect: { rejectUnauthorized: fals
 
 async function openStreamableHttp(
   url: URL,
-  headers: Record<string, string> | undefined,
+  headers: Record<string, McpHeaderValue> | undefined,
   ignoreCertificateErrors: boolean,
 ): Promise<OpenedConnection> {
   const fetchWithTlsPolicy = makeFetchWithTlsPolicy(ignoreCertificateErrors);
+  const fetchWithHeaders = makeFetchWithMcpHeaders(fetchWithTlsPolicy, headers);
+  const requestHeaders = resolveMcpHeaders(headers);
   const transport = new StreamableHTTPClientTransport(url, {
-    ...(headers !== undefined ? { requestInit: { headers } } : {}),
-    fetch: fetchWithTlsPolicy,
+    ...(requestHeaders !== undefined ? { requestInit: { headers: requestHeaders } } : {}),
+    fetch: fetchWithHeaders,
   });
   const client = new Client({ name: "pi-forge", version: "1.0.0" }, { capabilities: {} });
   await client.connect(transport as unknown as SdkTransport);
@@ -671,21 +675,19 @@ async function openStreamableHttp(
 
 async function openSse(
   url: URL,
-  headers: Record<string, string> | undefined,
+  headers: Record<string, McpHeaderValue> | undefined,
   ignoreCertificateErrors: boolean,
 ): Promise<OpenedConnection> {
   const fetchWithTlsPolicy = makeFetchWithTlsPolicy(ignoreCertificateErrors);
+  const fetchWithHeaders = makeFetchWithMcpHeaders(fetchWithTlsPolicy, headers);
+  const requestHeaders = resolveMcpHeaders(headers);
   const transport = new SSEClientTransport(url, {
-    ...(headers !== undefined ? { requestInit: { headers } } : {}),
+    ...(requestHeaders !== undefined ? { requestInit: { headers: requestHeaders } } : {}),
     // Custom EventSource fetch factory so the SSE GET also carries headers and
     // the per-server TLS policy. Browsers' native EventSource doesn't accept
     // headers, but the MCP SDK's bundled eventsource shim does via this hook.
     eventSourceInit: {
-      fetch: (input: string | URL, init?: RequestInit) =>
-        fetchWithTlsPolicy(input, {
-          ...init,
-          headers: { ...((init?.headers as Record<string, string>) ?? {}), ...(headers ?? {}) },
-        }),
+      fetch: (input: string | URL, init?: RequestInit) => fetchWithHeaders(input, init),
     } as unknown as EventSourceInit,
   });
   const client = new Client({ name: "pi-forge", version: "1.0.0" }, { capabilities: {} });
@@ -700,6 +702,20 @@ function makeFetchWithTlsPolicy(ignoreCertificateErrors: boolean): typeof fetch 
       ...init,
       dispatcher: insecureHttpsAgent,
     } as FetchWithDispatcherInit);
+}
+
+function makeFetchWithMcpHeaders(
+  baseFetch: typeof fetch,
+  headers: Record<string, McpHeaderValue> | undefined,
+): typeof fetch {
+  if (headers === undefined) return baseFetch;
+  return async (input, init) => {
+    const resolved = resolveMcpHeaders(headers);
+    return await baseFetch(input, {
+      ...init,
+      headers: { ...((init?.headers as Record<string, string>) ?? {}), ...(resolved ?? {}) },
+    });
+  };
 }
 
 /* -------------------------- project-scope read -------------------------- */

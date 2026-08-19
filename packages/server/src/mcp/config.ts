@@ -35,6 +35,14 @@ import { config } from "../config.js";
  */
 
 export type McpTransport = "auto" | "streamable-http" | "sse";
+export interface McpHeaderEnvValue {
+  env: string;
+}
+export type McpHeaderValue = string | McpHeaderEnvValue;
+
+export function isMcpHeaderEnvValue(value: McpHeaderValue): value is McpHeaderEnvValue {
+  return typeof value === "object" && value !== null && typeof value.env === "string";
+}
 
 export interface McpServerConfig {
   /** Default true. Disabled servers don't connect or contribute tools. */
@@ -53,11 +61,15 @@ export interface McpServerConfig {
   transport?: McpTransport;
   /**
    * Per-request headers (e.g. `{ "Authorization": "Bearer ..." }`).
-   * Forwarded on every MCP RPC. Treated as secret on the read path —
+   * Values may be literal strings (backward-compatible) or
+   * `{ "env": "VAR_NAME" }` references that resolve from the
+   * pi-forge process environment when an MCP HTTP request is made.
+   * Literal values are treated as secret on the read path —
    * `readMcpJsonRedacted` replaces every value with the sentinel.
+   * Env-backed values preserve only the env var name on the read path.
    * Ignored for stdio servers.
    */
-  headers?: Record<string, string>;
+  headers?: Record<string, McpHeaderValue>;
   /**
    * Remote-only escape hatch for local/self-signed HTTPS MCP endpoints.
    * When true, TLS certificate validation is disabled for this server's
@@ -226,8 +238,8 @@ export async function readMcpJsonRedacted(): Promise<McpJson> {
     const cleaned = copyServerCleaned(server);
     if (server.headers !== undefined) {
       cleaned.headers = {};
-      for (const k of Object.keys(server.headers)) {
-        cleaned.headers[k] = SECRET_PLACEHOLDER;
+      for (const [k, v] of Object.entries(server.headers)) {
+        cleaned.headers[k] = isMcpHeaderEnvValue(v) ? { env: v.env } : SECRET_PLACEHOLDER;
       }
     }
     if (server.env !== undefined) {
@@ -266,6 +278,58 @@ function mergeSecretMap(
   return out;
 }
 
+function mergeHeaderMap(
+  next: Record<string, McpHeaderValue>,
+  prior: Record<string, McpHeaderValue> | undefined,
+): Record<string, McpHeaderValue> {
+  const out: Record<string, McpHeaderValue> = {};
+  for (const [k, v] of Object.entries(next)) {
+    if (v === SECRET_PLACEHOLDER) {
+      if (prior?.[k] !== undefined) out[k] = prior[k];
+    } else if (isMcpHeaderEnvValue(v)) {
+      out[k] = { env: v.env };
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+function validateEnvName(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+}
+
+/**
+ * Resolve remote MCP headers for an outbound HTTP request. This is the
+ * deliberate exception to the usual operational-env centralization rule:
+ * header env names are user-authored dynamic MCP config, not pi-forge
+ * operational settings with a fixed CLI/env surface.
+ */
+export function resolveMcpHeaders(
+  headers: Record<string, McpHeaderValue> | undefined,
+): Record<string, string> | undefined {
+  if (headers === undefined) return undefined;
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (isMcpHeaderEnvValue(value)) {
+      const envName = value.env.trim();
+      if (!validateEnvName(envName)) {
+        throw new Error(`MCP header '${name}' references an invalid environment variable name`);
+      }
+      const resolved = process.env[envName];
+      if (resolved === undefined) {
+        throw new Error(
+          `MCP header '${name}' requires environment variable ${envName}, but it is not set`,
+        );
+      }
+      out[name] = resolved;
+    } else {
+      out[name] = value;
+    }
+  }
+  return out;
+}
+
 /**
  * Write `mcp.json`, merging the secret-placeholder for `headers`
  * AND `env` values back to the prior persisted value. Without this,
@@ -285,7 +349,7 @@ export async function writeMcpJson(next: McpJson): Promise<void> {
   for (const [name, server] of Object.entries(next.servers ?? {})) {
     const merged = copyServerCleaned(server);
     if (server.headers !== undefined) {
-      merged.headers = mergeSecretMap(server.headers, existing.servers[name]?.headers);
+      merged.headers = mergeHeaderMap(server.headers, existing.servers[name]?.headers);
     }
     if (server.env !== undefined) {
       merged.env = mergeSecretMap(server.env, existing.servers[name]?.env);
