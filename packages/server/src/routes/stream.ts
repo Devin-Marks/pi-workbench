@@ -8,7 +8,12 @@ import {
   SessionTombstonedError,
   ExternalSubagentActiveError,
 } from "../session-registry.js";
-import { createSSEClient, serializeSSE } from "../sse-bridge.js";
+import {
+  createSSEClient,
+  serializeSSE,
+  SSE_HEARTBEAT_INTERVAL_MS,
+  SSE_HEARTBEAT_LINE,
+} from "../sse-bridge.js";
 import {
   getExternalSubagentStatusForSession,
   readSessionMessagesFromDisk,
@@ -41,6 +46,7 @@ async function createReadOnlyExternalSubagentSSE(
   reply.hijack();
   const raw = reply.raw;
   let watcher: FSWatcher | undefined;
+  let heartbeatTimer: NodeJS.Timeout | undefined;
   let closed = false;
 
   const close = (): void => {
@@ -48,6 +54,10 @@ async function createReadOnlyExternalSubagentSSE(
     closed = true;
     watcher?.close();
     watcher = undefined;
+    if (heartbeatTimer !== undefined) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = undefined;
+    }
     try {
       raw.end();
     } catch {
@@ -87,7 +97,18 @@ async function createReadOnlyExternalSubagentSSE(
   } catch {
     // A one-shot read-only snapshot is still better than resuming the child.
   }
+  // Keep read-only external subagent streams alive behind reverse proxies too.
+  // They may sit idle between filesystem writes while the child process runs.
+  heartbeatTimer = setInterval(() => {
+    try {
+      raw.write(SSE_HEARTBEAT_LINE);
+    } catch {
+      close();
+    }
+  }, SSE_HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref();
   raw.on("close", close);
+  raw.on("error", close);
   return true;
 }
 
