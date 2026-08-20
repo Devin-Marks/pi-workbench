@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { config, authEnabled } from "../config.js";
 import {
+  dashboardIdentityConfigured,
   extractBearer,
   generateToken,
   getLoginLockoutState,
@@ -9,6 +10,7 @@ import {
   persistPassword,
   recordLoginFailure,
   resetLoginFailures,
+  verifyDashboardIdentity,
   verifyPasswordWithSource,
   verifyToken,
 } from "../auth.js";
@@ -40,16 +42,28 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         response: {
           200: {
             type: "object",
-            required: ["authEnabled", "ldapEnabled"],
+            required: [
+              "authEnabled",
+              "ldapEnabled",
+              "dashboardIdentityEnabled",
+              "dashboardIdentityAuthenticated",
+            ],
             properties: {
               authEnabled: { type: "boolean" },
               ldapEnabled: { type: "boolean" },
+              dashboardIdentityEnabled: { type: "boolean" },
+              dashboardIdentityAuthenticated: { type: "boolean" },
             },
           },
         },
       },
     },
-    async () => ({ authEnabled: authEnabled(), ldapEnabled: config.auth.ldap.enabled }),
+    async (req) => ({
+      authEnabled: authEnabled(),
+      ldapEnabled: config.auth.ldap.enabled,
+      dashboardIdentityEnabled: dashboardIdentityConfigured(),
+      dashboardIdentityAuthenticated: verifyDashboardIdentity(req.headers) !== undefined,
+    }),
   );
 
   fastify.post<{ Body: LoginBody }>(

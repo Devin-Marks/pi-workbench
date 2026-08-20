@@ -33,6 +33,7 @@ import { SearchPanel } from "./components/SearchPanel";
 import { ContextInspectorPanel } from "./components/ContextInspectorPanel";
 import { ResizableDivider } from "./components/ResizableDivider";
 import { useGitStatus } from "./hooks/useGitStatus";
+import { appUrl } from "./lib/base-path";
 import { themeDef, useThemeStore } from "./lib/theme";
 
 type RightPaneTab = "files" | "search" | "changes" | "git" | "context" | "processes";
@@ -447,7 +448,7 @@ export function App() {
               the parent gap-3 used between brand and project picker). */}
           <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
             <img
-              src={appLogoUrl ?? "/icons/icon.svg"}
+              src={appLogoUrl ?? appUrl("/icons/icon.svg")}
               alt=""
               className="max-h-8 max-w-28 shrink-0 object-contain"
               aria-hidden="true"

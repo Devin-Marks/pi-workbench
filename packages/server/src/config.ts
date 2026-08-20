@@ -41,6 +41,31 @@ function readStringList(key: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+function readDashboardAllowedGroups(key: string, fallbackKey?: string): string[] {
+  const v = readEnv(key) ?? (fallbackKey === undefined ? undefined : readEnv(fallbackKey));
+  if (v === undefined) return [];
+  const trimmed = v.trim();
+  if (trimmed.length === 0) return [];
+  if (trimmed.startsWith("[")) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      throw new Error(`config: ${key} JSON value must be an array of strings`);
+    }
+    if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
+      throw new Error(`config: ${key} JSON value must be an array of strings`);
+    }
+    return parsed.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  }
+  // LDAP DNs commonly contain commas, so this advanced allowlist uses
+  // newline/semicolon delimiters instead of readStringList's comma split.
+  return trimmed
+    .split(/[;\n\r]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 function readUsername(key: string, fallback: string): string {
   const value = readEnv(key) ?? fallback;
   const trimmed = value.trim();
@@ -274,6 +299,10 @@ const UI_PASSWORD = UI_PASSWORD_FILE
   ? readSecretFile(UI_PASSWORD_FILE, "UI_PASSWORD_FILE")
   : readEnv("UI_PASSWORD");
 const API_KEY = readEnv("API_KEY");
+const DASHBOARD_IDENTITY_SECRET_FILE = readEnv("DASHBOARD_IDENTITY_SECRET_FILE");
+const DASHBOARD_IDENTITY_SECRET = DASHBOARD_IDENTITY_SECRET_FILE
+  ? readSecretFile(DASHBOARD_IDENTITY_SECRET_FILE, "DASHBOARD_IDENTITY_SECRET_FILE")
+  : readEnv("DASHBOARD_IDENTITY_SECRET");
 const LOCAL_ADMIN_USERNAME = readUsername("FORGE_LOCAL_ADMIN_USERNAME", "admin");
 const CORS_ORIGIN = readEnv("CORS_ORIGIN");
 const PASSWORD_HASH_FILE = join(FORGE_DATA_DIR, "password-hash");
@@ -502,6 +531,17 @@ export const config = Object.freeze({
     uiPasswordFile: UI_PASSWORD_FILE,
     jwtSecret: JWT_SECRET,
     apiKey: API_KEY,
+    dashboardIdentity: Object.freeze({
+      secret: DASHBOARD_IDENTITY_SECRET,
+      secretFile: DASHBOARD_IDENTITY_SECRET_FILE,
+      issuer: readEnv("DASHBOARD_IDENTITY_ISSUER") ?? "internal-dashboard",
+      audience: readEnv("DASHBOARD_IDENTITY_AUDIENCE") ?? readEnv("DASHBOARD_APP_ID") ?? "pi-forge",
+      maxFutureIatSkewSeconds: readInt("DASHBOARD_IDENTITY_MAX_FUTURE_IAT_SKEW_SECONDS", 60),
+      maxAgeSeconds: readInt("DASHBOARD_IDENTITY_MAX_AGE_SECONDS", 5 * 60),
+      allowedGroups: Object.freeze(
+        readDashboardAllowedGroups("DASHBOARD_IDENTITY_ALLOWED_GROUPS", "LDAP_REQUIRED_GROUP_DN"),
+      ),
+    }),
     localAdminUsername: LOCAL_ADMIN_USERNAME,
     ldap: Object.freeze({
       enabled: LDAP_ENABLED,
@@ -648,6 +688,7 @@ export function authEnabled(): boolean {
   return (
     config.auth.uiPassword !== undefined ||
     config.auth.apiKey !== undefined ||
+    config.auth.dashboardIdentity.secret !== undefined ||
     config.auth.ldap.enabled ||
     existsSync(config.auth.passwordHashFile)
   );

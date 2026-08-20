@@ -11,7 +11,7 @@ import websocket from "@fastify/websocket";
 import multipart from "@fastify/multipart";
 import { config, authEnabled } from "./config.js";
 import { installDiagnostics } from "./diagnostics.js";
-import { extractBearer, verifyApiKey, verifyToken } from "./auth.js";
+import { extractBearer, verifyApiKey, verifyDashboardIdentity, verifyToken } from "./auth.js";
 import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
 import { projectRoutes } from "./routes/projects.js";
@@ -226,10 +226,13 @@ export async function buildServer(): Promise<FastifyInstance> {
   //   - worker-src 'self' blob: — Vite PWA service worker.
   //   - object-src 'none', base-uri 'self', frame-ancestors 'none' —
   //     defense in depth against legacy / clickjacking surfaces.
-  fastify.addHook("onSend", async (_req, reply) => {
+  fastify.addHook("onSend", async (req, reply, payload) => {
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
-    reply.header("X-Frame-Options", "DENY");
+    reply.header(
+      "X-Frame-Options",
+      config.auth.dashboardIdentity.secret !== undefined ? "SAMEORIGIN" : "DENY",
+    );
     // HSTS is harmless on plain HTTP (browsers ignore it without TLS),
     // useful behind a TLS proxy. 180 days is a balance: long enough to
     // matter, short enough that an operator can recover from accidentally
@@ -251,9 +254,34 @@ export async function buildServer(): Promise<FastifyInstance> {
         "worker-src 'self' blob:",
         "object-src 'none'",
         "base-uri 'self'",
-        "frame-ancestors 'none'",
+        config.auth.dashboardIdentity.secret !== undefined
+          ? "frame-ancestors 'self'"
+          : "frame-ancestors 'none'",
       ].join("; "),
     );
+
+    const forwardedPrefix =
+      typeof req.headers["x-forwarded-prefix"] === "string"
+        ? req.headers["x-forwarded-prefix"].replace(/\/$/, "")
+        : undefined;
+    const path = req.url.split("?")[0] ?? req.url;
+    if (
+      forwardedPrefix !== undefined &&
+      forwardedPrefix.startsWith("/") &&
+      (path === "/api/docs" || path.startsWith("/api/docs/"))
+    ) {
+      const contentType = reply.getHeader("content-type")?.toString() ?? "";
+      if (
+        (contentType.includes("text/html") || contentType.includes("javascript")) &&
+        (typeof payload === "string" || Buffer.isBuffer(payload))
+      ) {
+        return payload
+          .toString()
+          .replace(/(["'`])\/api\/docs/g, `$1${forwardedPrefix}/api/docs`)
+          .replace(/(["'`])\/api\/v1\//g, `$1${forwardedPrefix}/api/v1/`);
+      }
+    }
+    return payload;
   });
 
   // WebSocket support for the integrated terminal (Phase 11). Must be
@@ -322,15 +350,33 @@ export async function buildServer(): Promise<FastifyInstance> {
         url.searchParams.delete("token");
         window.history.replaceState({}, document.title, url.toString());
       }
+      var docsIndex = window.location.pathname.indexOf("/api/docs");
+      var basePrefix = docsIndex > 0 ? window.location.pathname.slice(0, docsIndex) : "";
+      function rewriteRootApiUrl(raw) {
+        if (!basePrefix || !raw) return raw;
+        var u = new URL(raw, window.location.href);
+        if (u.origin !== window.location.origin) return raw;
+        var apiPath = u.pathname.indexOf("/api/v1/") === 0 || u.pathname.indexOf("/api/docs") === 0;
+        if (!apiPath || u.pathname.indexOf(basePrefix + "/") === 0) return raw;
+        u.pathname = basePrefix + u.pathname;
+        return raw.indexOf(window.location.origin) === 0
+          ? u.toString()
+          : u.pathname + u.search + u.hash;
+      }
       var token =
         sessionStorage.getItem("pi-forge/docs-token") ||
         localStorage.getItem("pi-forge/auth-token");
-      if (token && window.fetch) {
+      if (window.fetch) {
         var origFetch = window.fetch.bind(window);
         window.fetch = function (input, init) {
           init = init || {};
-          var url2 = typeof input === "string" ? input : input.url;
-          if (url2 && url2.indexOf("/api/v1/") !== -1) {
+          var rawUrl = typeof input === "string" ? input : input.url;
+          var rewritten = rewriteRootApiUrl(rawUrl);
+          if (rewritten !== rawUrl) {
+            input = typeof input === "string" ? rewritten : new Request(rewritten, input);
+          }
+          var url2 = rewritten || rawUrl;
+          if (token && url2 && url2.indexOf("/api/v1/") !== -1) {
             init.headers = new Headers(init.headers || {});
             if (!init.headers.has("Authorization")) {
               init.headers.set("Authorization", "Bearer " + token);
@@ -405,6 +451,8 @@ export async function buildServer(): Promise<FastifyInstance> {
     const routeConfig = req.routeOptions?.config;
     if (routeConfig?.public === true) return;
     if (!authEnabled()) return;
+
+    if (verifyDashboardIdentity(req.headers) !== undefined) return;
 
     const presented = extractBearer(req.headers.authorization);
     if (presented === undefined) {
