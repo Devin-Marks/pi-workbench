@@ -150,7 +150,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
           });
         }
         resetLoginFailures(attemptKey);
-        const issued = generateToken({ mustChangePassword: false });
+        const issued = generateToken({ mustChangePassword: false, username });
         return { ...issued, mustChangePassword: false };
       }
 
@@ -178,7 +178,10 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
       resetLoginFailures(attemptKey);
       const mustChangePassword = result.source === "env" && config.auth.requirePasswordChange;
-      const issued = generateToken({ mustChangePassword });
+      const issued = generateToken({
+        mustChangePassword,
+        username: config.auth.localAdminUsername,
+      });
       return { ...issued, mustChangePassword };
     },
   );
@@ -242,7 +245,8 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       // Manual auth check — the route is `public: true` so the global
       // hook doesn't run, but we still require a valid JWT here.
       const presented = extractBearer(req.headers.authorization);
-      if (presented === undefined || verifyToken(presented) === undefined) {
+      const payload = presented === undefined ? undefined : verifyToken(presented);
+      if (payload === undefined) {
         return reply.code(401).send({ error: "auth_required" });
       }
       if (!passwordConfigured()) {
@@ -266,7 +270,10 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
       await persistPassword(newPassword);
-      const issued = generateToken({ mustChangePassword: false });
+      const issued = generateToken({
+        mustChangePassword: false,
+        username: payload.username,
+      });
       return { ...issued, mustChangePassword: false };
     },
   );

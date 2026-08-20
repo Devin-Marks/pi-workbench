@@ -30,7 +30,15 @@ import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
 type FlagType = "string" | "number" | "boolean" | "list";
-type FlagGroup = "network" | "paths" | "auth" | "rate-limits" | "features" | "terminal" | "sandbox";
+type FlagGroup =
+  | "network"
+  | "paths"
+  | "auth"
+  | "rate-limits"
+  | "features"
+  | "telemetry"
+  | "terminal"
+  | "sandbox";
 
 interface FlagDef {
   name: string; // kebab-case CLI flag (without leading --)
@@ -289,6 +297,48 @@ const FLAGS: readonly FlagDef[] = [
     group: "auth",
     desc: "Reject untrusted LDAP TLS certificates; set false only for local/self-signed testing",
     defaultText: "true",
+  },
+  // telemetry
+  {
+    name: "otel-exporter-otlp-endpoint",
+    env: "OTEL_EXPORTER_OTLP_ENDPOINT",
+    type: "string",
+    group: "telemetry",
+    desc: "OTLP/HTTP base endpoint (for Langfuse, use .../api/public/otel)",
+    defaultText: "(unset, telemetry disabled)",
+  },
+  {
+    name: "otel-exporter-otlp-headers",
+    env: "OTEL_EXPORTER_OTLP_HEADERS",
+    type: "string",
+    group: "telemetry",
+    desc: "Comma-separated OTLP headers. Use @<path> to avoid exposing credentials.",
+    defaultText: "(unset)",
+    sensitive: true,
+  },
+  {
+    name: "otel-service-name",
+    env: "OTEL_SERVICE_NAME",
+    type: "string",
+    group: "telemetry",
+    desc: "OpenTelemetry service name",
+    defaultText: "pi-forge",
+  },
+  {
+    name: "otel-service-version",
+    env: "OTEL_SERVICE_VERSION",
+    type: "string",
+    group: "telemetry",
+    desc: "OpenTelemetry service version",
+    defaultText: "unknown",
+  },
+  {
+    name: "otel-capture-content",
+    env: "OTEL_CAPTURE_CONTENT",
+    type: "boolean",
+    group: "telemetry",
+    desc: "Export message content and tool inputs/results (may contain sensitive user data)",
+    defaultText: "false",
   },
   // features
   {
@@ -809,6 +859,7 @@ const GROUP_LABELS: Record<FlagGroup, string> = {
   paths: "Paths",
   auth: "Authentication",
   features: "Features",
+  telemetry: "OpenTelemetry",
   sandbox: "Agent tool sandbox",
   "rate-limits": "Rate limits",
   terminal: "Terminal",
@@ -833,6 +884,7 @@ export function buildHelpText(version: string): string {
     "paths",
     "auth",
     "features",
+    "telemetry",
     "sandbox",
     "rate-limits",
     "terminal",

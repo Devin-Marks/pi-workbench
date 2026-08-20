@@ -153,7 +153,7 @@ export const streamRoutes: FastifyPluginAsync = async (fastify) => {
       );
       let live;
       try {
-        live = await resumeSessionById(req.params.id);
+        live = await resumeSessionById(req.params.id, req.authUsername);
       } catch (err) {
         if (err instanceof SessionNotFoundError) {
           return reply.code(404).send({ error: "session_not_found" });

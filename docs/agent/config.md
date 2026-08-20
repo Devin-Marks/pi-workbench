@@ -76,6 +76,7 @@ route handlers).
 | `orchestrator-inbox.json` | Per-supervisor pending event queue (cap 200 / supervisor) | `orchestration/store.ts` |
 | `jwt-secret` | Auto-generated HS256 signing key (mode 0600) | `config.ts` (`loadOrGenerateJwtSecret`) |
 | `password-hash` | scrypt hash of the user's persisted password (mode 0600) | `auth.ts` (`persistPassword`) |
+| `session-users.json` | Session UUID → authenticated username mapping for telemetry attribution (mode 0600) | `session-identity.ts` |
 
 `PI_CONFIG_DIR` defaults to `~/.pi/agent`; `FORGE_DATA_DIR` defaults
 to `~/.pi-forge`. The Docker compose setup mounts the host's

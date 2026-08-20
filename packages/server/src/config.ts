@@ -386,6 +386,13 @@ export const config = Object.freeze({
   // documented `docker compose up` flow keeps working out of the box.
   host: readEnv("HOST") ?? "127.0.0.1",
   logLevel: readEnv("LOG_LEVEL") ?? "info",
+  telemetry: Object.freeze({
+    otlpEndpoint: readHttpUrl("OTEL_EXPORTER_OTLP_ENDPOINT"),
+    otlpHeaders: readEnv("OTEL_EXPORTER_OTLP_HEADERS"),
+    serviceName: readEnv("OTEL_SERVICE_NAME") ?? "pi-forge",
+    serviceVersion: readEnv("OTEL_SERVICE_VERSION") ?? "unknown",
+    captureContent: readBool("OTEL_CAPTURE_CONTENT", false),
+  }),
   isTest: (readEnv("NODE_ENV") ?? "") === "test",
   isProduction: (readEnv("NODE_ENV") ?? "") === "production",
   trustProxy: readBool("TRUST_PROXY", false),
@@ -393,6 +400,7 @@ export const config = Object.freeze({
   piConfigDir: PI_CONFIG_DIR,
   forgeDataDir: FORGE_DATA_DIR,
   sessionDir: SESSION_DIR,
+  sessionIdentityFile: join(FORGE_DATA_DIR, "session-users.json"),
   clientDistPath: CLIENT_DIST_PATH,
   serveClient: readBool("SERVE_CLIENT", true),
   /**
