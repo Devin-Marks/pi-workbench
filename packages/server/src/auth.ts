@@ -32,6 +32,8 @@ export interface JwtPayload {
   sub: "ui-user";
   iat: number;
   exp: number;
+  /** Authenticated login name used for telemetry attribution. */
+  username: string;
   /** When true, this token may only call `POST /auth/change-password`. */
   mustChangePassword: boolean;
 }
@@ -76,7 +78,10 @@ export function constantTimeStringEqual(presented: string, expected: string): bo
   return timingSafeEqual(aPadded, bPadded) && a.length === b.length;
 }
 
-export function generateToken(opts: { mustChangePassword: boolean }): IssuedToken {
+export function generateToken(opts: {
+  mustChangePassword: boolean;
+  username: string;
+}): IssuedToken {
   if (config.auth.jwtSecret === undefined) {
     throw new Error("auth: cannot generate token — JWT_SECRET not configured");
   }
@@ -84,8 +89,9 @@ export function generateToken(opts: { mustChangePassword: boolean }): IssuedToke
   const token = jwt.sign(
     {
       sub: "ui-user",
+      username: opts.username,
       mustChangePassword: opts.mustChangePassword,
-    } satisfies Pick<JwtPayload, "sub" | "mustChangePassword">,
+    } satisfies Pick<JwtPayload, "sub" | "username" | "mustChangePassword">,
     config.auth.jwtSecret,
     {
       algorithm: "HS256",
@@ -118,7 +124,14 @@ export function verifyToken(token: string, opts: { touch?: boolean } = {}): JwtP
       typeof (decoded as { mustChangePassword?: unknown }).mustChangePassword === "boolean"
         ? (decoded as { mustChangePassword: boolean }).mustChangePassword
         : false;
-    return { sub: "ui-user", iat: decoded.iat, exp: decoded.exp, mustChangePassword };
+    // Tokens issued before username attribution existed remain valid and map
+    // to the configured local admin rather than breaking active logins.
+    const username =
+      typeof (decoded as { username?: unknown }).username === "string" &&
+      (decoded as { username: string }).username.length > 0
+        ? (decoded as { username: string }).username
+        : config.auth.localAdminUsername;
+    return { sub: "ui-user", iat: decoded.iat, exp: decoded.exp, username, mustChangePassword };
   } catch {
     // jsonwebtoken throws on malformed/expired/wrong-secret tokens.
     // Caller treats undefined as "no valid token" without

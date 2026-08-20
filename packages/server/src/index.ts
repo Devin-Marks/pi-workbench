@@ -48,6 +48,7 @@ import { disposeAllPtys, installPtyExitHandler } from "./pty-manager.js";
 import { logSecretHygieneState } from "./agent-resource-loader.js";
 import { applySandboxStartupChowns } from "./sandbox-startup-permissions.js";
 import { initializeLogoCache, logoCacheDir, LOGO_CACHE_PREFIX } from "./logo-cache.js";
+import { initializeTelemetry, shutdownTelemetry } from "./telemetry.js";
 
 /**
  * Per-route auth metadata. Routes that should skip the auth preHandler set
@@ -58,6 +59,10 @@ import { initializeLogoCache, logoCacheDir, LOGO_CACHE_PREFIX } from "./logo-cac
 declare module "fastify" {
   interface FastifyContextConfig {
     public?: boolean;
+  }
+  interface FastifyRequest {
+    /** Authenticated username used to attribute newly-created sessions. */
+    authUsername?: string;
   }
 }
 
@@ -99,6 +104,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   // ECONNREFUSED, etc.) which would otherwise surface as a terse
   // "Connection Error" with no underlying detail.
   installDiagnostics();
+  initializeTelemetry();
 
   const fastify = Fastify({
     logger: {
@@ -450,7 +456,10 @@ export async function buildServer(): Promise<FastifyInstance> {
     // schema/config (see those route files).
     const routeConfig = req.routeOptions?.config;
     if (routeConfig?.public === true) return;
-    if (!authEnabled()) return;
+    if (!authEnabled()) {
+      req.authUsername = config.auth.localAdminUsername;
+      return;
+    }
 
     if (verifyDashboardIdentity(req.headers) !== undefined) return;
 
@@ -475,9 +484,13 @@ export async function buildServer(): Promise<FastifyInstance> {
         });
         return;
       }
+      req.authUsername = tokenPayload.username;
       return;
     }
-    if (verifyApiKey(presented)) return;
+    if (verifyApiKey(presented)) {
+      req.authUsername = config.auth.localAdminUsername;
+      return;
+    }
     reply.code(401).send({ error: "invalid_token" });
   });
 
@@ -574,6 +587,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   // will also become load-bearing in Phase 5 to flush SSE clients.
   fastify.addHook("onClose", async () => {
     await disposeAllSessions();
+    await shutdownTelemetry();
     disposeAllPtys();
     await disposeAllMcp();
   });

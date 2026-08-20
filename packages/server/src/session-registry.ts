@@ -49,6 +49,12 @@ import { generateSessionTitleFromPrompt, isGenericSessionName } from "./session-
 import { getExternalSubagentStatusForSession } from "./subagents-external.js";
 import { readSandboxSettings } from "./sandbox-settings.js";
 import { publishSessionActivity, type SessionActivity } from "./session-activity.js";
+import {
+  createSessionTelemetry,
+  recordSessionLifecycle,
+  type SessionTelemetry,
+} from "./telemetry.js";
+import { rememberSessionUsername, usernameForSession } from "./session-identity.js";
 
 /**
  * Minimal SSE client contract used by the registry to fan out events.
@@ -70,6 +76,11 @@ export interface LiveSession {
   sessionId: string;
   projectId: string;
   workspacePath: string;
+  /** Authenticated owner used for Langfuse user/session attribution. */
+  username: string;
+  /** Exact bridged MCP names available to this session. */
+  mcpToolNames: Set<string>;
+  telemetry?: SessionTelemetry;
   clients: Set<SSEClient>;
   createdAt: Date;
   lastActivityAt: Date;
@@ -486,6 +497,16 @@ function makeSubscribeHandler(live: LiveSession): () => void {
   const verbose = process.env.DEBUG_AGENT_EVENTS === "1";
   return live.session.subscribe((event: AgentSessionEvent) => {
     live.lastActivityAt = new Date();
+    try {
+      live.telemetry?.handle(event);
+    } catch (err) {
+      logAgentEvent("warn", {
+        msg: "telemetry event handling failed",
+        sessionId: live.sessionId,
+        eventType: event.type,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     if (event.type === "agent_start") {
       publishActivity(live, true);
       // Capture BEFORE the SDK appends turn messages, so the index points
@@ -801,6 +822,7 @@ function applyAgentToolSandbox(
 export async function createSession(
   projectId: string,
   workspacePath: string,
+  opts: { username?: string } = {},
 ): Promise<LiveSession> {
   const dir = await ensureSessionDir(projectId);
   const sessionManager = SessionManager.create(workspacePath, dir);
@@ -848,6 +870,8 @@ export async function createSession(
   });
 
   const now = new Date();
+  const username = opts.username ?? config.auth.localAdminUsername;
+  await rememberSessionUsername(session.sessionId, username);
   // Build the LiveSession in two passes so unsubscribe is the real handle by
   // the time the object is observable elsewhere — kills the M3 race window
   // (where a synchronous concurrent dispose could see the no-op unsubscribe).
@@ -856,12 +880,21 @@ export async function createSession(
     sessionId: session.sessionId,
     projectId,
     workspacePath,
+    username,
+    mcpToolNames: new Set(mcpTools.map((tool) => tool.name)),
     clients: new Set(),
     createdAt: now,
     lastActivityAt: now,
     lastAgentStartIndex: undefined,
     unsubscribe: () => undefined,
   };
+  live.telemetry = createSessionTelemetry({
+    sessionId: live.sessionId,
+    projectId: live.projectId,
+    username: live.username,
+    mcpToolNames: live.mcpToolNames,
+    model: () => live.session.model,
+  });
   live.unsubscribe = makeSubscribeHandler(live);
   registry.set(live.sessionId, live);
   await bindWebExtensionContext(live);
@@ -892,6 +925,11 @@ export async function createSession(
     // sidebar fall back to "session <id>" if needed.
   }
 
+  recordSessionLifecycle("created", {
+    sessionId: live.sessionId,
+    projectId: live.projectId,
+    username: live.username,
+  });
   bridgeSessionCreated({
     sessionId: live.sessionId,
     projectId: live.projectId,
@@ -1073,6 +1111,7 @@ function detachExternallyActiveLiveSession(sessionId: string): void {
     }
   }
   live.clients.clear();
+  live.telemetry?.dispose();
   registry.delete(sessionId);
 }
 
@@ -1091,6 +1130,7 @@ export async function resumeSession(
   sessionId: string,
   projectId: string,
   workspacePath: string,
+  opts: { username?: string } = {},
 ): Promise<LiveSession> {
   await rejectOrDisposeExternallyActiveSession(sessionId, projectId, workspacePath);
   const existing = registry.get(sessionId);
@@ -1196,20 +1236,39 @@ export async function resumeSession(
     });
 
     const now = new Date();
+    const username =
+      opts.username ??
+      (await usernameForSession(session.sessionId)) ??
+      config.auth.localAdminUsername;
+    await rememberSessionUsername(session.sessionId, username);
     const live: LiveSession = {
       session,
       sessionId: session.sessionId,
       projectId,
       workspacePath,
+      username,
+      mcpToolNames: new Set(mcpTools.map((tool) => tool.name)),
       clients: new Set(),
       createdAt: match.createdAt,
       lastActivityAt: now,
       lastAgentStartIndex: undefined,
       unsubscribe: () => undefined,
     };
+    live.telemetry = createSessionTelemetry({
+      sessionId: live.sessionId,
+      projectId: live.projectId,
+      username: live.username,
+      mcpToolNames: live.mcpToolNames,
+      model: () => live.session.model,
+    });
     live.unsubscribe = makeSubscribeHandler(live);
     registry.set(live.sessionId, live);
     await bindWebExtensionContext(live);
+    recordSessionLifecycle("resumed", {
+      sessionId: live.sessionId,
+      projectId: live.projectId,
+      username: live.username,
+    });
     return live;
   });
 }
@@ -1355,6 +1414,12 @@ export async function disposeSession(sessionId: string): Promise<boolean> {
       }
     }
     live.clients.clear();
+    live.telemetry?.dispose();
+    recordSessionLifecycle("disposed", {
+      sessionId: live.sessionId,
+      projectId: live.projectId,
+      username: live.username,
+    });
     try {
       live.session.dispose();
     } catch {
@@ -1768,13 +1833,21 @@ export async function findSessionLocation(
  * then delegates to resumeSession. Convenience wrapper for routes that don't
  * receive projectId in the URL (the stream route specifically).
  */
-export async function resumeSessionById(sessionId: string): Promise<LiveSession> {
+export async function resumeSessionById(
+  sessionId: string,
+  username?: string,
+): Promise<LiveSession> {
   const loc = await findSessionLocation(sessionId);
   if (loc === undefined) throw new SessionNotFoundError(sessionId);
   await rejectOrDisposeExternallyActiveSession(sessionId, loc.projectId, loc.workspacePath);
   const existing = registry.get(sessionId);
   if (existing) return existing;
-  return resumeSession(sessionId, loc.projectId, loc.workspacePath);
+  return resumeSession(
+    sessionId,
+    loc.projectId,
+    loc.workspacePath,
+    username === undefined ? {} : { username },
+  );
 }
 
 /**
@@ -1878,20 +1951,35 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
   });
 
   const now = new Date();
+  await rememberSessionUsername(session.sessionId, source.username);
   const live: LiveSession = {
     session,
     sessionId: session.sessionId,
     projectId: source.projectId,
     workspacePath: source.workspacePath,
+    username: source.username,
+    mcpToolNames: new Set(mcpTools.map((tool) => tool.name)),
     clients: new Set(),
     createdAt: now,
     lastActivityAt: now,
     lastAgentStartIndex: undefined,
     unsubscribe: () => undefined,
   };
+  live.telemetry = createSessionTelemetry({
+    sessionId: live.sessionId,
+    projectId: live.projectId,
+    username: live.username,
+    mcpToolNames: live.mcpToolNames,
+    model: () => live.session.model,
+  });
   live.unsubscribe = makeSubscribeHandler(live);
   registry.set(live.sessionId, live);
   await bindWebExtensionContext(live);
+  recordSessionLifecycle("forked", {
+    sessionId: live.sessionId,
+    projectId: live.projectId,
+    username: live.username,
+  });
 
   // Disambiguate the fork's display name from its source. The SDK
   // copies session_info entries forward when forking, so the new
@@ -1991,6 +2079,8 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
       // reference would otherwise lose its connection. Same
       // sessionId, fresh AgentSession underneath.
       source.session = restoredSession;
+      source.mcpToolNames.clear();
+      for (const tool of restoredMcpTools) source.mcpToolNames.add(tool.name);
       source.lastActivityAt = new Date();
       source.lastAgentStartIndex = undefined;
       source.unsubscribe = makeSubscribeHandler(source);
@@ -2124,6 +2214,8 @@ export async function rebuildAgentSessionForTools(
   // — the browser side notices nothing beyond the new tools showing
   // up on the next agent turn.
   live.session = newSession;
+  live.mcpToolNames.clear();
+  for (const tool of mcpTools) live.mcpToolNames.add(tool.name);
   live.lastActivityAt = new Date();
   live.lastAgentStartIndex = undefined;
   live.unsubscribe = makeSubscribeHandler(live);
