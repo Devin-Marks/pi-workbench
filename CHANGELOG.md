@@ -15,6 +15,8 @@ section. See the "Versions" section of the README for the support window policy.
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-08-19
+
 ## [1.4.9] — 2026-08-19
 
 ### Fixed
