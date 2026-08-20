@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
@@ -95,6 +96,61 @@ function imgSrcCsp(): string {
     }
   }
   return `img-src ${[...sources].join(" ")}`;
+}
+
+function forwardedPrefix(headers: FastifyRequest["headers"]): string | undefined {
+  const raw = headers["x-forwarded-prefix"];
+  if (typeof raw !== "string") return undefined;
+  const prefix = raw.replace(/\/$/, "");
+  return prefix.startsWith("/") && prefix.length > 0 ? prefix : undefined;
+}
+
+function prefixRootUrl(prefix: string, value: string): string {
+  if (!value.startsWith("/")) return value;
+  if (value === prefix || value.startsWith(`${prefix}/`)) return value;
+  return `${prefix}${value}`;
+}
+
+function rewriteRuntimeHtmlBase(html: string, prefix: string): string {
+  const meta = `<meta name="pi-forge-base-path" content="${prefix}" />`;
+  const withMeta = html.includes('name="pi-forge-base-path"')
+    ? html
+    : html.replace("</head>", `    ${meta}\n  </head>`);
+  return withMeta
+    .replace(
+      /(\s(?:src|href)=")\/(assets|icons|manifest\.webmanifest|offline\.html)/g,
+      `$1${prefix}/$2`,
+    )
+    .replace(/(["'`])\/api\/docs/g, `$1${prefix}/api/docs`)
+    .replace(/(["'`])\/api\/v1\//g, `$1${prefix}/api/v1/`);
+}
+
+async function clientIndexHtml(headers: FastifyRequest["headers"]): Promise<string> {
+  const html = await readFile(join(config.clientDistPath, "index.html"), "utf8");
+  const prefix = forwardedPrefix(headers);
+  return prefix === undefined ? html : rewriteRuntimeHtmlBase(html, prefix);
+}
+
+function rewriteRuntimeManifest(manifest: string, prefix: string): string {
+  try {
+    const parsed = JSON.parse(manifest) as {
+      start_url?: string;
+      scope?: string;
+      icons?: { src?: string }[];
+      [key: string]: unknown;
+    };
+    if (typeof parsed.start_url === "string")
+      parsed.start_url = prefixRootUrl(prefix, parsed.start_url);
+    if (typeof parsed.scope === "string") parsed.scope = prefixRootUrl(prefix, parsed.scope);
+    if (Array.isArray(parsed.icons)) {
+      for (const icon of parsed.icons) {
+        if (typeof icon.src === "string") icon.src = prefixRootUrl(prefix, icon.src);
+      }
+    }
+    return JSON.stringify(parsed);
+  } catch {
+    return manifest;
+  }
 }
 
 export async function buildServer(): Promise<FastifyInstance> {
@@ -266,25 +322,21 @@ export async function buildServer(): Promise<FastifyInstance> {
       ].join("; "),
     );
 
-    const forwardedPrefix =
-      typeof req.headers["x-forwarded-prefix"] === "string"
-        ? req.headers["x-forwarded-prefix"].replace(/\/$/, "")
-        : undefined;
-    const path = req.url.split("?")[0] ?? req.url;
-    if (
-      forwardedPrefix !== undefined &&
-      forwardedPrefix.startsWith("/") &&
-      (path === "/api/docs" || path.startsWith("/api/docs/"))
-    ) {
+    const prefix = forwardedPrefix(req.headers);
+    if (prefix !== undefined && (typeof payload === "string" || Buffer.isBuffer(payload))) {
+      const path = req.url.split("?")[0] ?? req.url;
       const contentType = reply.getHeader("content-type")?.toString() ?? "";
+      if (contentType.includes("text/html")) {
+        return rewriteRuntimeHtmlBase(payload.toString(), prefix);
+      }
+      if (path === "/manifest.webmanifest" || contentType.includes("manifest+json")) {
+        return rewriteRuntimeManifest(payload.toString(), prefix);
+      }
       if (
-        (contentType.includes("text/html") || contentType.includes("javascript")) &&
-        (typeof payload === "string" || Buffer.isBuffer(payload))
+        (path === "/api/docs" || path.startsWith("/api/docs/")) &&
+        contentType.includes("javascript")
       ) {
-        return payload
-          .toString()
-          .replace(/(["'`])\/api\/docs/g, `$1${forwardedPrefix}/api/docs`)
-          .replace(/(["'`])\/api\/v1\//g, `$1${forwardedPrefix}/api/v1/`);
+        return rewriteRuntimeHtmlBase(payload.toString(), prefix);
       }
     }
     return payload;
@@ -551,12 +603,28 @@ export async function buildServer(): Promise<FastifyInstance> {
       }
     });
 
-    await fastify.register(fastifyStatic, {
-      root: config.clientDistPath,
-      index: "index.html",
+    fastify.get("/", async (req, reply) =>
+      reply
+        .code(200)
+        .type("text/html")
+        .send(await clientIndexHtml(req.headers)),
+    );
+
+    fastify.get("/manifest.webmanifest", async (req, reply) => {
+      const manifest = await readFile(join(config.clientDistPath, "manifest.webmanifest"), "utf8");
+      const prefix = forwardedPrefix(req.headers);
+      return reply
+        .code(200)
+        .type("application/manifest+json")
+        .send(prefix === undefined ? manifest : rewriteRuntimeManifest(manifest, prefix));
     });
 
-    fastify.setNotFoundHandler((req, reply) => {
+    await fastify.register(fastifyStatic, {
+      root: config.clientDistPath,
+      index: false,
+    });
+
+    fastify.setNotFoundHandler(async (req, reply) => {
       const path = req.url.split("?")[0] ?? req.url;
       // The API surface explicitly 404s — never fall through to the SPA.
       if (path.startsWith("/api/")) {
@@ -571,7 +639,10 @@ export async function buildServer(): Promise<FastifyInstance> {
       if (req.method !== "GET" || looksLikeAsset) {
         return reply.code(404).send({ error: "not_found" });
       }
-      return reply.code(200).type("text/html").sendFile("index.html");
+      return reply
+        .code(200)
+        .type("text/html")
+        .send(await clientIndexHtml(req.headers));
     });
 
     fastify.log.info({ root: config.clientDistPath }, "serving client from disk");

@@ -77,13 +77,12 @@ COPY packages/client/package.json packages/client/
 # `npm ci --workspaces` honours the root lockfile across all packages.
 RUN npm ci --workspaces --include-workspace-root
 
-# Now bring in the source and build. VITE_BASE_PATH is a build-time Vite
-# setting; set it when producing an image intended to run under a path proxy
-# such as /apps/pi-forge/.
+# Now bring in the source and build. Dashboard path-prefix deployments use
+# X-Forwarded-Prefix at runtime, so the image can be built once with Vite's
+# default root base and reused behind different app-proxy paths.
 COPY . .
 
-ARG VITE_BASE_PATH=/
-RUN VITE_BASE_PATH="$VITE_BASE_PATH" npm run build
+RUN npm run build
 
 # ---------- runtime ----------
 FROM node-python-base AS runtime
