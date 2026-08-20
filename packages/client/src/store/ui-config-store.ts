@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { api, ApiError, type ServerThemeConfigResponse } from "../lib/api-client";
 import type { AuthColorScheme } from "../lib/api-client/types";
+import { appResourceUrl } from "../lib/base-path";
 import { applyServerTheme } from "../lib/server-theme";
 
 /**
@@ -103,9 +104,9 @@ export const useUiConfigStore = create<UiConfigState>((set) => ({
         authBannerHtml: cfg.authBannerHtml,
         logoUrlMode: cfg.logoUrlMode,
         authColorScheme: cfg.authColorScheme,
-        authLogoUrl: cfg.authLogoUrl,
-        appLogoDarkUrl: cfg.appLogoDarkUrl,
-        appLogoLightUrl: cfg.appLogoLightUrl,
+        authLogoUrl: appResourceUrl(cfg.authLogoUrl),
+        appLogoDarkUrl: appResourceUrl(cfg.appLogoDarkUrl),
+        appLogoLightUrl: appResourceUrl(cfg.appLogoLightUrl),
         error: undefined,
       });
     } catch (err) {

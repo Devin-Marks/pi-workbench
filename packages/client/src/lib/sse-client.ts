@@ -1,5 +1,6 @@
 import { ApiError, UNAUTHORIZED_EVENT } from "./api-client";
 import { clearStoredToken, getStoredToken } from "./auth-client";
+import { appUrl } from "./base-path";
 
 /**
  * Minimal SSE reader that uses fetch + ReadableStream so we can send the
@@ -91,7 +92,7 @@ async function runOneAttempt<T extends { type: string }>(
 
   let res: Response;
   try {
-    res = await fetch(path, init);
+    res = await fetch(appUrl(path), init);
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") return "aborted";
     throw new ApiError(0, "network_error", (err as Error).message);

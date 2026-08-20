@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { authColorStyle } from "../lib/auth-colors";
+import { appUrl } from "../lib/base-path";
 import { useAuthStore } from "../store/auth-store";
 import { useUiConfigStore } from "../store/ui-config-store";
 
@@ -62,7 +63,7 @@ export function ChangePasswordScreen() {
         <header className="space-y-1">
           <div className="flex items-center gap-2">
             <img
-              src={authLogoUrl ?? "/icons/icon.svg"}
+              src={authLogoUrl ?? appUrl("/icons/icon.svg")}
               alt=""
               className="max-h-6 max-w-24 object-contain"
               aria-hidden="true"

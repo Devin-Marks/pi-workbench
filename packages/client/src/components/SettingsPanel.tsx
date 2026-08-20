@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { appUrl } from "../lib/base-path";
 import {
   api,
   ApiError,
@@ -219,8 +220,8 @@ export function SettingsPanel({ onClose, initialTab }: Props) {
                 const stored = getStoredToken();
                 const url =
                   stored !== undefined
-                    ? `/api/docs?token=${encodeURIComponent(stored.token)}`
-                    : "/api/docs";
+                    ? appUrl(`/api/docs?token=${encodeURIComponent(stored.token)}`)
+                    : appUrl("/api/docs");
                 window.open(url, "_blank", "noopener,noreferrer");
               }}
               className="rounded border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-500"

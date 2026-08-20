@@ -1,5 +1,6 @@
 import { createSHA256 } from "hash-wasm";
 import { clearStoredToken, getStoredToken } from "../auth-client";
+import { appUrl } from "../base-path";
 import {
   ApiError,
   UNAUTHORIZED_EVENT,
@@ -112,6 +113,12 @@ function vAuthStatus(value: unknown, status: number): AuthStatusResponse {
   return {
     authEnabled: value.authEnabled,
     ldapEnabled: typeof value.ldapEnabled === "boolean" ? value.ldapEnabled : false,
+    dashboardIdentityEnabled:
+      typeof value.dashboardIdentityEnabled === "boolean" ? value.dashboardIdentityEnabled : false,
+    dashboardIdentityAuthenticated:
+      typeof value.dashboardIdentityAuthenticated === "boolean"
+        ? value.dashboardIdentityAuthenticated
+        : false,
   };
 }
 
@@ -1605,7 +1612,7 @@ async function request<T>(
 
   let res: Response;
   try {
-    res = await fetch(path, init);
+    res = await fetch(appUrl(path), init);
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") throw err;
     throw new ApiError(0, "network_error", (err as Error).message);
@@ -1771,7 +1778,7 @@ export const api = {
       body: JSON.stringify(body),
     };
     if (signal !== undefined) init.signal = signal;
-    const res = await fetch("/api/v1/projects/clone", init);
+    const res = await fetch(appUrl("/api/v1/projects/clone"), init);
     if (res.status === 401) {
       clearStoredToken();
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
@@ -2147,7 +2154,9 @@ export const api = {
   /** Returns the absolute URL of the streaming log endpoint —
    *  callers use it with EventSource or fetch+ReadableStream. */
   processLogFileUrl: (sessionId: string, processId: string, stream: "stdout" | "stderr") =>
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/logs/file?stream=${stream}`,
+    appUrl(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/logs/file?stream=${stream}`,
+    ),
   killProcess: (sessionId: string, processId: string) =>
     request(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/kill`,
@@ -2470,7 +2479,7 @@ export const api = {
     const headers: Record<string, string> = {};
     const stored = getStoredToken();
     if (stored !== undefined) headers.Authorization = `Bearer ${stored.token}`;
-    const res = await fetch("/api/v1/config/export", { headers });
+    const res = await fetch(appUrl("/api/v1/config/export"), { headers });
     if (res.status === 401) {
       clearStoredToken();
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
@@ -2540,7 +2549,7 @@ export const api = {
     const headers: Record<string, string> = {};
     const stored = getStoredToken();
     if (stored !== undefined) headers.Authorization = `Bearer ${stored.token}`;
-    const res = await fetch("/api/v1/config/skills/export", { headers });
+    const res = await fetch(appUrl("/api/v1/config/skills/export"), { headers });
     if (res.status === 401) {
       clearStoredToken();
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
@@ -2579,7 +2588,7 @@ export const api = {
     const stored = getStoredToken();
     if (stored !== undefined) headers.Authorization = `Bearer ${stored.token}`;
     const res = await fetch(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/export?format=${format}`,
+      appUrl(`/api/v1/sessions/${encodeURIComponent(sessionId)}/export?format=${format}`),
       { headers },
     );
     if (res.status === 401) {
@@ -2700,7 +2709,7 @@ export const api = {
     const headers: Record<string, string> = {};
     const stored = getStoredToken();
     if (stored !== undefined) headers.Authorization = `Bearer ${stored.token}`;
-    const res = await fetch(`/api/v1/files/download?${qs.toString()}`, { headers });
+    const res = await fetch(appUrl(`/api/v1/files/download?${qs.toString()}`), { headers });
     if (res.status === 401) {
       clearStoredToken();
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));

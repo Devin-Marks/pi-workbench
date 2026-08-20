@@ -68,6 +68,14 @@ or shell environment. The most-touched ones:
 | `LDAP_GROUP_ATTRIBUTE` | `memberOf` | User attribute checked for group DNs. Change only for directories that expose group membership under a different attribute. |
 | `LDAP_TIMEOUT_MS` | `5000` | LDAP connect/operation timeout in milliseconds. |
 | `LDAP_TLS_REJECT_UNAUTHORIZED` | `true` | Reject untrusted TLS certificates for `ldaps://` connections. Set `false` only for local/self-signed testing. |
+| `VITE_BASE_PATH` | `/` | Build-time Vite base path. Set to `/apps/pi-forge/` when building an image/client bundle embedded behind the dashboard app proxy. |
+| `DASHBOARD_IDENTITY_SECRET` | (unset) | Enables dashboard SSO by verifying the dashboard proxy's signed `X-Dashboard-Identity` / `X-Dashboard-Signature` envelope. Must match pi-forge's per-app `identitySecret` in the dashboard catalog. |
+| `DASHBOARD_IDENTITY_SECRET_FILE` | (unset) | File containing the dashboard identity HMAC secret. Takes precedence over `DASHBOARD_IDENTITY_SECRET`. |
+| `DASHBOARD_IDENTITY_ISSUER` | `internal-dashboard` | Expected `iss` in signed dashboard identity envelopes. Must match the dashboard's `DASHBOARD_IDENTITY_ISSUER`. |
+| `DASHBOARD_IDENTITY_AUDIENCE` | `pi-forge` | Expected `aud` and `app` in signed dashboard identity envelopes. `DASHBOARD_APP_ID` is accepted as a legacy/alternate source when this is unset. |
+| `DASHBOARD_IDENTITY_MAX_FUTURE_IAT_SKEW_SECONDS` | `60` | Allowed clock skew for future `iat` values in dashboard identity envelopes. |
+| `DASHBOARD_IDENTITY_MAX_AGE_SECONDS` | `300` | Maximum dashboard identity age and maximum `exp - iat` lifetime. Keeps replay windows short even if the proxy signs a longer-lived envelope. |
+| `DASHBOARD_IDENTITY_ALLOWED_GROUPS` | (unset) | Optional dashboard SSO group allowlist. Use a JSON string array for LDAP DNs, e.g. `["CN=Developers,OU=Groups,DC=company,DC=local"]`; semicolon/newline-separated values are also accepted. If unset, falls back to `LDAP_REQUIRED_GROUP_DN`. |
 | `MINIMAL_UI` | `false` | Hide terminal / git / last-turn / providers / agent-settings panels. Frontend gate; server routes unchanged. ALSO hard-disables webhook configuration, session orchestration, and the quick-actions runner. |
 | `AUTH_BANNER_TEXT` | (unset) | Optional public banner shown below the login prompt. Literal newlines/carriage returns are preserved; `\\n` and `\\r` escapes are decoded for single-line env/CLI surfaces. Do not put secrets here: it is exposed by public `/api/v1/ui-config`. |
 | `AUTH_BANNER_HTML` | `false` | When true, renders `AUTH_BANNER_TEXT` as sanitized HTML instead of plain text. Scripts, styles, event handlers, and unsafe links are stripped client-side. Leave false unless you need links or simple formatting. |

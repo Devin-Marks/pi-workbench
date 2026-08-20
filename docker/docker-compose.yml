@@ -18,6 +18,8 @@ services:
         # non-default pi-tools IDs (see ../docs/agent-tool-sandbox.md).
         PTOOLS_UID: ${AGENT_TOOL_UID:-1001}
         PTOOLS_GID: ${AGENT_TOOL_GID:-1001}
+        # Build-time Vite base for path-proxied deployments.
+        VITE_BASE_PATH: ${VITE_BASE_PATH:-/}
     image: pi-forge:latest
     container_name: ${CONTAINER_NAME:-pi-forge}
     restart: unless-stopped
@@ -44,6 +46,12 @@ services:
       # Auth — read from .env. Both empty = auth disabled.
       UI_PASSWORD: ${UI_PASSWORD:-}
       API_KEY: ${API_KEY:-}
+      # Dashboard path-proxy SSO. Leave DASHBOARD_IDENTITY_SECRET empty when
+      # not embedding behind the dashboard proxy.
+      DASHBOARD_IDENTITY_SECRET: ${DASHBOARD_IDENTITY_SECRET:-}
+      DASHBOARD_IDENTITY_ISSUER: ${DASHBOARD_IDENTITY_ISSUER:-internal-dashboard}
+      DASHBOARD_IDENTITY_AUDIENCE: ${DASHBOARD_IDENTITY_AUDIENCE:-pi-forge}
+      DASHBOARD_IDENTITY_ALLOWED_GROUPS: ${DASHBOARD_IDENTITY_ALLOWED_GROUPS:-}
       # Logging + reverse-proxy hint.
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TRUST_PROXY: ${TRUST_PROXY:-false}
