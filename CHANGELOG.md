@@ -15,6 +15,12 @@ section. See the "Versions" section of the README for the support window policy.
 
 ## [Unreleased]
 
+## [1.5.1] — 2026-08-20
+
+### Fixed
+
+- **Dashboard app-proxy runtime paths.** Pi-forge now resolves dashboard mount paths from `X-Forwarded-Prefix` at request time, so a normal `/` build works behind `/apps/pi-forge/` without serving JS/CSS as HTML. Dashboard SSO configuration now uses `DASHBOARD_APP_ID` as the primary app id setting.
+
 ## [1.5.0] — 2026-08-19
 
 ## [1.4.9] — 2026-08-19
