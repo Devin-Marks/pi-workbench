@@ -543,7 +543,7 @@ export const config = Object.freeze({
       secret: DASHBOARD_IDENTITY_SECRET,
       secretFile: DASHBOARD_IDENTITY_SECRET_FILE,
       issuer: readEnv("DASHBOARD_IDENTITY_ISSUER") ?? "internal-dashboard",
-      audience: readEnv("DASHBOARD_IDENTITY_AUDIENCE") ?? readEnv("DASHBOARD_APP_ID") ?? "pi-forge",
+      audience: readEnv("DASHBOARD_APP_ID") ?? readEnv("DASHBOARD_IDENTITY_AUDIENCE") ?? "pi-forge",
       maxFutureIatSkewSeconds: readInt("DASHBOARD_IDENTITY_MAX_FUTURE_IAT_SKEW_SECONDS", 60),
       maxAgeSeconds: readInt("DASHBOARD_IDENTITY_MAX_AGE_SECONDS", 5 * 60),
       allowedGroups: Object.freeze(
