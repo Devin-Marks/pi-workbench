@@ -10,6 +10,7 @@ process.env.FORGE_DATA_DIR = temp;
 process.env.WORKSPACE_PATH = temp;
 process.env.PI_CONFIG_DIR = join(temp, "pi-config");
 process.env.OTEL_CAPTURE_CONTENT = "true";
+process.env.OTEL_EXPORTER_OTLP_TLS_REJECT_UNAUTHORIZED = "false";
 
 let failures = 0;
 function assert(label: string, ok: boolean, detail?: string): void {
@@ -34,6 +35,14 @@ try {
     "OTLP base endpoint gets traces suffix",
     telemetry.telemetryTraceEndpoint("https://cloud.langfuse.com/api/public/otel/") ===
       "https://cloud.langfuse.com/api/public/otel/v1/traces",
+  );
+  const exporterOptions = telemetry.telemetryExporterOptions("https://otel.example.com");
+  const agentOptions = exporterOptions.httpAgentOptions as
+    | { rejectUnauthorized?: boolean }
+    | undefined;
+  assert(
+    "OTLP TLS verification can be disabled without changing process-wide TLS",
+    typeof agentOptions === "object" && agentOptions.rejectUnauthorized === false,
   );
   assert(
     "username is included in telemetry session id",

@@ -36,18 +36,25 @@ export function telemetryTraceEndpoint(endpoint: string): string {
   return trimmed.endsWith("/v1/traces") ? trimmed : `${trimmed}/v1/traces`;
 }
 
+export function telemetryExporterOptions(
+  endpoint: string,
+): NonNullable<ConstructorParameters<typeof OTLPTraceExporter>[0]> {
+  return {
+    url: telemetryTraceEndpoint(endpoint),
+    headers: parseHeaders(config.telemetry.otlpHeaders),
+    ...(config.telemetry.otlpTlsRejectUnauthorized
+      ? {}
+      : { httpAgentOptions: { rejectUnauthorized: false } }),
+  };
+}
+
 export function initializeTelemetry(exporterOverride?: SpanExporter): void {
   if (initialized) return;
   initialized = true;
   const endpoint = config.telemetry.otlpEndpoint;
   if (endpoint === undefined && exporterOverride === undefined) return;
 
-  const exporter =
-    exporterOverride ??
-    new OTLPTraceExporter({
-      url: telemetryTraceEndpoint(endpoint!),
-      headers: parseHeaders(config.telemetry.otlpHeaders),
-    });
+  const exporter = exporterOverride ?? new OTLPTraceExporter(telemetryExporterOptions(endpoint!));
   provider = new NodeTracerProvider({
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: config.telemetry.serviceName,

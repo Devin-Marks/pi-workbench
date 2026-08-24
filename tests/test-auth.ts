@@ -22,7 +22,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { createHmac, randomBytes } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -118,6 +118,8 @@ async function startServer(
       LOG_LEVEL: "warn",
       NODE_ENV: "test",
       FORGE_DATA_DIR: dataDir,
+      PI_CONFIG_DIR: join(dataDir, "pi-config"),
+      SESSION_DIR: join(dataDir, "sessions"),
       WORKSPACE_PATH: workspacePath,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -696,6 +698,31 @@ async function scenarioDashboardIdentity(): Promise<void> {
     assert(
       "protected probe with valid dashboard headers → 404 (passes auth)",
       withHeaders.status === 404,
+    );
+
+    const projectPath = join(srv.dataDir, "workspace", "dashboard-project");
+    await mkdir(projectPath, { recursive: true });
+    const createProjectResponse = await jsonPost(
+      `${srv.base}/api/v1/projects`,
+      { name: "Dashboard project", path: projectPath },
+      dashboardHeaders(secret),
+    );
+    assert("dashboard identity can create a project", createProjectResponse.status === 201);
+    const project = (await createProjectResponse.json()) as { id: string };
+    const createSessionResponse = await jsonPost(
+      `${srv.base}/api/v1/sessions`,
+      { projectId: project.id },
+      dashboardHeaders(secret, { sub: "portal-user" }),
+    );
+    assert("dashboard identity can create a session", createSessionResponse.status === 201);
+    const session = (await createSessionResponse.json()) as { sessionId: string };
+    const sessionUsers = JSON.parse(
+      await readFile(join(srv.dataDir, "session-users.json"), "utf8"),
+    ) as Record<string, string>;
+    assert(
+      "dashboard identity sub is persisted as the session username",
+      sessionUsers[session.sessionId] === "portal-user",
+      `got ${String(sessionUsers[session.sessionId])}`,
     );
 
     const wrongSignature = await fetch(`${srv.base}/api/v1/__protected_probe`, {
