@@ -1,7 +1,11 @@
 import { context, SpanStatusCode, trace, type Context, type Span } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { resourceFromAttributes } from "@opentelemetry/resources";
-import { BatchSpanProcessor, type SpanExporter } from "@opentelemetry/sdk-trace-base";
+import {
+  BatchSpanProcessor,
+  type ReadableSpan,
+  type SpanExporter,
+} from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
@@ -48,13 +52,108 @@ export function telemetryExporterOptions(
   };
 }
 
+type TelemetryDebugLog = (message: string) => void;
+
+function diagnosticEndpoint(endpoint: string): string {
+  try {
+    const parsed = new URL(telemetryTraceEndpoint(endpoint));
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return "(invalid endpoint)";
+  }
+}
+
+function errorSummary(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const code = (error as NodeJS.ErrnoException).code;
+  return `${error.name}${code === undefined ? "" : ` [${code}]`}: ${error.message}`;
+}
+
+export function telemetryDebugExporter(
+  delegate: SpanExporter,
+  endpoint: string,
+  tlsRejectUnauthorized: boolean,
+  log: TelemetryDebugLog = (message) => console.log(message),
+): SpanExporter {
+  const safeEndpoint = diagnosticEndpoint(endpoint);
+  const write = (message: string): void => {
+    try {
+      log(`[telemetry:debug] ${message}`);
+    } catch {
+      // Diagnostic output must never interrupt trace export.
+    }
+  };
+
+  write(
+    `OTLP exporter configured endpoint=${safeEndpoint} tlsRejectUnauthorized=${String(tlsRejectUnauthorized)}`,
+  );
+
+  return {
+    export(spans: ReadableSpan[], resultCallback: Parameters<SpanExporter["export"]>[1]): void {
+      const startedAt = Date.now();
+      write(`export started spans=${spans.length}`);
+      try {
+        delegate.export(spans, (result) => {
+          const elapsedMs = Date.now() - startedAt;
+          if (Number(result.code) === 0) {
+            write(`export succeeded spans=${spans.length} durationMs=${elapsedMs}`);
+          } else {
+            write(
+              `export failed spans=${spans.length} durationMs=${elapsedMs} error=${errorSummary(result.error)}`,
+            );
+          }
+          resultCallback(result);
+        });
+      } catch (error) {
+        write(`export threw spans=${spans.length} error=${errorSummary(error)}`);
+        throw error;
+      }
+    },
+    async forceFlush(): Promise<void> {
+      write("force flush started");
+      try {
+        await delegate.forceFlush?.();
+        write("force flush completed");
+      } catch (error) {
+        write(`force flush failed error=${errorSummary(error)}`);
+        throw error;
+      }
+    },
+    async shutdown(): Promise<void> {
+      write("exporter shutdown started");
+      try {
+        await delegate.shutdown();
+        write("exporter shutdown completed");
+      } catch (error) {
+        write(`exporter shutdown failed error=${errorSummary(error)}`);
+        throw error;
+      }
+    },
+  };
+}
+
 export function initializeTelemetry(exporterOverride?: SpanExporter): void {
   if (initialized) return;
   initialized = true;
   const endpoint = config.telemetry.otlpEndpoint;
-  if (endpoint === undefined && exporterOverride === undefined) return;
+  if (endpoint === undefined && exporterOverride === undefined) {
+    if (config.telemetry.debug) {
+      console.log("[telemetry:debug] telemetry disabled: OTEL_EXPORTER_OTLP_ENDPOINT is unset");
+    }
+    return;
+  }
 
-  const exporter = exporterOverride ?? new OTLPTraceExporter(telemetryExporterOptions(endpoint!));
+  let exporter = exporterOverride;
+  if (exporter === undefined) {
+    const otlpExporter = new OTLPTraceExporter(telemetryExporterOptions(endpoint!));
+    exporter = config.telemetry.debug
+      ? telemetryDebugExporter(otlpExporter, endpoint!, config.telemetry.otlpTlsRejectUnauthorized)
+      : otlpExporter;
+  }
   provider = new NodeTracerProvider({
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: config.telemetry.serviceName,

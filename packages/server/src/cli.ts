@@ -348,6 +348,14 @@ const FLAGS: readonly FlagDef[] = [
     desc: "Export message content and tool inputs/results (may contain sensitive user data)",
     defaultText: "false",
   },
+  {
+    name: "otel-debug",
+    env: "OTEL_DEBUG",
+    type: "boolean",
+    group: "telemetry",
+    desc: "Log OTLP export attempts, results, and errors to stdout without span contents",
+    defaultText: "false",
+  },
   // features
   {
     name: "log-level",

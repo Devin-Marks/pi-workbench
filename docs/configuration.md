@@ -93,6 +93,7 @@ or shell environment. The most-touched ones:
 | `OTEL_SERVICE_NAME` | `pi-forge` | OpenTelemetry resource service name. |
 | `OTEL_SERVICE_VERSION` | `unknown` | OpenTelemetry resource service version/release label. |
 | `OTEL_CAPTURE_CONTENT` | `false` | When true, exports full user/assistant message content and tool arguments/results. This can contain source code, credentials, personal data, and MCP responses; enable only with an approved data-retention policy. |
+| `OTEL_DEBUG` | `false` | Log OTLP exporter configuration, batch attempts, results, durations, and sanitized errors to stdout. Span contents and header values are not logged. |
 | `TRUST_PROXY` | `false` | Set when behind a reverse proxy so `req.ip` is the real client (required for per-user login rate limits). |
 | `ORCHESTRATION_DISABLED` | `false` | Disable the chat-view `Orch` toggle and orchestration REST/tool surface. Orchestration is enabled by default; hard-disabled under `MINIMAL_UI` regardless. See [`orchestration.md`](./orchestration.md). |
 | `ORCHESTRATION_ENABLED` | `true` | Legacy compatibility switch. `false` disables orchestration; `true`/unset keep the default enabled behavior. Prefer `ORCHESTRATION_DISABLED=true` for new deployments. |
@@ -141,6 +142,12 @@ For a trusted private OTLP endpoint with a self-signed certificate, set
 the telemetry exporter's HTTP agent, but it still permits man-in-the-middle
 attacks against exported telemetry; installing the endpoint's CA certificate is
 preferred.
+
+To troubleshoot export failures in pod logs without printing span contents or
+header values, set `OTEL_DEBUG=true`. Debug lines are prefixed with
+`[telemetry:debug]` and report whether telemetry is disabled due to a missing
+endpoint, plus the sanitized endpoint, TLS verification setting, batch size,
+duration, and exporter error message.
 
 Langfuse example:
 

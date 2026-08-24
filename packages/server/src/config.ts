@@ -393,6 +393,7 @@ export const config = Object.freeze({
     serviceName: readEnv("OTEL_SERVICE_NAME") ?? "pi-forge",
     serviceVersion: readEnv("OTEL_SERVICE_VERSION") ?? "unknown",
     captureContent: readBool("OTEL_CAPTURE_CONTENT", false),
+    debug: readBool("OTEL_DEBUG", false),
   }),
   isTest: (readEnv("NODE_ENV") ?? "") === "test",
   isProduction: (readEnv("NODE_ENV") ?? "") === "production",
