@@ -15,6 +15,16 @@ section. See the "Versions" section of the README for the support window policy.
 
 ## [Unreleased]
 
+## [1.5.2] — 2026-08-24
+
+### Added
+
+- **OTLP export diagnostics and private-endpoint TLS controls.** Operators can enable sanitized exporter status/error logs with `OTEL_DEBUG` and, for trusted self-signed endpoints, scope certificate-verification bypass to the OTLP exporter with `OTEL_EXPORTER_OTLP_TLS_REJECT_UNAUTHORIZED=false`.
+
+### Fixed
+
+- **Dashboard/app-portal sessions use the authenticated identity in telemetry.** Session attribution now propagates the verified proxy `sub` claim instead of falling back to the local admin username.
+
 ## [1.5.1] — 2026-08-20
 
 ### Fixed
