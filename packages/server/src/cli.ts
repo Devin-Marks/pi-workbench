@@ -317,6 +317,14 @@ const FLAGS: readonly FlagDef[] = [
     sensitive: true,
   },
   {
+    name: "otel-exporter-otlp-tls-reject-unauthorized",
+    env: "OTEL_EXPORTER_OTLP_TLS_REJECT_UNAUTHORIZED",
+    type: "boolean",
+    group: "telemetry",
+    desc: "Verify OTLP HTTPS certificates; set false only for trusted private endpoints",
+    defaultText: "true",
+  },
+  {
     name: "otel-service-name",
     env: "OTEL_SERVICE_NAME",
     type: "string",
@@ -338,6 +346,14 @@ const FLAGS: readonly FlagDef[] = [
     type: "boolean",
     group: "telemetry",
     desc: "Export message content and tool inputs/results (may contain sensitive user data)",
+    defaultText: "false",
+  },
+  {
+    name: "otel-debug",
+    env: "OTEL_DEBUG",
+    type: "boolean",
+    group: "telemetry",
+    desc: "Log OTLP export attempts, results, and errors to stdout without span contents",
     defaultText: "false",
   },
   // features

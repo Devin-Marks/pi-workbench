@@ -2,7 +2,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
+import { InMemorySpanExporter, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 const temp = await mkdtemp(join(tmpdir(), "pi-forge-telemetry-"));
@@ -10,6 +10,7 @@ process.env.FORGE_DATA_DIR = temp;
 process.env.WORKSPACE_PATH = temp;
 process.env.PI_CONFIG_DIR = join(temp, "pi-config");
 process.env.OTEL_CAPTURE_CONTENT = "true";
+process.env.OTEL_EXPORTER_OTLP_TLS_REJECT_UNAUTHORIZED = "false";
 
 let failures = 0;
 function assert(label: string, ok: boolean, detail?: string): void {
@@ -35,6 +36,62 @@ try {
     telemetry.telemetryTraceEndpoint("https://cloud.langfuse.com/api/public/otel/") ===
       "https://cloud.langfuse.com/api/public/otel/v1/traces",
   );
+  const exporterOptions = telemetry.telemetryExporterOptions("https://otel.example.com");
+  const agentOptions = exporterOptions.httpAgentOptions as
+    | { rejectUnauthorized?: boolean }
+    | undefined;
+  assert(
+    "OTLP TLS verification can be disabled without changing process-wide TLS",
+    typeof agentOptions === "object" && agentOptions.rejectUnauthorized === false,
+  );
+
+  const debugLines: string[] = [];
+  const failingExporter: SpanExporter = {
+    export(_spans, resultCallback): void {
+      const error = Object.assign(new Error("self-signed certificate"), {
+        code: "DEPTH_ZERO_SELF_SIGNED_CERT",
+      });
+      resultCallback({ code: 1, error });
+    },
+    shutdown(): Promise<void> {
+      return Promise.resolve();
+    },
+  };
+  const debugExporter = telemetry.telemetryDebugExporter(
+    failingExporter,
+    "https://user:password@otel.example.com/v1/traces?token=secret",
+    false,
+    (line) => debugLines.push(line),
+  );
+  debugExporter.export(
+    [{ name: "private prompt", attributes: { secret: "private span content" } } as never],
+    () => undefined,
+  );
+  assert(
+    "OTEL debug output reports sanitized exporter failures",
+    debugLines.some(
+      (line) =>
+        line.includes("endpoint=https://otel.example.com/v1/traces") &&
+        line.includes("tlsRejectUnauthorized=false"),
+    ) &&
+      debugLines.some(
+        (line) =>
+          line.includes("export failed spans=1") &&
+          line.includes("DEPTH_ZERO_SELF_SIGNED_CERT") &&
+          line.includes("self-signed certificate"),
+      ),
+  );
+  assert(
+    "OTEL debug output excludes endpoint credentials and span contents",
+    debugLines.every(
+      (line) =>
+        !line.includes("password") &&
+        !line.includes("token=secret") &&
+        !line.includes("private prompt") &&
+        !line.includes("private span content"),
+    ),
+  );
+
   assert(
     "username is included in telemetry session id",
     telemetry.formatTelemetrySessionId("alice@example.com", "session-123") ===

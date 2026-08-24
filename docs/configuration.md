@@ -89,9 +89,11 @@ or shell environment. The most-touched ones:
 | `AUTH_COLOR_SCHEME` | (unset) | Optional comma-separated list of exactly 8 hex colors for login/auth pages only: page background, card background, border, text, muted text, button background, button text, button hover background. Example: `#ffffff,#2563eb,#1d4ed8,#ffffff,#dbeafe,#2563eb,#ffffff,#1d4ed8`. Only `#rgb` and `#rrggbb` forms are accepted; invalid values fail startup rather than becoming CSS. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | (unset) | Enables OpenTelemetry trace export over OTLP/HTTP. For Langfuse use `https://<region>.cloud.langfuse.com/api/public/otel`; pi-forge appends `/v1/traces`. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | (unset) | Comma-separated exporter headers. Langfuse requires `Authorization=Basic <base64-public-key:secret-key>,x-langfuse-ingestion-version=4`. Treat this value as a secret. |
+| `OTEL_EXPORTER_OTLP_TLS_REJECT_UNAUTHORIZED` | `true` | Verify certificates for OTLP HTTPS connections. Set to `false` only for a trusted private endpoint with a self-signed certificate; this weakens TLS verification for the telemetry exporter. |
 | `OTEL_SERVICE_NAME` | `pi-forge` | OpenTelemetry resource service name. |
 | `OTEL_SERVICE_VERSION` | `unknown` | OpenTelemetry resource service version/release label. |
 | `OTEL_CAPTURE_CONTENT` | `false` | When true, exports full user/assistant message content and tool arguments/results. This can contain source code, credentials, personal data, and MCP responses; enable only with an approved data-retention policy. |
+| `OTEL_DEBUG` | `false` | Log OTLP exporter configuration, batch attempts, results, durations, and sanitized errors to stdout. Span contents and header values are not logged. |
 | `TRUST_PROXY` | `false` | Set when behind a reverse proxy so `req.ip` is the real client (required for per-user login rate limits). |
 | `ORCHESTRATION_DISABLED` | `false` | Disable the chat-view `Orch` toggle and orchestration REST/tool surface. Orchestration is enabled by default; hard-disabled under `MINIMAL_UI` regardless. See [`orchestration.md`](./orchestration.md). |
 | `ORCHESTRATION_ENABLED` | `true` | Legacy compatibility switch. `false` disables orchestration; `true`/unset keep the default enabled behavior. Prefer `ORCHESTRATION_DISABLED=true` for new deployments. |
@@ -132,7 +134,20 @@ message, and tool execution. MCP calls are emitted as tool observations with
 Pi UUID remains available as `pi.session.id`. Session ownership is persisted in
 `${FORGE_DATA_DIR}/session-users.json` (mode 0600), so attribution survives a
 server restart. Local-password, API-key, and unauthenticated use map to
-`FORGE_LOCAL_ADMIN_USERNAME`; LDAP sessions use the authenticated LDAP login.
+`FORGE_LOCAL_ADMIN_USERNAME`; LDAP sessions use the authenticated LDAP login,
+and dashboard/app-portal SSO sessions use the verified identity's `sub` claim.
+
+For a trusted private OTLP endpoint with a self-signed certificate, set
+`OTEL_EXPORTER_OTLP_TLS_REJECT_UNAUTHORIZED=false`. This exception is scoped to
+the telemetry exporter's HTTP agent, but it still permits man-in-the-middle
+attacks against exported telemetry; installing the endpoint's CA certificate is
+preferred.
+
+To troubleshoot export failures in pod logs without printing span contents or
+header values, set `OTEL_DEBUG=true`. Debug lines are prefixed with
+`[telemetry:debug]` and report whether telemetry is disabled due to a missing
+endpoint, plus the sanitized endpoint, TLS verification setting, batch size,
+duration, and exporter error message.
 
 Langfuse example:
 

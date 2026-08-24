@@ -513,7 +513,11 @@ export async function buildServer(): Promise<FastifyInstance> {
       return;
     }
 
-    if (verifyDashboardIdentity(req.headers) !== undefined) return;
+    const dashboardIdentity = verifyDashboardIdentity(req.headers);
+    if (dashboardIdentity !== undefined) {
+      req.authUsername = dashboardIdentity.sub;
+      return;
+    }
 
     const presented = extractBearer(req.headers.authorization);
     if (presented === undefined) {
