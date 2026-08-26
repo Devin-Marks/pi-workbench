@@ -27,6 +27,7 @@ export function ChangePasswordScreen() {
   const pending = useAuthStore((s) => s.changePasswordPending);
   const remoteError = useAuthStore((s) => s.changePasswordError);
   const logout = useAuthStore((s) => s.logout);
+  const appName = useUiConfigStore((s) => s.appName);
   const authLogoUrl = useUiConfigStore((s) => s.authLogoUrl);
   const authColorScheme = useUiConfigStore((s) => s.authColorScheme);
   const colors = useMemo(() => authColorStyle(authColorScheme), [authColorScheme]);
@@ -72,7 +73,7 @@ export function ChangePasswordScreen() {
           </div>
           <p className="text-sm text-[var(--auth-muted-text)]">
             You signed in with the deployment-supplied initial password. Pick a new one before
-            continuing — it will be stored as a hash on the pi-forge data volume.
+            continuing — it will be stored as a hash on the {appName} data volume.
           </p>
         </header>
         <label className="block space-y-1.5">

@@ -253,6 +253,7 @@ export function ChatInput({ sessionId }: Props) {
   // direct shell. The agent's own `bash` tool is unaffected; the
   // restriction is on the *user* typing raw shell into chat.
   const minimalUi = useUiConfigStore((s) => s.minimal);
+  const appName = useUiConfigStore((s) => s.appName);
   const banner = useSessionStore((s) => s.bannerBySession[sessionId]);
   // Detect an in-progress auto-retry by the banner shape that
   // session-store sets in applyEvent for `auto_retry_start`. This lets
@@ -671,9 +672,9 @@ export function ChatInput({ sessionId }: Props) {
         run: () => {
           setAttachmentError(
             minimalUi
-              ? "/<cmd> runs a pi-forge command (compact, abort, settings, …). " +
+              ? `/<cmd> runs a ${appName} command (compact, abort, settings, …). ` +
                   "@<path> references a project file (autocomplete from the popover); type \\@ for a literal @."
-              : "/<cmd> runs a pi-forge command (compact, abort, settings, …). " +
+              : `/<cmd> runs a ${appName} command (compact, abort, settings, …). ` +
                   "!cmd runs bash (output → next LLM context); !!cmd runs bash local-only. " +
                   "@<path> references a project file (autocomplete from the popover); type \\@ for a literal @.",
           );
@@ -755,6 +756,7 @@ export function ChatInput({ sessionId }: Props) {
     reloadMessages,
     openSettings,
     minimalUi,
+    appName,
     availablePrompts,
     availableSkills,
     extensionCommands,

@@ -111,6 +111,15 @@ function readUiText(key: string): string | undefined {
   return v.replace(/\\r/g, "\r").replace(/\\n/g, "\n");
 }
 
+function readDisplayName(key: string, fallback: string): string {
+  const value = readEnv(key) ?? fallback;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`config: ${key} must be a non-empty display name`);
+  }
+  return trimmed;
+}
+
 function readHttpUrl(key: string): string | undefined {
   const v = readEnv(key);
   if (v === undefined) return undefined;
@@ -415,6 +424,12 @@ export const config = Object.freeze({
    * where provider config is managed at the deploy level.
    */
   minimalUi: readBool("MINIMAL_UI", false),
+  /**
+   * Public display-only application name. Exposed via `GET /api/v1/ui-config`
+   * so browser-visible branding can change without renaming packages, routes,
+   * env vars, storage keys, telemetry service names, or other identifiers.
+   */
+  appName: readDisplayName("APP_NAME", "pi-forge"),
   /**
    * Public login-screen customization. These values are exposed via
    * `GET /api/v1/ui-config` before auth, so they must never contain

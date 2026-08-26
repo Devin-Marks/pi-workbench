@@ -5,6 +5,7 @@ import { useSessionStore } from "../store/session-store";
 import { ProjectPicker } from "./ProjectPicker";
 import { SessionList } from "./SessionList";
 import { Modal } from "./Modal";
+import { useUiConfigStore } from "../store/ui-config-store";
 
 export interface ProjectSidebarProps {
   /** Extra classes on the outer aside. Used by the App-level mobile
@@ -25,6 +26,7 @@ export function ProjectSidebar({ className = "" }: ProjectSidebarProps = {}) {
   const sessionsByProject = useSessionStore((s) => s.byProject);
   const createSession = useSessionStore((s) => s.createSession);
   const disposeSession = useSessionStore((s) => s.disposeSession);
+  const appName = useUiConfigStore((s) => s.appName);
 
   /**
    * Create a new session under `projectId`. Mirrors the project-
@@ -295,7 +297,7 @@ export function ProjectSidebar({ className = "" }: ProjectSidebarProps = {}) {
             return (
               <div className="flex flex-col gap-3 px-4 py-3">
                 <p className="text-xs text-neutral-300">
-                  Remove "{deleteDialog.name}" from pi-forge.
+                  Remove "{deleteDialog.name}" from {appName}.
                 </p>
                 <ul className="ml-4 list-disc space-y-0.5 text-[11px] text-neutral-400">
                   <li>

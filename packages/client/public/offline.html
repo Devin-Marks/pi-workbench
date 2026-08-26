@@ -128,13 +128,13 @@
               <rect x="54" y="42" width="7" height="28" />
             </g>
           </svg>
-          <h1>pi-forge</h1>
+          <h1 data-app-name>pi-forge</h1>
         </div>
         <h2 id="title">You're offline.</h2>
         <p>
-          The pi-forge server is unreachable. The agent runs against your code on the server, so
-          there's no useful offline mode &mdash; sessions, file edits, and terminals all need a live
-          connection.
+          The <span data-app-name>pi-forge</span> server is unreachable. The agent runs against your
+          code on the server, so there's no useful offline mode &mdash; sessions, file edits, and
+          terminals all need a live connection.
         </p>
         <ul>
           <li>If the server is on your laptop, check it's still running.</li>
@@ -151,5 +151,16 @@
         </p>
       </div>
     </main>
+    <script>
+      try {
+        const appName = localStorage.getItem("pi-forge/app-name") || "pi-forge";
+        document.title = `Offline — ${appName}`;
+        for (const el of document.querySelectorAll("[data-app-name]")) {
+          el.textContent = appName;
+        }
+      } catch {
+        // Keep the default built-in branding when localStorage is unavailable.
+      }
+    </script>
   </body>
 </html>

@@ -313,6 +313,8 @@ export interface UiConfigResponse {
   minimal: boolean;
   /** Absolute path to the workspace root, used by minimal-mode project create. */
   workspaceRoot: string;
+  /** Display-only application name shown in browser UI branding. */
+  appName: string;
   /** Server build version (mirrors packages/server's package.json). */
   version: string;
   /**
