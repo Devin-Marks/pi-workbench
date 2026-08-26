@@ -92,7 +92,7 @@ or shell environment. The most-touched ones:
 | `OTEL_EXPORTER_OTLP_TLS_REJECT_UNAUTHORIZED` | `true` | Verify certificates for OTLP HTTPS connections. Set to `false` only for a trusted private endpoint with a self-signed certificate; this weakens TLS verification for the telemetry exporter. |
 | `OTEL_SERVICE_NAME` | `pi-forge` | OpenTelemetry resource service name. |
 | `OTEL_SERVICE_VERSION` | `unknown` | OpenTelemetry resource service version/release label. |
-| `OTEL_CAPTURE_CONTENT` | `false` | When true, exports full user/assistant message content and tool arguments/results. This can contain source code, credentials, personal data, and MCP responses; enable only with an approved data-retention policy. |
+| `OTEL_CAPTURE_CONTENT` | `false` | Initial/default value for telemetry content capture. The Settings → General pane can override this at runtime and persists the override in `FORGE_DATA_DIR/telemetry-settings.json`. When true, exports full user/assistant message content and tool arguments/results. This can contain source code, credentials, personal data, and MCP responses; enable only with an approved data-retention policy. |
 | `OTEL_DEBUG` | `false` | Log OTLP exporter configuration, batch attempts, results, durations, and sanitized errors to stdout. Span contents and header values are not logged. |
 | `TRUST_PROXY` | `false` | Set when behind a reverse proxy so `req.ip` is the real client (required for per-user login rate limits). |
 | `ORCHESTRATION_DISABLED` | `false` | Disable the chat-view `Orch` toggle and orchestration REST/tool surface. Orchestration is enabled by default; hard-disabled under `MINIMAL_UI` regardless. See [`orchestration.md`](./orchestration.md). |

@@ -258,7 +258,7 @@ export function SettingsPanel({ onClose, initialTab }: Props) {
           {tab === "webhooks" && <WebhooksTab onError={setError} />}
           {tab === "appearance" && <AppearanceTab />}
           {tab === "backup" && <BackupTab onError={setError} />}
-          {tab === "general" && <GeneralTab />}
+          {tab === "general" && <GeneralTab onError={setError} />}
         </div>
       </div>
     </div>
@@ -4500,7 +4500,7 @@ const MIN_PASSWORD_LENGTH = 8;
  * in those cases there is no local password to change or password
  * changes should be managed by LDAP.
  */
-function GeneralTab() {
+function GeneralTab({ onError }: { onError: (msg: string | undefined) => void }) {
   const version = useUiConfigStore((s) => s.version);
   const loaded = useUiConfigStore((s) => s.loaded);
   const passwordAuthEnabled = useUiConfigStore((s) => s.passwordAuthEnabled);
@@ -4577,8 +4577,96 @@ function GeneralTab() {
         </ul>
       </section>
 
+      <TelemetryCaptureSection onError={onError} />
+
       {showChangePassword && <ChangePasswordSection />}
     </div>
+  );
+}
+
+function TelemetryCaptureSection({ onError }: { onError: (msg: string | undefined) => void }) {
+  const captureContent = useUiConfigStore((s) => s.telemetryCaptureContent);
+  const setTelemetryCaptureContent = useUiConfigStore((s) => s.setTelemetryCaptureContent);
+  const [saving, setSaving] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getTelemetrySettings()
+      .then((settings) => {
+        if (!cancelled) setTelemetryCaptureContent(settings.captureContent);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const code = err instanceof ApiError ? err.code : (err as Error).message;
+        onError(`Telemetry settings load failed: ${code}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onError, setTelemetryCaptureContent]);
+
+  const setCaptureContent = async (enabled: boolean): Promise<void> => {
+    setSaving(true);
+    setSavedFlash(false);
+    onError(undefined);
+    try {
+      const next = await api.updateTelemetrySettings(enabled);
+      setTelemetryCaptureContent(next.captureContent);
+      setSavedFlash(true);
+      window.setTimeout(() => setSavedFlash(false), 2500);
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : (err as Error).message;
+      onError(`Telemetry settings update failed: ${code}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="space-y-3 border-t border-neutral-800 pt-5">
+      <div className="space-y-1">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+          Telemetry content capture
+        </h3>
+        <p className="max-w-3xl text-xs text-neutral-500">
+          Controls OTEL_CAPTURE_CONTENT at runtime. When enabled, full user and assistant message
+          content plus tool inputs/results may be exported to OpenTelemetry.
+        </p>
+      </div>
+      <label className="flex max-w-3xl items-start gap-3 rounded-md border border-red-900/50 bg-red-950/20 p-3">
+        <input
+          type="checkbox"
+          checked={captureContent}
+          disabled={saving}
+          onChange={(e) => void setCaptureContent(e.target.checked)}
+          className="mt-0.5 h-4 w-4 accent-red-600 disabled:opacity-50"
+        />
+        <span className="space-y-1">
+          <span className="block text-sm font-medium text-neutral-100">
+            Include message and tool content in telemetry
+          </span>
+          <span className="block text-xs text-red-300/90">
+            Enable only with an approved data-retention policy. Captured content can include source
+            code, credentials, personal data, attachment text, and MCP/tool responses.
+          </span>
+        </span>
+      </label>
+      <div className="flex items-center gap-2 text-xs">
+        <span
+          className={`rounded-full px-2 py-0.5 font-semibold uppercase tracking-wide ${
+            captureContent
+              ? "bg-red-600 text-white"
+              : "bg-neutral-800 text-neutral-400 light:bg-neutral-200 light:text-neutral-700"
+          }`}
+        >
+          {captureContent ? "On" : "Off"}
+        </span>
+        {saving && <span className="text-neutral-500">saving…</span>}
+        {savedFlash && <span className="text-emerald-400">Saved.</span>}
+      </div>
+    </section>
   );
 }
 

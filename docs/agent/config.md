@@ -70,6 +70,7 @@ route handlers).
 | `tool-overrides.json` | Per-project tool enable/disable (built-ins + MCP) | `tool-overrides.ts` |
 | `prompts-overrides.json` | Per-project pi-prompt enable/disable patterns | `prompt-overrides.ts` |
 | `theme.json` | Global server-side UI color overrides | `theme-config.ts` |
+| `telemetry-settings.json` | Runtime OpenTelemetry content-capture override | `telemetry-settings.ts` |
 | `webhooks.json` | Webhook configs (HMAC secrets stored here — mode 0600) | `webhooks/store.ts` |
 | `webhook-deliveries.json` | Rolling delivery history (cap 100 / webhook) | `webhooks/store.ts` |
 | `session-orchestration.json` | Supervisor opt-in + supervisor↔worker links (mode 0600) | `orchestration/store.ts` |

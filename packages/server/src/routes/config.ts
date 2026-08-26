@@ -50,6 +50,7 @@ import {
   validateSandboxToolEnv,
   writeSandboxSettings,
 } from "../sandbox-settings.js";
+import { readTelemetrySettings, writeTelemetrySettings } from "../telemetry-settings.js";
 import {
   DEFAULT_THEME_COLORS,
   readThemeConfig,
@@ -99,6 +100,15 @@ const sandboxSettingsSchema = {
     gid: { type: "integer" },
     home: { type: "string" },
     toolEnv: { type: "object", additionalProperties: { type: "string" } },
+  },
+} as const;
+
+const telemetrySettingsSchema = {
+  type: "object",
+  required: ["captureContent"],
+  additionalProperties: false,
+  properties: {
+    captureContent: { type: "boolean" },
   },
 } as const;
 
@@ -453,6 +463,52 @@ export const configRoutes: FastifyPluginAsync = async (fastify) => {
           home: config.agentToolSandbox.home,
           toolEnv: settings.toolEnv,
         };
+      } catch (err) {
+        return internalError(reply, err);
+      }
+    },
+  );
+
+  // ---------------------- telemetry settings ----------------------
+  fastify.get(
+    "/config/telemetry",
+    {
+      schema: {
+        description:
+          "Read runtime telemetry settings. captureContent controls whether message/tool content is exported to OpenTelemetry.",
+        tags: ["config"],
+        response: { 200: telemetrySettingsSchema, 500: errorSchema },
+      },
+    },
+    async (_req, reply) => {
+      try {
+        return await readTelemetrySettings();
+      } catch (err) {
+        return internalError(reply, err);
+      }
+    },
+  );
+
+  fastify.put<{ Body: { captureContent: boolean } }>(
+    "/config/telemetry",
+    {
+      schema: {
+        description:
+          "Replace runtime telemetry settings. Enabling captureContent exports full message and tool content and may include sensitive data.",
+        tags: ["config"],
+        body: telemetrySettingsSchema,
+        response: { 200: telemetrySettingsSchema, 400: errorSchema, 500: errorSchema },
+      },
+    },
+    async (req, reply) => {
+      if (typeof req.body.captureContent !== "boolean") {
+        return reply.code(400).send({
+          error: "invalid_telemetry_settings",
+          message: "captureContent must be a boolean",
+        });
+      }
+      try {
+        return await writeTelemetrySettings({ captureContent: req.body.captureContent });
       } catch (err) {
         return internalError(reply, err);
       }

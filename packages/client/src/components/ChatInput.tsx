@@ -253,6 +253,7 @@ export function ChatInput({ sessionId }: Props) {
   // direct shell. The agent's own `bash` tool is unaffected; the
   // restriction is on the *user* typing raw shell into chat.
   const minimalUi = useUiConfigStore((s) => s.minimal);
+  const telemetryCaptureContent = useUiConfigStore((s) => s.telemetryCaptureContent);
   const banner = useSessionStore((s) => s.bannerBySession[sessionId]);
   // Detect an in-progress auto-retry by the banner shape that
   // session-store sets in applyEvent for `auto_retry_start`. This lets
@@ -269,6 +270,11 @@ export function ChatInput({ sessionId }: Props) {
 
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [telemetryAck, setTelemetryAck] = useState(false);
+
+  useEffect(() => {
+    if (!telemetryCaptureContent) setTelemetryAck(false);
+  }, [telemetryCaptureContent]);
 
   // Todo toggle — appears in the top-right of the chat-input
   // header when the active session has at least one non-deleted
@@ -1368,6 +1374,12 @@ export function ChatInput({ sessionId }: Props) {
       }
       return;
     }
+    if (telemetryCaptureContent && !telemetryAck) {
+      setAttachmentError(
+        "Confirm telemetry content capture before sending. Check the acknowledgement box below the message.",
+      );
+      return;
+    }
     requestScrollToBottom(sessionId);
     setSubmitting(true);
     try {
@@ -1439,6 +1451,7 @@ export function ChatInput({ sessionId }: Props) {
       }
       setText("");
       clearAttachments();
+      setTelemetryAck(false);
       // Submitting clears history mode — the user's prompt is now
       // (or will shortly be) the newest entry, and pressing Up next
       // should land on it from a fresh empty draft.
@@ -2007,6 +2020,23 @@ export function ChatInput({ sessionId }: Props) {
             previewUrls={previewUrlsRef.current}
             onRemove={removeAttachment}
           />
+        )}
+        {telemetryCaptureContent && (text.trim().length > 0 || attachments.length > 0) && (
+          <label className="flex items-start gap-2 rounded-md border border-red-900/50 bg-red-950/25 px-3 py-2 text-xs text-red-200">
+            <input
+              type="checkbox"
+              checked={telemetryAck}
+              onChange={(e) => {
+                setTelemetryAck(e.target.checked);
+                if (e.target.checked) setAttachmentError(undefined);
+              }}
+              className="mt-0.5 h-4 w-4 accent-red-600"
+            />
+            <span>
+              I acknowledge that this message and related tool/model content will be included in
+              telemetry because OTEL_CAPTURE_CONTENT is enabled.
+            </span>
+          </label>
         )}
         <div className="flex items-end gap-2">
           {/* Files input — accepts everything. On desktop this is
