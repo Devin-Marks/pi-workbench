@@ -15,6 +15,17 @@ section. See the "Versions" section of the README for the support window policy.
 
 ## [Unreleased]
 
+## [1.5.3] — 2026-08-26
+
+### Added
+
+- **Configurable web UI branding.** Operators can customize the browser title, install/offline app name, and sidebar/header brand label through server configuration exposed safely to the client.
+- **Runtime OTEL content capture controls.** Administrators can inspect and toggle OpenTelemetry content-capture settings at runtime from the settings UI and config API, with health/config endpoints reporting the effective state.
+
+### Changed
+
+- **Dependency updates for v1.5.3.** Updated the pinned pi SDK trio to 0.84.3 and adjusted session/tool integrations for the refreshed SDK behavior.
+
 ## [1.5.2] — 2026-08-24
 
 ### Added
