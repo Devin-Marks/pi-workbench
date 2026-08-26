@@ -8,6 +8,7 @@ import { config, passwordAuthEnabled } from "../config.js";
 import { logoUrls } from "../logo-cache.js";
 import { isOrchestrationEnabled } from "../orchestration/config.js";
 import { DEFAULT_THEME_COLORS, readThemeConfig, THEME_COLOR_KEYS } from "../theme-config.js";
+import { readTelemetrySettings } from "../telemetry-settings.js";
 
 /**
  * Read the server's own package.json once at module load. Used by the
@@ -126,6 +127,7 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
               "passwordAuthEnabled",
               "ldapEnabled",
               "orchestrationEnabled",
+              "telemetryCaptureContent",
               "serverTheme",
               "authBannerHtml",
             ],
@@ -158,6 +160,8 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
               // by default, but false when disabled by instance config
               // OR when MINIMAL_UI is true (MINIMAL_UI is a hard gate).
               orchestrationEnabled: { type: "boolean" },
+              // True when OpenTelemetry content capture is enabled at runtime.
+              telemetryCaptureContent: { type: "boolean" },
               // Global server-side color overrides for broad UI surfaces.
               serverTheme: themeConfigSchema,
               // Public login-screen customization. Banner text and
@@ -199,6 +203,7 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async () => {
       const serverTheme = await readThemeConfig();
+      const telemetrySettings = await readTelemetrySettings();
       const logos = logoUrls();
       return {
         minimal: config.minimalUi,
@@ -207,6 +212,7 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
         passwordAuthEnabled: passwordAuthEnabled(),
         ldapEnabled: config.auth.ldap.enabled,
         orchestrationEnabled: isOrchestrationEnabled(),
+        telemetryCaptureContent: telemetrySettings.captureContent,
         serverTheme: { ...serverTheme, defaults: DEFAULT_THEME_COLORS },
         authBannerText: config.authBannerText,
         authBannerHtml: config.authBannerHtml,

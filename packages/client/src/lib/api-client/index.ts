@@ -29,6 +29,7 @@ import {
   type HealthResponse,
   SERVER_THEME_COLOR_KEYS,
   type SandboxSettingsResponse,
+  type TelemetrySettingsResponse,
   type ServerThemeConfigResponse,
   type ServerThemeColors,
   type UiConfigResponse,
@@ -218,6 +219,8 @@ function vUiConfig(value: unknown, status: number): UiConfigResponse {
   // builds kept orchestration behind an explicit opt-in flag.
   const orchestrationEnabled =
     typeof value.orchestrationEnabled === "boolean" ? value.orchestrationEnabled : false;
+  const telemetryCaptureContent =
+    typeof value.telemetryCaptureContent === "boolean" ? value.telemetryCaptureContent : false;
   const authBannerText =
     typeof value.authBannerText === "string" ? value.authBannerText : undefined;
   const authBannerHtml = typeof value.authBannerHtml === "boolean" ? value.authBannerHtml : false;
@@ -235,6 +238,7 @@ function vUiConfig(value: unknown, status: number): UiConfigResponse {
     passwordAuthEnabled,
     ldapEnabled,
     orchestrationEnabled,
+    telemetryCaptureContent,
     serverTheme:
       value.serverTheme === undefined ? undefined : vServerThemeConfig(value.serverTheme, status),
     authBannerText,
@@ -245,6 +249,13 @@ function vUiConfig(value: unknown, status: number): UiConfigResponse {
     appLogoDarkUrl,
     appLogoLightUrl,
   };
+}
+
+function vTelemetrySettings(value: unknown, status: number): TelemetrySettingsResponse {
+  if (!isObject(value) || typeof value.captureContent !== "boolean") {
+    fail(status, "expected TelemetrySettingsResponse");
+  }
+  return { captureContent: value.captureContent };
 }
 
 function vSandboxSettings(value: unknown, status: number): SandboxSettingsResponse {
@@ -2018,6 +2029,12 @@ export const api = {
   updateSettings: (patch: Record<string, unknown>) =>
     request("/api/v1/config/settings", vSettings, { method: "PUT", body: patch }),
   getSandboxSettings: () => request("/api/v1/config/sandbox", vSandboxSettings),
+  getTelemetrySettings: () => request("/api/v1/config/telemetry", vTelemetrySettings),
+  updateTelemetrySettings: (captureContent: boolean) =>
+    request("/api/v1/config/telemetry", vTelemetrySettings, {
+      method: "PUT",
+      body: { captureContent },
+    }),
   updateSandboxSettings: (toolEnv: Record<string, string>) =>
     request("/api/v1/config/sandbox", vSandboxSettings, {
       method: "PUT",
