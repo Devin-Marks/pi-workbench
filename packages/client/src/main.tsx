@@ -75,7 +75,11 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
             overflow: "auto",
           }}
         >
-          <h1 style={{ color: "#fff", marginBottom: "1rem" }}>pi-forge: render crash</h1>
+          <h1 style={{ color: "#fff", marginBottom: "1rem" }}>
+            {(typeof document !== "undefined" && document.title.length > 0
+              ? document.title
+              : "pi-forge") + ": render crash"}
+          </h1>
           <p style={{ color: "#d4d4d4", marginBottom: "1rem" }}>{this.state.error.message}</p>
           <pre style={{ fontSize: "11px", color: "#a3a3a3" }}>
             {this.state.error.stack ?? "(no stack)"}

@@ -23,6 +23,8 @@ interface UiConfigState {
   minimal: boolean;
   /** Absolute workspace root reported by the server. */
   workspaceRoot: string;
+  /** Display-only application name shown in browser UI branding. */
+  appName: string;
   /** Server build version (mirrors packages/server's package.json). */
   version: string;
   /**
@@ -73,6 +75,7 @@ export const useUiConfigStore = create<UiConfigState>((set) => ({
   loaded: false,
   minimal: false,
   workspaceRoot: "",
+  appName: "pi-forge",
   version: "",
   passwordAuthEnabled: true,
   ldapEnabled: false,
@@ -98,10 +101,22 @@ export const useUiConfigStore = create<UiConfigState>((set) => ({
     try {
       const cfg = await api.uiConfig();
       applyServerTheme(cfg.serverTheme);
+      if (typeof document !== "undefined") {
+        document.title = cfg.appName;
+        document
+          .querySelector('meta[name="apple-mobile-web-app-title"]')
+          ?.setAttribute("content", cfg.appName);
+      }
+      try {
+        localStorage.setItem("pi-forge/app-name", cfg.appName);
+      } catch {
+        // Private mode / locked-down storage: title and in-memory branding still update.
+      }
       set({
         loaded: true,
         minimal: cfg.minimal,
         workspaceRoot: cfg.workspaceRoot,
+        appName: cfg.appName,
         version: cfg.version,
         passwordAuthEnabled: cfg.passwordAuthEnabled,
         ldapEnabled: cfg.ldapEnabled,

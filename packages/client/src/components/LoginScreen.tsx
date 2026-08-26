@@ -78,6 +78,7 @@ export function LoginScreen() {
   const ldapEnabled = useAuthStore((s) => s.ldapEnabled);
   const pending = useAuthStore((s) => s.loginPending);
   const error = useAuthStore((s) => s.loginError);
+  const appName = useUiConfigStore((s) => s.appName);
   const authBannerText = useUiConfigStore((s) => s.authBannerText);
   const authBannerHtml = useUiConfigStore((s) => s.authBannerHtml);
   const authLogoUrl = useUiConfigStore((s) => s.authLogoUrl);
@@ -114,12 +115,12 @@ export function LoginScreen() {
                 className="max-h-6 max-w-24 object-contain"
                 aria-hidden="true"
               />
-              <h1 className="text-xl font-semibold tracking-tight">pi-forge</h1>
+              <h1 className="text-xl font-semibold tracking-tight">{appName}</h1>
             </div>
             <p className="text-sm text-[var(--auth-muted-text)]">
               {ldapEnabled
                 ? "Sign in with your LDAP account."
-                : "Enter the pi-forge password to continue."}
+                : `Enter the ${appName} password to continue.`}
             </p>
           </header>
           {ldapEnabled && (

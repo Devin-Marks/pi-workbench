@@ -382,6 +382,14 @@ const FLAGS: readonly FlagDef[] = [
     defaultText: "false",
   },
   {
+    name: "app-name",
+    env: "APP_NAME",
+    type: "string",
+    group: "features",
+    desc: "Display-only application name shown in the browser UI",
+    defaultText: "pi-forge",
+  },
+  {
     name: "auth-banner-text",
     env: "AUTH_BANNER_TEXT",
     type: "string",

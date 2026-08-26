@@ -364,6 +364,7 @@ export function App() {
   // disappear).
   const loadUiConfig = useUiConfigStore((s) => s.load);
   const minimal = useUiConfigStore((s) => s.minimal);
+  const appName = useUiConfigStore((s) => s.appName);
   const authLogoUrl = useUiConfigStore((s) => s.authLogoUrl);
   const appLogoDarkUrl = useUiConfigStore((s) => s.appLogoDarkUrl);
   const appLogoLightUrl = useUiConfigStore((s) => s.appLogoLightUrl);
@@ -455,7 +456,7 @@ export function App() {
               className="max-h-8 max-w-28 shrink-0 object-contain"
               aria-hidden="true"
             />
-            <span className="shrink-0 text-sm font-semibold tracking-tight">pi-forge</span>
+            <span className="shrink-0 text-sm font-semibold tracking-tight">{appName}</span>
           </div>
         </div>
         <div className="flex items-center gap-2">

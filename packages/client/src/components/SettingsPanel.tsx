@@ -843,6 +843,7 @@ function SelectSetting({
 // ---------------- Skills tab ----------------
 
 function SkillsTab({ onError }: { onError: (msg: string | undefined) => void }) {
+  const appName = useUiConfigStore((s) => s.appName);
   const project = useActiveProject();
   const projects = useProjectStore((s) => s.projects);
   const bumpSkillsRefresh = useUiStore((s) => s.bumpSkillsRefresh);
@@ -953,7 +954,7 @@ function SkillsTab({ onError }: { onError: (msg: string | undefined) => void }) 
         Skills discovered in <code className="font-mono">~/.pi/agent/skills/</code> and{" "}
         <code className="font-mono">{project.path}/.pi/skills/</code>. The global toggle writes to
         pi&apos;s <code className="font-mono">settings.skills</code>; per-project overrides write to
-        the pi-forge-private file at{" "}
+        the {appName}-private file at{" "}
         <code className="font-mono">{`\${FORGE_DATA_DIR}/skills-overrides.json`}</code>.
       </p>
       <div className="rounded border border-amber-700/40 bg-amber-900/10 px-3 py-2 text-[11px] text-amber-200 light:border-amber-300 light:bg-amber-50 light:text-amber-800">
@@ -1506,6 +1507,7 @@ function sandboxRowsToEnv(rows: readonly SandboxEnvRow[]): Record<string, string
 }
 
 function SandboxTab({ onError }: { onError: (msg: string | undefined) => void }) {
+  const appName = useUiConfigStore((s) => s.appName);
   const [settings, setSettings] = useState<SandboxSettingsResponse | undefined>(undefined);
   const [rows, setRows] = useState<SandboxEnvRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1672,7 +1674,7 @@ function SandboxTab({ onError }: { onError: (msg: string | undefined) => void })
         </div>
       </div>
       <p className="text-xs text-neutral-500">
-        Values are masked by default and only revealed per row. They are still stored in pi-forge
+        Values are masked by default and only revealed per row. They are still stored in {appName}
         data and passed to tool processes, so avoid secrets unless that storage is protected.
       </p>
 
@@ -2206,6 +2208,7 @@ function emptyActionDraft(kind: "command" | "prompt"): DraftAction {
 }
 
 function QuickActionsTab({ onError }: { onError: (msg: string | undefined) => void }) {
+  const appName = useUiConfigStore((s) => s.appName);
   const minimal = useUiConfigStore((s) => s.minimal);
   const loaded = useQuickActionsStore((s) => s.loaded);
   const actions = useQuickActionsStore((s) => s.actions);
@@ -2457,7 +2460,7 @@ function QuickActionsTab({ onError }: { onError: (msg: string | undefined) => vo
                 <p className="mt-1 text-[11px] text-neutral-500">
                   Runs in the active project&apos;s folder via <code>/bin/sh -c</code>. Multi-line
                   is fine (<code>&amp;&amp;</code>, <code>;</code>, etc.). Environment is scrubbed
-                  of pi-forge and provider secrets (same as the integrated terminal).
+                  of {appName} and provider secrets (same as the integrated terminal).
                 </p>
               </div>
               <div>
@@ -4113,6 +4116,7 @@ function StdioTrustBanner(props: {
   onGrant: () => void | Promise<void>;
   onRevoke: () => void | Promise<void>;
 }) {
+  const appName = useUiConfigStore((s) => s.appName);
   if (props.trusted) {
     return (
       <div className="flex items-center justify-between rounded border border-neutral-800 bg-neutral-900/40 px-3 py-1.5 text-[11px] text-neutral-500">
@@ -4143,9 +4147,9 @@ function StdioTrustBanner(props: {
       </div>
       <p className="text-[11px] leading-relaxed">
         <strong>{props.projectName}</strong>'s <code className="font-mono">.mcp.json</code> declares
-        MCP server{props.gatedCount === 1 ? "" : "s"} that pi-forge would launch as local subprocess
-        {props.gatedCount === 1 ? "" : "es"}. Stdio MCP runs arbitrary commands on this machine with
-        whatever env you've passed through — only trust projects whose{" "}
+        MCP server{props.gatedCount === 1 ? "" : "s"} that {appName} would launch as local
+        subprocess{props.gatedCount === 1 ? "" : "es"}. Stdio MCP runs arbitrary commands on this
+        machine with whatever env you've passed through — only trust projects whose{" "}
         <code className="font-mono">.mcp.json</code> you've reviewed and approve of. Remote (URL)
         entries in this project are unaffected by this gate.
       </p>
@@ -4331,6 +4335,7 @@ function McpDraftForm(props: {
 }
 
 function HeaderRowsEditor(props: { rows: HeaderRow[]; onChange: (next: HeaderRow[]) => void }) {
+  const appName = useUiConfigStore((s) => s.appName);
   const { rows } = props;
   return (
     <div className="mt-3">
@@ -4401,7 +4406,7 @@ function HeaderRowsEditor(props: { rows: HeaderRow[]; onChange: (next: HeaderRow
         </div>
       ))}
       <p className="mt-1 text-[10px] text-neutral-500">
-        Env-backed headers store only the variable name; pi-forge resolves the value when sending
+        Env-backed headers store only the variable name; {appName} resolves the value when sending
         MCP requests.
       </p>
       {rows.some((r) => r.value === SECRET_PLACEHOLDER) && (
@@ -4502,6 +4507,7 @@ const MIN_PASSWORD_LENGTH = 8;
  */
 function GeneralTab({ onError }: { onError: (msg: string | undefined) => void }) {
   const version = useUiConfigStore((s) => s.version);
+  const appName = useUiConfigStore((s) => s.appName);
   const loaded = useUiConfigStore((s) => s.loaded);
   const passwordAuthEnabled = useUiConfigStore((s) => s.passwordAuthEnabled);
   const uiConfigLdapEnabled = useUiConfigStore((s) => s.ldapEnabled);
@@ -4511,7 +4517,7 @@ function GeneralTab({ onError }: { onError: (msg: string | undefined) => void })
   return (
     <div className="space-y-6 text-sm text-neutral-300">
       <header className="space-y-1">
-        <h2 className="text-base font-semibold text-neutral-100">pi-forge</h2>
+        <h2 className="text-base font-semibold text-neutral-100">{appName}</h2>
         <p className="text-xs text-neutral-500">
           Browser interface for the{" "}
           <a

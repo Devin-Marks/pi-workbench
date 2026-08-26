@@ -123,6 +123,7 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
             required: [
               "minimal",
               "workspaceRoot",
+              "appName",
               "version",
               "passwordAuthEnabled",
               "ldapEnabled",
@@ -140,6 +141,10 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
               // Absolute path of the workspace root. Minimal-mode
               // project creation builds `<workspaceRoot>/<name>`.
               workspaceRoot: { type: "string" },
+              // Display-only application name shown in browser UI branding.
+              // Does not affect package names, routes, storage keys, or any
+              // functional identifiers.
+              appName: { type: "string" },
               // Server build version (mirrors packages/server's
               // package.json). Surfaced in the General settings tab
               // so users can confirm which release they're hitting
@@ -208,6 +213,7 @@ export const healthRoutes: FastifyPluginAsync = async (fastify) => {
       return {
         minimal: config.minimalUi,
         workspaceRoot: config.workspacePath,
+        appName: config.appName,
         version: SERVER_VERSION,
         passwordAuthEnabled: passwordAuthEnabled(),
         ldapEnabled: config.auth.ldap.enabled,

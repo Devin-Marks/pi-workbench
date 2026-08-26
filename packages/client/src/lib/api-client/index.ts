@@ -208,6 +208,8 @@ function vUiConfig(value: unknown, status: number): UiConfigResponse {
   // - passwordAuthEnabled → true so the password section still shows
   //   (the worst case is a confusing 400 on submit; better than
   //   silently hiding the form on a server that does support it).
+  const appName =
+    typeof value.appName === "string" && value.appName.length > 0 ? value.appName : "pi-forge";
   const version = typeof value.version === "string" ? value.version : "unknown";
   const passwordAuthEnabled =
     typeof value.passwordAuthEnabled === "boolean" ? value.passwordAuthEnabled : true;
@@ -234,6 +236,7 @@ function vUiConfig(value: unknown, status: number): UiConfigResponse {
   return {
     minimal: value.minimal,
     workspaceRoot: value.workspaceRoot,
+    appName,
     version,
     passwordAuthEnabled,
     ldapEnabled,
