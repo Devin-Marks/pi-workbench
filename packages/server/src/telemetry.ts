@@ -10,6 +10,7 @@ import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { config } from "./config.js";
+import { isTelemetryContentCaptureEnabled } from "./telemetry-settings.js";
 
 const TRACER_NAME = "pi-forge.sessions";
 const MAX_CAPTURE_CHARS = 1_000_000;
@@ -323,7 +324,7 @@ export function createSessionTelemetry(opts: SessionTelemetryOptions): SessionTe
                     "gen_ai.request.model": model.id,
                     "langfuse.observation.model": model.id,
                   }),
-              ...(config.telemetry.captureContent && observationInput !== undefined
+              ...(isTelemetryContentCaptureEnabled() && observationInput !== undefined
                 ? { "langfuse.observation.input": stringify(observationInput) }
                 : {}),
             },
@@ -331,7 +332,7 @@ export function createSessionTelemetry(opts: SessionTelemetryOptions): SessionTe
           spanContext(turnSpan),
         );
         messageSpans.set(messageKey(event.message), span);
-        if (config.telemetry.captureContent && role === "user") {
+        if (isTelemetryContentCaptureEnabled() && role === "user") {
           turnSpan?.setAttribute(
             "langfuse.observation.input",
             stringify(messageContent(event.message)),
@@ -344,7 +345,7 @@ export function createSessionTelemetry(opts: SessionTelemetryOptions): SessionTe
         const role = messageRole(event.message);
         const span = messageSpans.get(messageKey(event.message));
         if (span === undefined) return;
-        if (config.telemetry.captureContent) {
+        if (isTelemetryContentCaptureEnabled()) {
           span.setAttribute(
             "langfuse.observation.output",
             stringify(messageContent(event.message)),
@@ -434,7 +435,7 @@ export function createSessionTelemetry(opts: SessionTelemetryOptions): SessionTe
               "gen_ai.operation.name": "execute_tool",
               "gen_ai.tool.name": event.toolName,
               "pi.tool.type": isMcp ? "mcp" : "builtin",
-              ...(config.telemetry.captureContent
+              ...(isTelemetryContentCaptureEnabled()
                 ? { "langfuse.observation.input": stringify(event.args) }
                 : {}),
             },
@@ -448,7 +449,7 @@ export function createSessionTelemetry(opts: SessionTelemetryOptions): SessionTe
       if (event.type === "tool_execution_end") {
         const span = toolSpans.get(event.toolCallId);
         if (span === undefined) return;
-        if (config.telemetry.captureContent) {
+        if (isTelemetryContentCaptureEnabled()) {
           span.setAttribute("langfuse.observation.output", stringify(event.result));
         }
         if (event.isError) span.setStatus({ code: SpanStatusCode.ERROR, message: "tool failed" });

@@ -28,6 +28,9 @@ try {
   const identities = (await import(
     resolve("packages/server/dist/session-identity.js")
   )) as typeof import("../packages/server/src/session-identity.js");
+  const telemetrySettings = (await import(
+    resolve("packages/server/dist/telemetry-settings.js")
+  )) as typeof import("../packages/server/src/telemetry-settings.js");
   const exporter = new InMemorySpanExporter();
   telemetry.initializeTelemetry(exporter);
 
@@ -196,6 +199,42 @@ try {
       userMessage?.spanContext().traceId === turn.spanContext().traceId,
   );
 
+  await telemetrySettings.writeTelemetrySettings({ captureContent: false });
+  assert(
+    "runtime telemetry setting can disable content capture",
+    telemetrySettings.isTelemetryContentCaptureEnabled() === false,
+  );
+  const redactedTracker = telemetry.createSessionTelemetry({
+    sessionId: "session-redacted",
+    projectId: "project-456",
+    username: "alice@example.com",
+    mcpToolNames: new Set(),
+    model: () => ({ provider: "anthropic", id: "claude-test" }),
+  });
+  const emitRedacted = (event: unknown): void => redactedTracker.handle(event as AgentSessionEvent);
+  emitRedacted({ type: "agent_start" });
+  emitRedacted({
+    type: "message_start",
+    message: { role: "user", content: "do not capture", timestamp: 3 },
+  });
+  emitRedacted({
+    type: "message_end",
+    message: { role: "user", content: "do not capture", timestamp: 3 },
+  });
+  emitRedacted({ type: "agent_end", messages: [] });
+  await telemetry.flushTelemetry();
+  const redactedUser = exporter
+    .getFinishedSpans()
+    .filter(
+      (span) => span.attributes["langfuse.session.id"] === "alice@example.com:session-redacted",
+    )
+    .find((span) => span.name === "pi.message.user");
+  assert(
+    "content capture excludes user data when disabled at runtime",
+    redactedUser !== undefined &&
+      redactedUser.attributes["langfuse.observation.input"] === undefined,
+  );
+
   await identities.rememberSessionUsername("session-123", "alice@example.com");
   assert(
     "session username survives identity lookup",
@@ -205,6 +244,21 @@ try {
     await readFile(resolve(temp, "session-users.json"), "utf8"),
   ) as Record<string, string>;
   assert("session username is persisted", persisted["session-123"] === "alice@example.com");
+
+  const appSource = await readFile(resolve("packages/client/src/App.tsx"), "utf8");
+  assert(
+    "app banner warns when telemetry content capture is on",
+    appSource.includes("OTEL content capture on"),
+  );
+  const chatInputSource = await readFile(
+    resolve("packages/client/src/components/ChatInput.tsx"),
+    "utf8",
+  );
+  assert(
+    "chat input requires telemetry capture acknowledgement",
+    chatInputSource.includes("I acknowledge that this message") &&
+      chatInputSource.includes("Confirm telemetry content capture before sending"),
+  );
 } finally {
   await rm(temp, { recursive: true, force: true });
 }

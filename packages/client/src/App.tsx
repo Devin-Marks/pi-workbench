@@ -75,6 +75,8 @@ export function App() {
   const active = useActiveProject();
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
 
+  const telemetryCaptureContent = useUiConfigStore((s) => s.telemetryCaptureContent);
+
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const openActivityStream = useSessionStore((s) => s.openActivityStream);
   const closeActivityStream = useSessionStore((s) => s.closeActivityStream);
@@ -524,6 +526,14 @@ export function App() {
           <div className="hidden md:block">
             <GlobalSearchBar />
           </div>
+          {telemetryCaptureContent && (
+            <span
+              className="rounded-full bg-red-600 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-white shadow-sm shadow-red-950/40"
+              title="OTEL_CAPTURE_CONTENT is on: message and tool content may be exported in telemetry."
+            >
+              OTEL content capture on
+            </span>
+          )}
           {/* MCP status badge stays visible in minimal — operators
               still want to see whether MCP servers are connected,
               they just can't reconfigure them from a locked-down

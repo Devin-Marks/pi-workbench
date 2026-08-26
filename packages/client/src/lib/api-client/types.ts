@@ -297,6 +297,10 @@ export interface SandboxSettingsResponse {
   toolEnv: Record<string, string>;
 }
 
+export interface TelemetrySettingsResponse {
+  captureContent: boolean;
+}
+
 export interface AuthColorScheme {
   pageBackground: string;
   cardBackground: string;
@@ -336,6 +340,8 @@ export interface UiConfigResponse {
    * render at all. Defaults to false on older servers (forward-compatible).
    */
   orchestrationEnabled: boolean;
+  /** True when OpenTelemetry content capture is enabled at runtime. */
+  telemetryCaptureContent: boolean;
   /** Global server-side color overrides for broad UI surfaces. */
   serverTheme: ServerThemeConfigResponse | undefined;
   /** Optional public banner shown on the login screen. */

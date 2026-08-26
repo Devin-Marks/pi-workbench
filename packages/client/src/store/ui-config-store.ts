@@ -46,6 +46,8 @@ interface UiConfigState {
    * expose the field keep the old hidden posture.
    */
   orchestrationEnabled: boolean;
+  /** True when OpenTelemetry content capture is enabled at runtime. */
+  telemetryCaptureContent: boolean;
   /** Global server-side color overrides for broad UI surfaces. */
   serverTheme: ServerThemeConfigResponse | undefined;
   /** Optional public banner shown below the login prompt. */
@@ -66,6 +68,7 @@ interface UiConfigState {
   error: string | undefined;
   load: () => Promise<void>;
   setServerTheme: (theme: ServerThemeConfigResponse) => void;
+  setTelemetryCaptureContent: (enabled: boolean) => void;
 }
 
 export const useUiConfigStore = create<UiConfigState>((set) => ({
@@ -77,6 +80,7 @@ export const useUiConfigStore = create<UiConfigState>((set) => ({
   passwordAuthEnabled: true,
   ldapEnabled: false,
   orchestrationEnabled: false,
+  telemetryCaptureContent: false,
   serverTheme: undefined,
   authBannerText: undefined,
   authBannerHtml: false,
@@ -89,6 +93,9 @@ export const useUiConfigStore = create<UiConfigState>((set) => ({
   setServerTheme: (theme) => {
     applyServerTheme(theme);
     set({ serverTheme: theme });
+  },
+  setTelemetryCaptureContent: (enabled) => {
+    set({ telemetryCaptureContent: enabled });
   },
   load: async () => {
     try {
@@ -114,6 +121,7 @@ export const useUiConfigStore = create<UiConfigState>((set) => ({
         passwordAuthEnabled: cfg.passwordAuthEnabled,
         ldapEnabled: cfg.ldapEnabled,
         orchestrationEnabled: cfg.orchestrationEnabled,
+        telemetryCaptureContent: cfg.telemetryCaptureContent,
         serverTheme: cfg.serverTheme,
         authBannerText: cfg.authBannerText,
         authBannerHtml: cfg.authBannerHtml,
