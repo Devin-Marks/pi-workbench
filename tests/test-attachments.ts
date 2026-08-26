@@ -75,7 +75,7 @@ async function main(): Promise<void> {
         prompt: (text: string, opts?: unknown) => Promise<void>;
         model: unknown;
         modelRuntime: {
-          reloadConfig: () => Promise<void>;
+          refresh: () => Promise<void>;
           setRuntimeApiKey: (provider: string, apiKey: string) => Promise<void>;
           removeRuntimeApiKey: (provider: string) => Promise<void>;
           hasConfiguredAuth: (provider: string) => boolean;
@@ -113,7 +113,7 @@ async function main(): Promise<void> {
     const fakeSession = {
       model: { provider: "test", id: "test-model" },
       modelRuntime: {
-        reloadConfig: async () => undefined,
+        refresh: async () => undefined,
         setRuntimeApiKey: async () => undefined,
         removeRuntimeApiKey: async () => undefined,
         hasConfiguredAuth: () => true,

@@ -215,12 +215,12 @@ function publishActivity(
 /**
  * Built-in pi tools we activate on every session. Pi's SDK ships
  * seven `read | bash | edit | write | grep | find | ls` (see
- * `node_modules/@earendil-works/pi-coding-agent/dist/core/tools/index.d.ts`),
- * but only the first four are activated when `tools` is left
- * undefined. We enable all seven so the agent gets first-class
- * filesystem-read affordances (grep / find / ls) instead of
- * shelling out via bash for every directory listing or content
- * search — same UX the pi TUI ships with.
+ * `node_modules/@earendil-works/pi-coding-agent/dist/core/tools/index.d.ts`).
+ * SDK 0.84 also ships an optional Windows-only `powershell` tool, but
+ * pi-forge runs on Linux and intentionally does not expose it. We enable
+ * the Linux-compatible set so the agent gets first-class filesystem-read
+ * affordances (grep / find / ls) instead of shelling out via bash for every
+ * directory listing or content search — same UX the pi TUI ships with.
  *
  * Passing `tools: [...]` to `createAgentSession` ALSO filters
  * customTools (MCP) by name (see agent-session.js
