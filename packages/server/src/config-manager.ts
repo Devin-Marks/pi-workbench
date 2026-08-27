@@ -349,15 +349,13 @@ async function readAuthJson(): Promise<AuthJson> {
   return data as AuthJson;
 }
 
-async function readAuthJsonForSession(): Promise<AuthJson> {
+async function readAuthJsonIfReadable(): Promise<AuthJson> {
   try {
     return await readAuthJson();
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "EACCES" || code === "EPERM") {
-      console.warn(
-        `[config] ${AUTH_FILE()} is not readable; continuing session model runtime without auth.json credentials`,
-      );
+      console.warn(`[config] ${AUTH_FILE()} is not readable; treating auth.json as empty`);
       return {};
     }
     throw err;
@@ -371,7 +369,7 @@ async function writeAuthJson(data: AuthJson): Promise<void> {
 async function liveModelRuntime(): Promise<ModelRuntime> {
   await migrateLegacyModelsJsonIfNeeded();
   return ModelRuntime.create({
-    credentials: new SnapshotCredentialStore(await readAuthJsonForSession()),
+    credentials: new SnapshotCredentialStore(await readAuthJsonIfReadable()),
     modelsPath: MODELS_FILE(),
   });
 }
@@ -425,7 +423,7 @@ class SnapshotCredentialStore implements CredentialStore {
 export async function createSessionModelRuntime(): Promise<ModelRuntime> {
   await migrateLegacyModelsJsonIfNeeded();
   return ModelRuntime.create({
-    credentials: new SnapshotCredentialStore(await readAuthJsonForSession()),
+    credentials: new SnapshotCredentialStore(await readAuthJsonIfReadable()),
     modelsPath: MODELS_FILE(),
   });
 }
@@ -444,7 +442,7 @@ export async function liveModelRegistry(): Promise<ModelRegistry> {
 
 export async function readAuthSummary(): Promise<AuthSummary> {
   const providers: Record<string, AuthEntry> = {};
-  for (const [provider, credential] of Object.entries(await readAuthJson())) {
+  for (const [provider, credential] of Object.entries(await readAuthJsonIfReadable())) {
     providers[provider] = {
       configured: true,
       source: "stored",
@@ -481,7 +479,7 @@ export async function syncStoredApiKeyToRuntime(
   runtime: ModelRuntimeInstance,
   provider: string,
 ): Promise<void> {
-  const credential = (await readAuthJson())[provider];
+  const credential = (await readAuthJsonIfReadable())[provider];
   if (credential?.type === "api_key" && typeof credential.key === "string") {
     await runtime.setRuntimeApiKey(provider, credential.key);
   } else {
