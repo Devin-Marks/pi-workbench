@@ -16,9 +16,9 @@ import { createSandboxedToolDefinitions } from "./agent-tool-overrides.js";
 import { config } from "./config.js";
 import { makeDedupe, makeLock } from "./concurrency.js";
 import {
+  createSessionModelRuntime,
   effectivePromptsForProject,
   effectiveSkillsForProject,
-  migrateLegacyModelsJsonIfNeeded,
 } from "./config-manager.js";
 import { readProjects } from "./project-manager.js";
 import { filterEnabledTools, readToolOverrides } from "./tool-overrides.js";
@@ -858,12 +858,13 @@ export async function createSession(
     settingsManager,
     projectId,
   );
-  await migrateLegacyModelsJsonIfNeeded();
+  const modelRuntime = await createSessionModelRuntime();
   const { session } = await createAgentSession({
     cwd: workspacePath,
     sessionManager,
     settingsManager,
     resourceLoader,
+    modelRuntime,
     agentDir: config.piConfigDir,
     customTools: effectiveCustomTools,
     tools: await buildToolsAllowlist(effectiveCustomTools, projectId, workspacePath),
@@ -1224,12 +1225,13 @@ export async function resumeSession(
       settingsManager,
       projectId,
     );
-    await migrateLegacyModelsJsonIfNeeded();
+    const modelRuntime = await createSessionModelRuntime();
     const { session } = await createAgentSession({
       cwd: workspacePath,
       sessionManager,
       settingsManager,
       resourceLoader,
+      modelRuntime,
       agentDir: config.piConfigDir,
       customTools: effectiveCustomTools,
       tools: await buildToolsAllowlist(effectiveCustomTools, projectId, workspacePath),
@@ -1939,12 +1941,13 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
     settingsManager,
     source.projectId,
   );
-  await migrateLegacyModelsJsonIfNeeded();
+  const modelRuntime = await createSessionModelRuntime();
   const { session } = await createAgentSession({
     cwd: source.workspacePath,
     sessionManager,
     settingsManager,
     resourceLoader,
+    modelRuntime,
     agentDir: config.piConfigDir,
     customTools: effectiveCustomTools,
     tools: await buildToolsAllowlist(effectiveCustomTools, source.projectId, source.workspacePath),
@@ -2060,12 +2063,13 @@ async function forkSessionLocked(sessionId: string, entryId: string): Promise<Li
         restoredSettingsManager,
         source.projectId,
       );
-      await migrateLegacyModelsJsonIfNeeded();
+      const restoredModelRuntime = await createSessionModelRuntime();
       const { session: restoredSession } = await createAgentSession({
         cwd: source.workspacePath,
         sessionManager: restoredManager,
         settingsManager: restoredSettingsManager,
         resourceLoader: restoredResourceLoader,
+        modelRuntime: restoredModelRuntime,
         agentDir: config.piConfigDir,
         customTools: restoredEffectiveCustomTools,
         tools: await buildToolsAllowlist(
@@ -2193,12 +2197,13 @@ export async function rebuildAgentSessionForTools(
     settingsManager,
     live.projectId,
   );
-  await migrateLegacyModelsJsonIfNeeded();
+  const modelRuntime = await createSessionModelRuntime();
   const { session: newSession } = await createAgentSession({
     cwd: live.workspacePath,
     sessionManager,
     settingsManager,
     resourceLoader,
+    modelRuntime,
     agentDir: config.piConfigDir,
     customTools: effectiveCustomTools,
     tools: await buildToolsAllowlist(effectiveCustomTools, live.projectId, live.workspacePath),
