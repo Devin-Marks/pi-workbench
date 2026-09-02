@@ -28,6 +28,7 @@ import { deriveCounts, selectTodoState, useTodoStore } from "../store/todo-store
 import { countRunning, selectProcesses, useProcessesStore } from "../store/processes-store";
 import { extractClipboardImageFiles } from "../lib/clipboard-images";
 import { isChatSubmitShortcut } from "../lib/chat-input-keys";
+import { completeSlashCommand, fuzzyFilterSlashCommands } from "../lib/slash-command-fuzzy";
 import { parseSkillInvocation } from "../lib/skill-command";
 import { ProcessesPopover, TodosPopover } from "./InputPopovers";
 
@@ -768,11 +769,20 @@ export function ChatInput({ sessionId }: Props) {
     extensionCommands,
   ]);
 
-  const slashFiltered = useMemo(() => {
-    const q = slashQuery.toLowerCase();
-    if (q.length === 0) return slashCatalog;
-    return slashCatalog.filter((c) => c.name.slice(1).toLowerCase().startsWith(q));
-  }, [slashCatalog, slashQuery]);
+  const slashFiltered = useMemo(
+    () => fuzzyFilterSlashCommands(slashCatalog, slashQuery),
+    [slashCatalog, slashQuery],
+  );
+
+  // A new query starts at the best fuzzy match. Catalog refreshes can remove
+  // entries, so keep the existing selection in range without needlessly
+  // discarding it.
+  useEffect(() => {
+    setSlashSelectedIdx(0);
+  }, [slashQuery]);
+  useEffect(() => {
+    setSlashSelectedIdx((idx) => Math.min(idx, Math.max(slashFiltered.length - 1, 0)));
+  }, [slashFiltered.length]);
 
   /**
    * True when the input text is in `/<knownpromptname>` or
@@ -832,6 +842,19 @@ export function ChatInput({ sessionId }: Props) {
     setText("");
     setSlashSelectedIdx(0);
     void cmd.run();
+  };
+
+  const slashCompleteSelected = (): void => {
+    const cmd = slashFiltered[slashSelectedIdx];
+    if (cmd === undefined || !cmd.available) return;
+    const insert = completeSlashCommand(cmd.name);
+    setText(insert);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta === null) return;
+      ta.focus();
+      ta.setSelectionRange(insert.length, insert.length);
+    });
   };
   // Timestamp of the most recent Esc keystroke; second Esc within
   // DOUBLE_ESC_WINDOW_MS triggers abort. Lives in a ref so it
@@ -1501,16 +1524,17 @@ export function ChatInput({ sessionId }: Props) {
           setSlashSelectedIdx((i) => Math.max(i - 1, 0));
           return;
         }
-        if (e.key === "Enter" || e.key === "Tab") {
+        if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+          e.preventDefault();
+          slashCompleteSelected();
+          return;
+        }
+        if (e.key === "Enter") {
           // Pi prompt-template, exact known skill, or SDK extension-command
           // invocation — fall through to normal textarea handling on Enter.
           // This preserves prompt/skill/extension arguments instead of
-          // re-running a palette entry that would clobber them. Tab still
-          // discovers / fills in.
-          if (
-            (isPromptInvocation || skillInvocation !== undefined || isExtensionCommandInvocation) &&
-            e.key === "Enter"
-          ) {
+          // re-running a palette entry that would clobber them.
+          if (isPromptInvocation || skillInvocation !== undefined || isExtensionCommandInvocation) {
             // Intentionally fall through.
           } else {
             e.preventDefault();
@@ -2144,9 +2168,9 @@ export function ChatInput({ sessionId }: Props) {
           )}
           <div className="relative flex-1">
             {/* /-command palette — opens whenever the input starts
-                with `/` and has no newline. Listed top-to-bottom in
-                catalog order; filtered by `slashQuery` (chars after
-                the `/` up to the first whitespace). Disabled
+                with `/` and has no newline. Ranked by Console-compatible
+                fuzzy matching against `slashQuery` (chars after the `/` up
+                to the first whitespace). Disabled
                 commands (e.g. /abort when not streaming) render
                 grayed and don't accept Enter. */}
             {slashOpen && slashFiltered.length > 0 && (
@@ -2199,7 +2223,7 @@ export function ChatInput({ sessionId }: Props) {
                 {/* Hint footer — keyboard hints aren't useful on a
                     touchscreen, hide on mobile to save vertical space. */}
                 <div className="hidden border-t border-neutral-800 px-3 py-1 text-[10px] text-neutral-500 md:block">
-                  ↑↓ navigate · Enter/Tab run · Esc cancel
+                  ↑↓ navigate · Enter run · Tab complete · Esc cancel
                 </div>
               </div>
             )}
